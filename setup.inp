@@ -1,0 +1,28 @@
+############################################
+#
+# Default setup file with all connections
+# and group of actions that must be done
+# during the post-processing of an EVN
+# experiment.
+#
+############################################
+
+
+[DEFAULT]
+
+
+pathoutput = .
+pathlogdir = ./log
+pathcommands = ./processing.log
+
+
+[computers]
+
+ccs = jops@ccs
+eee = jops@eee
+pipe = pipe@jop83
+archive = jops@jop83
+
+
+# Groups of the blocks to be executed.
+
