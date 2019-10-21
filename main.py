@@ -20,10 +20,12 @@ Written by Benito Marcote (marcote@jive.eu)
 import os
 import sys
 import argparse
-import ConfigParser
+import configparser
 import logging
+import subprocess
 from datetime import datetime
-from . import metadata
+from epp import metadata
+from epp import actions
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
@@ -35,12 +37,12 @@ usage = "%(prog)s [-h]  experiment_name  support_scientist"
 help_calsources = 'Calibrator sources to use in standarplots (comma-separated, no spaces). If not provided, the user will be asked at due time'
 
 # Input parameters
-parser.argparse.ArgumentParser(description=description, prog=__prog__, usage=usage)
+parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage)
 parser.add_argument('expname', type=str, help='Name of the EVN experiment.')
 parser.add_argument('supsci', type=str, help='Surname of EVN Support Scientist.')
 parser.add_argument('refant', type=str, help='Reference antenna.')
-parser.add_argument('--sour', 'calsources', type=str, default=None, help=help_calsources)
-parser.add_argument('--version', action='version', version='%(prog)s {}'.format(__version__))
+parser.add_argument('-s', '--calsour', type=str, default=None, help=help_calsources)
+parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
 args = parser.parse_args()
 
 
@@ -54,27 +56,31 @@ os.chdir(expdir)
 
 
 # Passing the input parameters and read the config file.
-config = ConfigParser.ConfigParser()
+config = configparser.ConfigParser()
 
 # If file set from parameters use it, otherwise the one in program's directory.
-config.read('./setup.inp')
+config.read(os.path.abspath(sys.argv[0][:-8]) + '/setup.inp')
 
-
+# Create the log directories if they do not exist
+for logdir in (config.defaults()['pathlogdir'], config.defaults()['pathoutput']):
+    if not os.path.isdir(logdir):
+        os.mkdir(logdir)
 
 # Logger
-logger = logging.getLogger(__name__)
-logger_out = logging.StreamHandler(stream=sys.stdout)
-logger_err = logging.FileHandler(filename=config.defaults()['pathlogdir'] + '/error_messages.log', filemode='a')
+# logger = logging.getLogger(__name__)
+# logger_out = logging.StreamHandler(stream=sys.stdout)
+# logger_err = logging.FileHandler(filename=config.defaults()['pathlogdir'] + '/error_messages.log', mode='a')
 
-logcmd = logging.Logger()
-logcmd_out = logcmd.StreamHandler(stream=sys.stdout)
-logcmd_cmd = logcmd.FileHandler(filename=config.defaults()['pathcommands'], filemode='a')
+# logcmd = logging.Logger('Commands log')
+# logcmd_out = logcmd.StreamHandler(stream=sys.stdout)
+# logcmd_cmd = logcmd.FileHandler(filename=config.defaults()['pathcommands'], mode='a')
 
-logger.addHandler(logger_out)
-logger.addHandler(logger_err)
-logcmd.addHandler(logcmd_out)
-logcmd.addHandler(logger_cmd)
-
+# logger.addHandler(logger_out)
+# logger.addHandler(logger_err)
+# logcmd.addHandler(logcmd_out)
+# logcmd.addHandler(logger_cmd)
+logger = None
+logcmd = None
 
 
 
@@ -83,15 +89,15 @@ logcmd.addHandler(logger_cmd)
 # It creates the experiment object
 exp = metadata.Experiment(args.expname)
 
-logcmd.info('Processing of EVN experiment {} (observed on {})'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
-logcmd.info('Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
+# logcmd.info('Processing of EVN experiment {} (observed on {})'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
+# logcmd.info('Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
 
 
 
 # Should make a check that all required computers are accessible!
 # actions.check_systems_up()
 
-actions.get_lis_vex(exp.expname)
+actions.get_lis_vex(exp.expname, config['computers']['ccs'], None)
 
 actions.can_continue('Is the lis file OK and can I continue?')
 
@@ -99,6 +105,8 @@ actions.get_data(exp.expname)
 
 actions.j2ms2(exp.expname)
 
+
+scale1bit_stations = actions.aks_user('Do you neeed to run scale1bit? If so, specify the affected stations')
 
 
 if args.calsources is None:

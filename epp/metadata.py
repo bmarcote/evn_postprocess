@@ -4,6 +4,7 @@ required during the post-processing.
 The metadata is obtained from different sources and/or at
 different stages of the post-processing.
 """
+import subprocess
 
 
 
@@ -57,8 +58,8 @@ class Experiment():
         process = subprocess.Popen(["ssh", "jops@ccs", cmd], shell=False, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
         output = process.communicate()[0].decode('utf-8')
-        if ssh.returncode != 0:
-            raise ValueError('Error code {} when reading MASTER_PROJECTS.LIS from ccs.'.format(ssh.returncode))
+        if process.returncode != 0:
+            raise ValueError('Error code {} when reading MASTER_PROJECTS.LIS from ccs.'.format(process.returncode))
 
         if output.count('\n') == 2:
             # It is an e-EVN experiment!
@@ -76,7 +77,7 @@ class Experiment():
 
         elif output.count('\n') == 1:
             self._eEVN = None
-            return output[:-1].split('\n')[1].strip()
+            return output[:-1].split()[1].strip()
 
         else:
             raise ValueError('{} not found in (ccs) MASTER_PROJECTS.LIS or connection not setted.'.format(self.expname))
