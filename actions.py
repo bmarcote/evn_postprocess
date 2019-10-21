@@ -20,7 +20,7 @@ def check_systems_up():
 
 
 
-def get_lis_vex(expname, computer, eEVNname=None, logger):
+def get_lis_vex(expname, computer, logger, eEVNname=None):
     """Produces the lis file(s) for this experiment in ccs and copy them to eee.
     It also retrieves the vex file and creates the required symb. links.
 
@@ -29,7 +29,9 @@ def get_lis_vex(expname, computer, eEVNname=None, logger):
             Name of the EVN experiment.
         computer : str
             Name of the computer where to create the lis file(s) and get the vex file.
-        eEVNname : str
+        logger : logging.Logger
+            The logger to register the log messages.
+        eEVNname : str [DEFAULT: None]
             In case of an e-EVN run, this is the name of the e-EVN run.
     """
     eEVNname = expname if eEVNname is None
@@ -50,7 +52,7 @@ def get_lis_vex(expname, computer, eEVNname=None, logger):
     # Finally, copy the piletter and expsum files
     for ext in ('piletter', 'expsum'):
         cmd = "piletters/{}.{} .".format(expname.lower(), ext)
-        subprocess.call(["scp", "jops@jop83", cmd], shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.Popen(["scp", "jops@jop83", cmd], shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output = process.communicate()[0].decode('utf-8')
         logger.info(output)
         if ssh.returncode != 0:
@@ -63,11 +65,27 @@ def get_lis_vex(expname, computer, eEVNname=None, logger):
             process = subprocess.Popen(["checklis.py", a_lis], shell=False, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
             output = process.communicate()[0].decode('utf-8')
+            logger.info(output)
+            print(output)
             if ssh.returncode != 0:
                 raise ValueError('Error code {} when reading running make_lis in ccs.'.format(ssh.returncode))
 
     os.symlink("{}.vix".format(eEVNname.lower()), "{}.vix".format(expname))
     print("\n\nYou SHOULD check now the lis files and modify them if needed.")
+
+
+def get_data(expname, logger, eEVNname=None):
+    """Retrieves the data using getdata.pl and expname.lis file.
+    """
+    eEVNname = expname if eEVNname is None
+    for a_lisfile in glob.glob("{}*lis".format(expname)):
+        cmd = "-proj {} -lis {}".format(eEVNname, a_lisfile)
+        process = subprocess.Popen(["getdata.pl", cmd], shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output = process.communicate()[0].decode('utf-8')
+        logger.info(output)
+        if ssh.returncode != 0:
+            raise ValueError('Error code {} when running getdata.pl.'.format(ssh.returncode))
+
 
 
 
