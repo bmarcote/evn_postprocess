@@ -22,7 +22,8 @@ ccs = jops@ccs
 eee = jops@eee
 pipe = pipe@jop83
 archive = jops@jop83
-
+piletter = jops@jop83
+vlbeer = evn@vlbeer.ira.inaf.it
 
 # Groups of the blocks to be executed.
 
