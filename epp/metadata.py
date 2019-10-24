@@ -12,6 +12,10 @@ import subprocess
 class Experiment():
     """Defines and EVN experiment with all relevant metadata.
     """
+    class Credentials():
+        def __init__(self, username, password):
+            self.username = username
+            self.password = password
 
     @property
     def expname(self):
@@ -20,7 +24,7 @@ class Experiment():
         return self._expname
 
     @property
-    def eEVN(self):
+    def eEVNname(self):
         """Name of the e-EVN run in case this experiment was observed in this mode.
         Otherwise returns None
         """
@@ -38,6 +42,36 @@ class Experiment():
         """
         return datetime.strptime(self.obsdate, '%y%m%d')
 
+    @property
+    def timerange(self):
+        """Start and end time of the observation in datetime format.
+        """
+        return self._startime, self._endtime
+
+    @property
+    def antennas(self):
+        """List of antennas available in the experiment.
+        """
+        return self._antennas
+
+
+    @property
+    def sources(self):
+        """List of sources observed in the experiment.
+        """
+        return self._sources
+
+    @property
+    def credentials(self):
+        """Username and password to access the experiment data from the EVN
+        archive during the proprietary period.
+        """
+        return self._credentials
+
+    @credentials.setter
+    def credentials(self, username, password):
+        self._credentials = Credentials(username, password)
+
 
     def __init__(self, expname, **kwargs):
         """Initializes an EVN experiment with the given name.
@@ -48,18 +82,24 @@ class Experiment():
         """
         self._expname = expname.upper()
         self._obsdate = self.get_obsdate_from_ccs()
+        # Attributes not known until the MS file is created
+        self._startime = None
+        self._endtime = None
+        self._antennas = []
+        self._sources = []
+        self.credentials(None, None)
 
 
     def get_obsdate_from_ccs(self):
         """Obtains the observing epoch from the MASTER_PROJECTS.LIS located in ccc.
         In case of being an e-EVN experiment, it will add that information to self.eEVN.
         """
-        cmd = "grep {} /ccs/var/log2vex/MASTER_PROJECTS.LIS".format(self.expname)
+        cmd = f"grep {self.expname} /ccs/var/log2vex/MASTER_PROJECTS.LIS"
         process = subprocess.Popen(["ssh", "jops@ccs", cmd], shell=False, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
         output = process.communicate()[0].decode('utf-8')
         if process.returncode != 0:
-            raise ValueError('Error code {} when reading MASTER_PROJECTS.LIS from ccs.'.format(process.returncode))
+            raise ValueError(f"Error code {process.returncode} when reading MASTER_PROJECTS.LIS from ccs.")
 
         if output.count('\n') == 2:
             # It is an e-EVN experiment!
@@ -80,8 +120,15 @@ class Experiment():
             return output[:-1].split()[1].strip()
 
         else:
-            raise ValueError('{} not found in (ccs) MASTER_PROJECTS.LIS or connection not setted.'.format(self.expname))
+            raise ValueError(f"{self.expname} not found in (ccs) MASTER_PROJECTS.LIS or connection not set.")
 
 
+    def get_setup_from_ms(self, msfile):
+        """Obtains the time range, antennas, sources, and frequencies of the observation
+        from the specified MS file and incorporate them into the current object.
+        """
+        # NOTE: Do this, recycle from the casa gmrt/evn pipeline.
+        # NOTE: Antennas should be converted to upper cases to make everything easier
+        pass
 
 
