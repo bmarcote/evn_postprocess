@@ -5,6 +5,7 @@ The metadata is obtained from different sources and/or at
 different stages of the post-processing.
 """
 import subprocess
+from pyrap import tables as pt
 
 
 
@@ -129,6 +130,15 @@ class Experiment():
         """
         # NOTE: Do this, recycle from the casa gmrt/evn pipeline.
         # NOTE: Antennas should be converted to upper cases to make everything easier
-        pass
+        with pt.table(msfile, readonly=True, ack=False) as ms:
+            with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
+                self._antennas = [ant.upper() for ant in ms_ant.getcol('NAME')]
+
+            with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
+                self._sources = ms_field.getcol('NAME')
+
+            with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
+                min_time, max_time
+
 
 

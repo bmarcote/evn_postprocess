@@ -66,35 +66,29 @@ config = configparser.ConfigParser()
 config.read(os.path.abspath(sys.argv[0][:-8]) + '/setup.inp')
 
 # Create the log directories if they do not exist
-for logdir in (config.defaults()['pathlogdir'], config.defaults()['pathoutput']):
-    if not os.path.isdir(logdir):
-        os.mkdir(logdir)
+# for logdir in (config.defaults()['pathlogdir'], config.defaults()['pathoutput']):
+#     if not os.path.isdir(logdir):
+#         os.mkdir(logdir)
 
 # Logger
-# logger = logging.getLogger(__name__)
-# logger_out = logging.StreamHandler(stream=sys.stdout)
-# logger_err = logging.FileHandler(filename=config.defaults()['pathlogdir'] + '/error_messages.log', mode='a')
+log_cmd = logging.getLogger('Executed commands')
+log_cmd.setLevel(logging.INFO)
+log_cmd_file = logging.FileHandler('./processing.log')
+log_cmd_file.setFormatter(logging.Formatter('\n\n%(message)s\n'))
+log_cmd.addHandler(log_cmd_file)
 
-# logcmd = logging.Logger('Commands log')
-# logcmd_out = logcmd.StreamHandler(stream=sys.stdout)
-# logcmd_cmd = logcmd.FileHandler(filename=config.defaults()['pathcommands'], mode='a')
-
-# logger.addHandler(logger_out)
-# logger.addHandler(logger_err)
-# logcmd.addHandler(logcmd_out)
-# logcmd.addHandler(logger_cmd)
-logger = None
-logcmd = None
-
-
+log_full = logging.getLogger('Commands full log')
+log_full_file = logging.FileHandler('./full_log_output.log')
+log_full.setLevel(logging.INFO)
+log_full.addHandler(log_full_file)
 
 
 
 # It creates the experiment object
 exp = metadata.Experiment(args.expname)
 
-# logcmd.info('Processing of EVN experiment {} (observed on {})'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
-# logcmd.info('Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
+log_cmd.info('Processing of EVN experiment {} observed on {}.'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
+log_cmd.info('Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
 
 
 
@@ -122,9 +116,12 @@ exp.get_setup_from_ms(glob.glob(f"{exp.expname.lower()}*.ms")[0])
 if args.onebit is not None:
     actions.scale1bit(exp.expname, args.onebit)
 else:
-    scale1bit_stations = actions.ask_user("Are you sure scale1bit is not required? Specify the affected stations or 'none' otherwise")
-    if scale1bit_stations is not 'none':
-        actions.scale1bit(exp.expname, scale1bit_stations)
+    # Checks if there is some station that recorded at 1bit in the vex file (it may or may not
+    # affect to this experiment.
+    if actions.station_1bit_in_vix(f"{exp.expname}.vix"):
+        scale1bit_stations = actions.ask_user("Are you sure scale1bit is not required? Specify the affected stations or 'none' otherwise")
+        if scale1bit_stations is not 'none':
+            actions.scale1bit(exp.expname, scale1bit_stations)
 
 
 if args.calsources is None:
