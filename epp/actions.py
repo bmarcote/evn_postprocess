@@ -2,19 +2,43 @@
 """
 import os
 import sys
-import subprocess
 import functools
+import subprocess
+import logging
 
 
+# All command functions return the terminal command that was executed and the output.
+
+header_comment_log = lambda command : "\n\n{0}\n{0}\n\n>>>>> {1}\n\n".format('#'*82, command)
 
 def decorator_log(func):
+    """Decorates each function to log the input and output to the common log file, and individually.
+    """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        # NOTE: TO IMPLEMENT
-        raise NotImplemented
-        # Do something before calling func
-        return func(*args, **kwargs)
-        # Save the output and do something after calling func and before returning the output
+        print(f"Executing {func.__name__} {*args} {**kwargs}")
+        output_func = func(*args, **kwargs)
+        # output_func can have one or two elements... If only one then it is only the output.
+        # Otherwise it has the command that has been run and the output.
+        logger1 = logging.getLogger('Executed commands')
+        logger2 = logging.getLogger('Commands full log')
+        logger1.setLevel(logging.INFO)
+        logger2.setLevel(logging.INFO)
+        logger1_file = logging.FileHandler('./processing.log')
+        logger2_file = logging.FileHandler('./full_log_output.log')
+        logger1.addHandler(logger1_file)
+        logger2.addHandler(logger2_file)
+
+        if len(output_func) == 1:
+            logger2.info(output_func)
+
+        elif len(output_func) == 2:
+            for a_cmd, an_output in zip(*output_func):
+                logger1.info(f"\n\n{a_cmd}\n")
+                logger2.info(header_comment_log(a_cmd))
+                logger2.info(an_output)
+
+        return output_func
 
     return wrapper
 
@@ -76,9 +100,21 @@ def can_continue(text):
             print(f"Invalid input ({text}). Cannot be converted to {valtype}.\nPlease try again: ")
 
 
+def station_1bit_in_vix(vexfile):
+    """Checks if there is any station in the vex file that recorded at 1 bit.
+    Note that this/these station(s) may or may not have recorded at 1 bit in this experiment,
+    but only at other moment of the run.
+    """
+    output = subprocess.call(["grep", "1bit", vexfile], shell=False, stdout=subprocess.PIPE)
+    if output == 0:
+        # There is at least one station recording at 1 bit.
+        return True
+    elif output == 1:
+        return False
+    else:
+        # File not found
+        raise FileNotFoundError
 
-# NOTE: Wrapper to set the output logging file and the messages when starting and finishing.
-# Also to catch all exceptions and repeate the steps if required/continue/stop.
 
 def scp(originpath, destpath):
     """Does a scp from originpath to destpath. If the process returns an error, then it raises ValueError.
@@ -87,6 +123,8 @@ def scp(originpath, destpath):
                               stderr=subprocess.PIPE)
     if process != 0:
         raise ValueError("Error code {} when reading running make_lis in ccs.".format(process))
+
+    return process
 
 
 def ssh(computer, commands):
@@ -102,6 +140,7 @@ def ssh(computer, commands):
     return process.communicate()[0].decode('utf-8')
 
 
+@decorator_log
 def shell_command(command, parameters=None):
     """Runs the provided command in the shell with some arguments if necessary.
     Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError if fails.
@@ -116,6 +155,7 @@ def shell_command(command, parameters=None):
     return process.communicate()[0].decode('utf-8')
 
 
+@decorator_log
 def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
     """Produces the lis file(s) for this experiment in ccs and copy them to eee.
     It also retrieves the vex file and creates the required symb. links.
@@ -131,43 +171,66 @@ def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
             In case of an e-EVN run, this is the name of the e-EVN run.
     """
     eEVNname = expname if eEVNname is None else expname
+    cmds, outputs, [], []
     cmd = "cd /ccs/expr/{expname};/ccs/bin/make_lis -e {expname} -p prod".format(expname=eEVNname)
     output = ssh(computer_ccs, cmd)
+    cmds.append(computer_ccs + ':' + cmd)
+    outputs.append(output)
 
     for ext in ('lis', 'vix'):
         # cmd = ["{}:/ccs/expr/{}/{}*.{}".format(computer, eEVNname, eEVNname.lower(), ext), '.']
-        scp(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext}", '.')
+        cmds.append(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext} .")
+        outputs.append(scp(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext}", '.'))
+
 
     # Finally, copy the piletter and expsum files
     for ext in ('piletter', 'expsum'):
         scp(f"{computer_piletter}:piletters/{eEVNname.lower()}.{ext}", '.')
+        outputs.append(cmds.append(f"{computer_piletter}:piletters/{eEVNname.lower()}.{ext} ."))
 
     # In the case of e-EVN runs, a renaming of the lis files may be required:
     if eEVNname != expname:
         for a_lis in glob.glob("*.lis"):
             os.rename(a_lis, a_lis.replace(eEVNname.lower(), expname.lower()))
-            output = shell_command("checklis.py", a_lis)
+            cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), expname.lower())}")
+            outputs.append('')
+            cmds.append(f"checklis.py {a_lis}")
+            outputs.append(shell_command("checklis.py", a_lis))
             print(output)
 
-    os.symlink("{}.vix".format(eEVNname.lower()), "{}.vix".format(expname))
+    os.symlink(f"{eEVNname.lower()}.vix", f"{expname}.vix")
+    cmds.append(f"ln -s {eEVNname.lower()}.vix {expname}.vix")
+    outputs.append('')
     print("\n\nYou SHOULD check now the lis files and modify them if needed.")
+    return cmds, outputs
 
 
+@decorator_log
 def get_data(expname, eEVNname=None):
     """Retrieves the data using getdata.pl and expname.lis file.
     """
     eEVNname = expname if eEVNname is None else expname
+    cmds, outputs, [], []
     for a_lisfile in glob.glob(f"{expname.lower()}*lis"):
-        output = shell_command("getdata.pl", f"-proj {eEVNname} -lis {a_lisfile}")
+        cmds.append(f"getdata.pl -proj {eEVNname} -lis {a_lisfile}")
+        outputs.append(shell_command("getdata.pl", f"-proj {eEVNname} -lis {a_lisfile}"))
+
+    return cmds, outputs
 
 
+@decorator_log
 def j2ms2(expname):
     """Runs j2ms2 using all lis files found in the directory with the name expname*lis (lower cases).
     """
+    cmds, outputs, [], []
     for a_lisfile in glob.glob(f"{expname.lower()}*lis"):
-        output = shell_command("j2ms2", f"-v {a_lisfile}")
+        cmds.append(f"j2ms2 -v {a_lisfile}")
+        outputs.append(shell_command("j2ms2", f"-v {a_lisfile}"))
+
+    return cmds, outputs
 
 
+@decorator_log
 def scale1bit(expname, antennas):
     """Scale 1-bit data to correct quentization losses for the given telescopes in all
     MS files associated with the given experiment name.
@@ -178,10 +241,15 @@ def scale1bit(expname, antennas):
         - antennas : str
             Comma-separated list of antennas that recorded at 1 bit.
     """
+    cmds, outputs, [], []
     for a_msfile in glob.glob(f"{expname.lower()}*.ms*"):
-        output = shell_command("scale1bit.py", f"{a_msfile} {antennas.replace(',', ' ')}")
+        outputs.append(shell_command("scale1bit.py", f"{a_msfile} {antennas.replace(',', ' ')}"))
+        cmds.append(f"scale1bit.py {a_msfile} {antennas.replace(',', ' ')}")
+
+    return cmds, outputs
 
 
+@decorator_log
 def standardplots(expname, refant, calsources):
     """Runs the standardplots on the specified experiment using refant as reference antenna and
     calsources as the sources to be picked for the auto- and cross-correlations.
@@ -204,15 +272,18 @@ def standardplots(expname, refant, calsources):
     # return get_setup_from_standardplots_output(output)
     # NOTE: NO NEEDED ANYMORE BECAUSE IT IS WITHIN METADATA.PY BUT LAST BITS SHOULD STILL BE PROCESSED FOR THE
     # PROCESSING.LOG FILE.
+    return [f"standardplots -weight {glob.glob('expname*.ms*')[0]} {refant} {calsources}"], [output]
 
 
-
+@decorator_log
 def archive(flag, experiment, rest_parameters):
     """Runs the archive command with the flag and rest_parameters string for the given experiment object
     (metadata class).
     Flag can be -auth, -stnd, -fits,...
     """
-    shell_command("archive", [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters])
+    output = shell_command("archive",
+                           [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters])
+    return [f"archive {flag} -e {experiment.expname.lower()}_{experiment.obsdate} {rest_parameters}"], [output]
 
 
 
@@ -222,5 +293,8 @@ def pipe_create_dirs(expname, supsci):
     for a_midpath in ('in', 'out', 'in/{}'.format(supsci)):
         if not os.path.isdir('/jop83_0/pipe/{}/{}'.format(a_midpath, expname.lower())):
             os.mkdir('/jop83_0/pipe/{}/{}'.format(a_midpath, expname.lower()))
+
+
+
 
 
