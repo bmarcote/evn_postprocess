@@ -56,7 +56,10 @@ if not os.path.isdir(expdir):
     os.makedirs(expdir)
 
 os.chdir(expdir)
-
+print(f"Moved to {expdir}.")
+print("Two log files will be created:")
+print("  - processing.log: contains the executed commands and very minimal output.")
+print("  - full_log_output.log: contains the full output received from all commands.\n\n")
 
 
 # Passing the input parameters and read the config file.
@@ -74,12 +77,14 @@ config.read(os.path.abspath(sys.argv[0][:-8]) + '/setup.inp')
 log_cmd = logging.getLogger('Executed commands')
 log_cmd.setLevel(logging.INFO)
 log_cmd_file = logging.FileHandler('./processing.log')
+log_cmd_stdout = logging.StreamHandler(sys.stdout)
 log_cmd_file.setFormatter(logging.Formatter('\n\n%(message)s\n'))
 log_cmd.addHandler(log_cmd_file)
+log_cmd.addHandler(log_cmd_stdout)
 
 log_full = logging.getLogger('Commands full log')
-log_full_file = logging.FileHandler('./full_log_output.log')
 log_full.setLevel(logging.INFO)
+log_full_file = logging.FileHandler('./full_log_output.log')
 log_full.addHandler(log_full_file)
 
 
@@ -87,8 +92,8 @@ log_full.addHandler(log_full_file)
 # It creates the experiment object
 exp = metadata.Experiment(args.expname)
 
-log_cmd.info('Processing of EVN experiment {} observed on {}.'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
-log_cmd.info('Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
+log_cmd.info('Processing experiment {} observed on {}.'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
+log_cmd.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
 
 
 
