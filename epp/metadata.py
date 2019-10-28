@@ -5,6 +5,7 @@ The metadata is obtained from different sources and/or at
 different stages of the post-processing.
 """
 import subprocess
+from datetime import datetime
 from pyrap import tables as pt
 
 
@@ -88,7 +89,7 @@ class Experiment():
         self._endtime = None
         self._antennas = []
         self._sources = []
-        self.credentials(None, None)
+        self._credentials = self.Credentials(None, None)
 
 
     def get_obsdate_from_ccs(self):
@@ -114,11 +115,11 @@ class Experiment():
                     # The first element is the expname of the e-EVN run
                     self._eEVN = an_input[0]
 
-            return obsdate
+            return obsdate[2:]
 
         elif output.count('\n') == 1:
             self._eEVN = None
-            return output[:-1].split()[1].strip()
+            return output[:-1].split()[1].strip()[2:]
 
         else:
             raise ValueError(f"{self.expname} not found in (ccs) MASTER_PROJECTS.LIS or connection not set.")
