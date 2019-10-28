@@ -5,7 +5,7 @@ The metadata is obtained from different sources and/or at
 different stages of the post-processing.
 """
 import subprocess
-from datetime import datetime
+import datetime as dt
 from pyrap import tables as pt
 
 
@@ -42,7 +42,7 @@ class Experiment():
     def obsdatetime(self):
         """Epoch at which the EVN experiment was observed (starting date), in datetime format.
         """
-        return datetime.strptime(self.obsdate, '%y%m%d')
+        return dt.datetime.strptime(self.obsdate, '%y%m%d')
 
     @property
     def timerange(self):
@@ -139,7 +139,9 @@ class Experiment():
                 self._sources = ms_field.getcol('NAME')
 
             with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
-                min_time, max_time
+                self._starttime, self._endtime = dt.datetime(1858, 11, 17, 0, 0, 2) + \
+                                     ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
+
 
 
 

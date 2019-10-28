@@ -2,6 +2,7 @@
 """
 import os
 import sys
+import glob
 import functools
 import subprocess
 import logging
@@ -9,7 +10,8 @@ import logging
 
 # All command functions return the terminal command that was executed and the output.
 
-header_comment_log = lambda command : "\n\n{0}\n{0}\n\n>>>>> {1}\n\n".format('#'*82, command)
+header_comment_log = lambda command : "\n{0}\n{0}\n>>>>> {1}\n".format('#'*82, command)
+commands_output_to_show = ["checklis.py", "flag_weights.py"]
 
 def decorator_log(func):
     """Decorates each function to log the input and output to the common log file, and individually.
@@ -34,7 +36,13 @@ def decorator_log(func):
 
         elif len(output_func) == 2:
             for a_cmd, an_output in zip(*output_func):
-                logger1.info(f"\n\n{a_cmd}\n")
+                logger1.info(f"\n{a_cmd}")
+                # If this is one of the wild commands where the output should be shown, show it!
+                for a_wild_command in commands_output_to_show:
+                    if a_wild_command in a_cmd:
+                        print(f"{a_cmd}:\n{an_output}")
+                        logger1.info(an_output)
+
                 logger2.info(header_comment_log(a_cmd))
                 logger2.info(an_output)
 
@@ -82,18 +90,32 @@ def ask_user(text, valtype=str, accepted_values=None):
             print(f"Invalid input ({text}). Cannot be converted to {valtype}.\nPlease try again: ")
 
 
+def yes_or_no_question(text):
+    """Asks to the user for a yes or no question. Accepted values are y/yes/n/no. Always q to quit.
+    Returns a bool.
+    """
+    value = ask_user(text + " (y/yes/n/no)", accepted_values=['y','yes','n','no'])
+    if value is 'y' or value is 'yes':
+        return True
+    elif value is 'n' or 'no':
+        return False
+
+    raise ValueError
+
 
 def can_continue(text):
     """Asks to the user if the program can continue running or if it should stop at this step.
     """
-    answer = input(f"{text} (y/yes, or 'q' to exit): ")
+    answer = input(f"{text} (y/yes/enter, or 'q' to exit): ")
     while True:
         try:
             if answer is 'q':
                 sys.exit(0)
 
-            if answer.lower() not in ('y', 'yes'):
+            if answer.lower() not in ('y', 'yes', ''):
                 raise ValueError
+
+            return True
 
         except ValueError:
             # raise ValueError(f"Invalid input ({text}). Cannot be converted to {valtype}.")
@@ -134,8 +156,8 @@ def ssh(computer, commands):
     process = subprocess.Popen(["ssh", computer, commands], shell=False, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
     # logger.info(output)
-    if process.returncode != 0:
-        raise ValueError(f"Error code {process.returncode} when running ssh {computeer}:{commands} in ccs.")
+    if process.returncode != 0 and process.returncode is not None:
+        raise ValueError(f"Error code {process.returncode} when running ssh {computer}:{commands} in ccs.")
 
     return process.communicate()[0].decode('utf-8')
 
@@ -146,10 +168,15 @@ def shell_command(command, parameters=None):
     Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError if fails.
     Parameters must be a single string if provided.
     """
-    full_shell_command = [command] if parameters is None else [command, parameters]
+    if isinstance(parameters, list):
+        full_shell_command = [command] + parameters
+    else:
+        full_shell_command = [command] if parameters is None else [command, parameters]
+
+    print(f"{' '.join(full_shell_command)}...")
     process = subprocess.Popen(full_shell_command, shell=False, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE)
-    if process.returncode != 0:
+    if process.returncode != 0 and process.returncode is not None:
         raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
 
     return process.communicate()[0].decode('utf-8')
@@ -171,37 +198,47 @@ def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
             In case of an e-EVN run, this is the name of the e-EVN run.
     """
     eEVNname = expname if eEVNname is None else expname
+    overwrite = True
     cmds, outputs = [], []
-    cmd = "cd /ccs/expr/{expname};/ccs/bin/make_lis -e {expname} -p prod".format(expname=eEVNname)
-    output = ssh(computer_ccs, cmd)
-    cmds.append(computer_ccs + ':' + cmd)
-    outputs.append(output)
+    if len(glob.glob("*lis")) > 0:
+        overwrite = yes_or_no_question("""lis files already found in the directory.
+Do you want to overwrite them (it also applies to vex, piletter, expsum files)?""")
 
-    for ext in ('lis', 'vix'):
-        # cmd = ["{}:/ccs/expr/{}/{}*.{}".format(computer, eEVNname, eEVNname.lower(), ext), '.']
-        cmds.append(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext} .")
-        outputs.append(scp(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext}", '.'))
+    if overwrite:
+        print("Creating lis file...")
+        cmd = "cd /ccs/expr/{expname};/ccs/bin/make_lis -e {expname} -p prod".format(expname=eEVNname)
+        output = ssh(computer_ccs, cmd)
+        cmds.append(f"ssh {computer_ccs}:{cmd}")
+        outputs.append(output)
+
+        for ext in ('lis', 'vix'):
+            # cmd = ["{}:/ccs/expr/{}/{}*.{}".format(computer, eEVNname, eEVNname.lower(), ext), '.']
+            cmds.append(f"scp {computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext} .")
+            outputs.append(scp(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext}", '.'))
 
 
-    # Finally, copy the piletter and expsum files
-    for ext in ('piletter', 'expsum'):
-        scp(f"{computer_piletter}:piletters/{eEVNname.lower()}.{ext}", '.')
-        outputs.append(cmds.append(f"{computer_piletter}:piletters/{eEVNname.lower()}.{ext} ."))
+        # Finally, copy the piletter and expsum files
+        for ext in ('piletter', 'expsum'):
+            scp(f"{computer_piletter}:piletters/{eEVNname.lower()}.{ext}", '.')
+            outputs.append(cmds.append(f"scp {computer_piletter}:piletters/{eEVNname.lower()}.{ext} ."))
 
-    # In the case of e-EVN runs, a renaming of the lis files may be required:
-    if eEVNname != expname:
+        # In the case of e-EVN runs, a renaming of the lis files may be required:
+        if eEVNname != expname:
+            for a_lis in glob.glob("*.lis"):
+                os.rename(a_lis, a_lis.replace(eEVNname.lower(), expname.lower()))
+                cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), expname.lower())}")
+                outputs.append('')
+
         for a_lis in glob.glob("*.lis"):
-            os.rename(a_lis, a_lis.replace(eEVNname.lower(), expname.lower()))
-            cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), expname.lower())}")
-            outputs.append('')
             cmds.append(f"checklis.py {a_lis}")
             outputs.append(shell_command("checklis.py", a_lis))
-            print(output)
+            # print(f"\n{cmds[-1]}:\n{outputs[-1]}")
 
-    os.symlink(f"{eEVNname.lower()}.vix", f"{expname}.vix")
-    cmds.append(f"ln -s {eEVNname.lower()}.vix {expname}.vix")
-    outputs.append('')
-    print("\n\nYou SHOULD check now the lis files and modify them if needed.")
+        if not os.path.isfile(f"{expname}.vix"):
+            os.symlink(f"{eEVNname.lower()}.vix", f"{expname}.vix")
+            cmds.append(f"ln -s {eEVNname.lower()}.vix {expname}.vix")
+            outputs.append('')
+
     return cmds, outputs
 
 
@@ -213,7 +250,7 @@ def get_data(expname, eEVNname=None):
     cmds, outputs = [], []
     for a_lisfile in glob.glob(f"{expname.lower()}*lis"):
         cmds.append(f"getdata.pl -proj {eEVNname} -lis {a_lisfile}")
-        outputs.append(shell_command("getdata.pl", f"-proj {eEVNname} -lis {a_lisfile}"))
+        outputs.append(shell_command("getdata.pl", ["-proj", eEVNname, "-lis", a_lisfile]))
 
     return cmds, outputs
 
@@ -224,8 +261,12 @@ def j2ms2(expname):
     """
     cmds, outputs = [], []
     for a_lisfile in glob.glob(f"{expname.lower()}*lis"):
-        cmds.append(f"j2ms2 -v {a_lisfile}")
-        outputs.append(shell_command("j2ms2", f"-v {a_lisfile}"))
+        with open(a_lisfile) as f:
+            outms = [a for a in f.readline().replace('\n','').split(' ') if (('.ms' in a) and ('.UVF' not in a))][0]
+        if os.path.isdir(outms):
+            if yes_or_no_question(f"{outms} exists. Delete and run j2sm2 again?"):
+                cmds.append(f"j2ms2 -v {a_lisfile}")
+                outputs.append(shell_command("j2ms2", ["-v", a_lisfile]))
 
     return cmds, outputs
 
@@ -243,8 +284,9 @@ def scale1bit(expname, antennas):
     """
     cmds, outputs = [], []
     for a_msfile in glob.glob(f"{expname.lower()}*.ms*"):
-        outputs.append(shell_command("scale1bit.py", f"{a_msfile} {antennas.replace(',', ' ')}"))
-        cmds.append(f"scale1bit.py {a_msfile} {antennas.replace(',', ' ')}")
+        # outputs.append(shell_command("scale1bit.py", [a_msfile, antennas.replace(',', ' ')))
+        cmds.append(f"\nscale1bit.py {a_msfile} {antennas.replace(',', ' ')}")
+        outputs.append(shell_command("scale1bit.py", [a_msfile, *antennas.split(',')]))
 
     return cmds, outputs
 
@@ -266,13 +308,14 @@ def standardplots(expname, refant, calsources):
             List (comma-separated, no spaces) of source names to be considered for the plots.
             Usually only the strong sources like fringe-finders.
     """
-    output = shell_command("standardplots", f"-weight {glob.glob('expname*.ms*')[0]} {refant} {calsources}")
+    cmd = ["standardplots", ["-weight", glob.glob(f"{expname.lower()}*.ms*")[0], refant, calsources]]
+    output = shell_command(*cmd)
     # Process the final lines of the output. It should interpretate it and return time range, sources,
     # antennas, and freqs.
     # return get_setup_from_standardplots_output(output)
     # NOTE: NO NEEDED ANYMORE BECAUSE IT IS WITHIN METADATA.PY BUT LAST BITS SHOULD STILL BE PROCESSED FOR THE
     # PROCESSING.LOG FILE.
-    return [f"standardplots -weight {glob.glob('expname*.ms*')[0]} {refant} {calsources}"], [output]
+    return [f"{cmd[0]} {' '.join(cmd[1])}"], [output]
 
 
 @decorator_log
@@ -281,9 +324,10 @@ def archive(flag, experiment, rest_parameters):
     (metadata class).
     Flag can be -auth, -stnd, -fits,...
     """
-    output = shell_command("archive",
-                           [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters])
-    return [f"archive {flag} -e {experiment.expname.lower()}_{experiment.obsdate} {rest_parameters}"], [output]
+    cmd = ["archive", [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters]]
+    output = shell_command(*cmd)
+    print(' '.join(cmd))
+    return [' '.join(cmd)], [output]
 
 
 

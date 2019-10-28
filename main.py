@@ -44,7 +44,7 @@ parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=u
 parser.add_argument('expname', type=str, help='Name of the EVN experiment.')
 parser.add_argument('supsci', type=str, help='Surname of EVN Support Scientist.')
 parser.add_argument('refant', type=str, help='Reference antenna.')
-parser.add_argument('-s', '--calsour', type=str, default=None, help=help_calsources)
+parser.add_argument('-s', '--calsources', type=str, default=None, help=help_calsources)
 parser.add_argument('--onebit', type=str, default=None, help='Antennas that observed at 1 bit (comma-separated)')
 parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
 args = parser.parse_args()
@@ -77,10 +77,10 @@ config.read(os.path.abspath(sys.argv[0][:-8]) + '/setup.inp')
 log_cmd = logging.getLogger('Executed commands')
 log_cmd.setLevel(logging.INFO)
 log_cmd_file = logging.FileHandler('./processing.log')
-log_cmd_stdout = logging.StreamHandler(sys.stdout)
+# log_cmd_stdout = logging.StreamHandler(sys.stdout)
 log_cmd_file.setFormatter(logging.Formatter('\n\n%(message)s\n'))
 log_cmd.addHandler(log_cmd_file)
-log_cmd.addHandler(log_cmd_stdout)
+# log_cmd.addHandler(log_cmd_stdout)
 
 log_full = logging.getLogger('Commands full log')
 log_full.setLevel(logging.INFO)
@@ -104,7 +104,8 @@ log_cmd.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
 actions.get_lis_vex(exp.expname, config['computers']['ccs'], config['computers']['piletter'],
                     eEVNname=exp.eEVNname)
 
-actions.can_continue('Is the lis file OK and can I continue?')
+    # print("\n\nYou SHOULD check now the lis files and modify them if needed.")
+actions.can_continue('Check the lis file(s) and modify them if needed. Can I continue?')
 
 actions.get_data(exp.expname, eEVNname=exp.eEVNname)
 
@@ -131,24 +132,44 @@ else:
 
 
 if args.calsources is None:
-    args.calsources = actions.ask_user('Please, introduce the sources to be used for standardplots')
-    # NOTE: introduce accepted_values with all sources in the MS? NO. otherwise it will be a Python list
+    args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for standardplots
+as a comma-separated list (the MS contains: {', '.join(exp.sources)})""")
 
 # Open produced plots, ask user if wants to continue / repeate plots with different inputs / q:
-actions.standardplots(exp.expname, args.refant, args.calsources)
+while True:
+    try:
+        run_standardplots = True
+        if (len(glob.glob(f"{exp.expname.lower()}*ps")) > 0) or \
+           (len(glob.glob(f"{exp.expname.lower()}*ps.gz")) > 0):
+            run_standardplots = actions.yes_or_no_question('Plots exist. Run standardplots again?')
 
-# Get all plots done and show them in the best order:
-standardplots = []
-for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
-    standardplots += glob.glob(f"{exp.expname}*{plot_type}*.ps")
+        if run_standardplots:
+            # actions.standardplots(exp.expname, args.refant, args.calsources)
+            # Get all plots done and show them in the best order:
+            standardplots = []
+            for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
+                standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
 
-for a_plot in standardplots:
-    actions.shell_command("gv", a_plot)
+            for a_plot in standardplots:
+                actions.shell_command("gv", a_plot)
+
+            answer = actions.yes_or_no_question('Are the plots OK? No to pick other sources/stations')
+            if answer:
+                break
+
+            args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for standardplots
+    as a comma-separated list (the MS contains: {', '.join(exp.sources)})""")
+        else:
+            break
+
+    except Exception as e:
+        # NOTE: To implement. Check errors...
+        print(f"WARNING: Standardplots crashed ({e}). But no implementation yet. Continuing..")
+        break
 
 
 weight_threshold = actions.ask_user("Which weight flagging threshold should be used?", valtype=float)
-swap_pols = actions.ask_user("Are there antennas requiring swapping polarizations? (comma-separated list or 'no')",
-                            accepted_values=['no', *exp.antennas])
+swap_pols = actions.yes_or_no_question("Is polswap required?")
 
 if ('ys' in exp.antennas) or ('YS' in exp.antennas) or ('Ys' in exp.antennas):
     for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
@@ -156,20 +177,22 @@ if ('ys' in exp.antennas) or ('YS' in exp.antennas) or ('Ys' in exp.antennas):
 
 # Flag weights
 for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
-    actions.shell_command("flag_weights.py", [msfile, f"{weight_threshold}"])
+    actions.shell_command("flag_weights.py", [msfile, str(weight_threshold)])
 
-if swap_pols is not 'no':
-    for a_swap_ant in swap_pols:
+if swap_pols:
+    swap_pol_ants = actions.ask_user("List the antennas requiring swapping polarizations (comma-separated list)",
+                                     accepted_values=[*exp.antennas])
+    for a_swap_ant in swap_pol_ants:
         for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
             actions.shell_command("polswap.py", [msfile, a_swap_ant])
 
 
 
-actions.can_continue('Is everything OK to run tConvert?')
+actions.can_continue('Is everything ready to run tConvert?')
 
 
 for i, msfile in enumerate(glob.glob(f"{exp.expname.lower()}*.ms")):
-    actions.shell_command("tConvert", [msfile, f"{exp.expname}_{i}_1.IDI"])
+    actions.shell_command("tConvert", [msfile, f"{exp.expname.lower()}_{i+1}_1.IDI"])
 
 
 pol_convert_ants = actions.ask_user("Are there antennas requiring Pol Convert? (provide comma-separated list)",
