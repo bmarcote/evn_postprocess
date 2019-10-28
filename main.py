@@ -11,7 +11,7 @@ Options:
     expname : str   The experiment name to be processed (case insensitive).
 
 
-Version: 0.0
+Version: 0.2
 Date: Sep 2019
 Written by Benito Marcote (marcote@jive.eu)
 """
@@ -32,7 +32,7 @@ from epp import actions
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
-__version__ = 0.1
+__version__ = 0.2
 __prog__ = 'evn_postprocess.py'
 description = 'Post-processing of EVN experiments.'
 usage = "%(prog)s [-h]  experiment_name  support_scientist  refant"
@@ -99,6 +99,7 @@ log_cmd.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
 
 # Should make a check that all required computers are accessible!
 # actions.check_systems_up()
+
 
 actions.get_lis_vex(exp.expname, config['computers']['ccs'], config['computers']['piletter'],
                     eEVNname=exp.eEVNname)
