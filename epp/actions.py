@@ -122,7 +122,7 @@ def scp(originpath, destpath):
     process = subprocess.call(["scp", originpath, destpath], shell=False, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE)
     if process != 0:
-        raise ValueError("Error code {} when reading running make_lis in ccs.".format(process))
+        raise ValueError(f"Error code {process} when running scp {originpath} {destpath} in ccs.")
 
     return process
 
@@ -135,7 +135,7 @@ def ssh(computer, commands):
                                stderr=subprocess.PIPE)
     # logger.info(output)
     if process.returncode != 0:
-        raise ValueError('Error code {} when reading running make_lis in ccs.'.format(process.returncode))
+        raise ValueError(f"Error code {process.returncode} when running ssh {computeer}:{commands} in ccs.")
 
     return process.communicate()[0].decode('utf-8')
 
@@ -150,7 +150,7 @@ def shell_command(command, parameters=None):
     process = subprocess.Popen(full_shell_command, shell=False, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE)
     if process.returncode != 0:
-        raise ValueError('Error code {} when reading running make_lis in ccs.'.format(process.returncode))
+        raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
 
     return process.communicate()[0].decode('utf-8')
 
