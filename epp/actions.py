@@ -16,7 +16,7 @@ def decorator_log(func):
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        print(f"Executing {func.__name__} {*args} {**kwargs}")
+        # print(f"Executing {func.__name__} {*args} {**kwargs}")
         output_func = func(*args, **kwargs)
         # output_func can have one or two elements... If only one then it is only the output.
         # Otherwise it has the command that has been run and the output.
@@ -171,7 +171,7 @@ def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
             In case of an e-EVN run, this is the name of the e-EVN run.
     """
     eEVNname = expname if eEVNname is None else expname
-    cmds, outputs, [], []
+    cmds, outputs = [], []
     cmd = "cd /ccs/expr/{expname};/ccs/bin/make_lis -e {expname} -p prod".format(expname=eEVNname)
     output = ssh(computer_ccs, cmd)
     cmds.append(computer_ccs + ':' + cmd)
@@ -210,7 +210,7 @@ def get_data(expname, eEVNname=None):
     """Retrieves the data using getdata.pl and expname.lis file.
     """
     eEVNname = expname if eEVNname is None else expname
-    cmds, outputs, [], []
+    cmds, outputs = [], []
     for a_lisfile in glob.glob(f"{expname.lower()}*lis"):
         cmds.append(f"getdata.pl -proj {eEVNname} -lis {a_lisfile}")
         outputs.append(shell_command("getdata.pl", f"-proj {eEVNname} -lis {a_lisfile}"))
@@ -222,7 +222,7 @@ def get_data(expname, eEVNname=None):
 def j2ms2(expname):
     """Runs j2ms2 using all lis files found in the directory with the name expname*lis (lower cases).
     """
-    cmds, outputs, [], []
+    cmds, outputs = [], []
     for a_lisfile in glob.glob(f"{expname.lower()}*lis"):
         cmds.append(f"j2ms2 -v {a_lisfile}")
         outputs.append(shell_command("j2ms2", f"-v {a_lisfile}"))
@@ -241,7 +241,7 @@ def scale1bit(expname, antennas):
         - antennas : str
             Comma-separated list of antennas that recorded at 1 bit.
     """
-    cmds, outputs, [], []
+    cmds, outputs = [], []
     for a_msfile in glob.glob(f"{expname.lower()}*.ms*"):
         outputs.append(shell_command("scale1bit.py", f"{a_msfile} {antennas.replace(',', ' ')}"))
         cmds.append(f"scale1bit.py {a_msfile} {antennas.replace(',', ' ')}")

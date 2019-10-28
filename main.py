@@ -35,7 +35,7 @@ from epp import actions
 __version__ = 0.1
 __prog__ = 'evn_postprocess.py'
 description = 'Post-processing of EVN experiments.'
-usage = "%(prog)s [-h]  experiment_name  support_scientist"
+usage = "%(prog)s [-h]  experiment_name  support_scientist  refant"
 
 help_calsources = 'Calibrator sources to use in standarplots (comma-separated, no spaces). If not provided, the user will be asked at due time'
 
