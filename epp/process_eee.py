@@ -4,14 +4,6 @@ It runs all steps although it requires user interaction to
 verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 
-
-Version: 0.3
-Date: Nov 2019
-Written by Benito Marcote (marcote@jive.eu)
-
-version 0.2 changes
-- Refactoring code (thanks to Harro).
-
 """
 
 

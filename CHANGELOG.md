@@ -19,7 +19,8 @@ Fixed:
 Added:
 Deprecated:
 Removed:
-
+Known errors:
+    - Log files show multiple repeated lines.
 
 ## Version 0.2 -- 7 November 2019
 
