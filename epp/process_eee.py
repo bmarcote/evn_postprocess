@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""Script that runs interactive SFXC post-correlation steps.
+"""Script that runs interactive SFXC post-correlation steps at the eee computer.
 It runs all steps although it requires user interaction to
 verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 
 
-Usage: post_processing.py  <expname>
-
-Options:
-    expname : str   The experiment name to be processed (case insensitive).
-
-
-Version: 0.2
-Date: Sep 2019
+Version: 0.3
+Date: Nov 2019
 Written by Benito Marcote (marcote@jive.eu)
+
+version 0.2 changes
+- Refactoring code (thanks to Harro).
+
 """
 
 
@@ -32,24 +30,12 @@ from epp import actions
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
-__version__ = 0.2
+__version__ = 0.3
 __prog__ = 'evn_postprocess.py'
 description = 'Post-processing of EVN experiments.'
 usage = "%(prog)s [-h]  experiment_name  support_scientist  refant"
 
 help_calsources = 'Calibrator sources to use in standarplots (comma-separated, no spaces). If not provided, the user will be asked at due time'
-
-# Input parameters
-parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage)
-parser.add_argument('expname', type=str, help='Name of the EVN experiment.')
-parser.add_argument('supsci', type=str, help='Surname of EVN Support Scientist.')
-parser.add_argument('refant', type=str, help='Reference antenna.')
-parser.add_argument('-s', '--calsources', type=str, default=None, help=help_calsources)
-parser.add_argument('--onebit', type=str, default=None, help='Antennas that observed at 1 bit (comma-separated)')
-parser.add_argument('--pipe', type=bool, default=False, help='If running in pipe (jop83). Otherwise eee is assumed.')
-parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
-# Add one line with the steps to run. By default all the script
-args = parser.parse_args()
 
 
 # If required, move to the required directory (create it if needed).
@@ -68,7 +54,7 @@ print("  - full_log_output.log: contains the full output received from all comma
 config = configparser.ConfigParser()
 
 # If file set from parameters use it, otherwise the one in program's directory.
-config.read(os.path.abspath(sys.argv[0][:-8]) + '/setup.inp')
+config.read(os.path.abspath('../' + sys.argv[0][:-8]) + '/setup.inp')
 
 # Create the log directories if they do not exist
 # for logdir in (config.defaults()['pathlogdir'], config.defaults()['pathoutput']):
@@ -95,11 +81,13 @@ log_full.addHandler(log_full_file)
 exp = metadata.Experiment(args.expname)
 
 # log_cmd.info('#'*82)
-log_cmd.info('Processing experiment {} observed on {}.'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
-print('Processing experiment {} observed on {}.'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
+log_cmd.info('Processing experiment {} observed on {} ({}).'.format(exp.expname,
+                                    exp.obsdatetime.strftime('%d %b %Y'), exp.obsdatetime.strftime('%y%m%d')))
 log_cmd.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
 
 
+print('Processing experiment {} observed on {} ({}).'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y'),
+                                                    exp.obsdatetime.strftime('%y%m%d')))
 
 # Should make a check that all required computers are accessible!
 # actions.check_systems_up()
@@ -229,12 +217,12 @@ if len(glob.glob("*_*.auth")) == 1:
 elif len(glob.glob("*_*.auth")) > 1:
     answer = actions.ask_user("WARNING: multiple auth files found. Please introduce username and password (space separated)")
     exp.set_credentials( *[a.strip() for a in answer.split(' ')] )
-    actions.shell_command("touch", f"{exp.credentials.username}'_'{exp.credentials.password}.auth")
+    actions.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
     actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
 else:
     possible_char = string.digits + string.ascii_letters
     exp.set_credentials(username=exp.expname.lower(), password="".join(random.sample(possible_char, 12)))
-    actions.shell_command("touch", f"{exp.credentials.username}'_'{exp.credentials.password}.auth")
+    actions.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
     actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
 
 
@@ -250,6 +238,22 @@ actions.archive("-fits", exp, "*IDI*")
 
 
 # Work at eee done!!
+
+
+
+if __name__ == '__main__':
+    # Input parameters
+    parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage)
+    parser.add_argument('expname', type=str, help='Name of the EVN experiment.')
+    parser.add_argument('supsci', type=str, help='Surname of EVN Support Scientist.')
+    parser.add_argument('refant', type=str, help='Reference antenna.')
+    parser.add_argument('-s', '--calsources', type=str, default=None, help=help_calsources)
+    parser.add_argument('--onebit', type=str, default=None, help='Antennas that observed at 1 bit (comma-separated)')
+    parser.add_argument('--steps', type=str, default=None, help='All steps to run.')
+    parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
+    # Add one line with the steps to run. By default all the script
+    args = parser.parse_args()
+
 
 
 

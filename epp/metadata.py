@@ -9,15 +9,24 @@ import datetime as dt
 from pyrap import tables as pt
 
 
+class Credentials(object):
+    @property
+    def username(self):
+        return self._username
+
+    @property
+    def password(self):
+        return self._password
+
+    def __init__(self, username, password):
+        self._username = username
+        self._password = password
 
 
-class Experiment():
+
+class Experiment(object):
     """Defines and EVN experiment with all relevant metadata.
     """
-    class Credentials():
-        def __init__(self, username, password):
-            self.username = username
-            self.password = password
 
     @property
     def expname(self):
@@ -70,8 +79,8 @@ class Experiment():
         """
         return self._credentials
 
-    @credentials.setter
-    def credentials(self, username, password):
+
+    def set_credentials(self, username, password):
         self._credentials = Credentials(username, password)
 
 
@@ -89,7 +98,7 @@ class Experiment():
         self._endtime = None
         self._antennas = []
         self._sources = []
-        self._credentials = self.Credentials(None, None)
+        self._credentials = Credentials(None, None)
 
 
     def get_obsdate_from_ccs(self):
@@ -107,7 +116,7 @@ class Experiment():
             # It is an e-EVN experiment!
             # One line will have EXP EPOCH.
             # The other one eEXP EPOCH EXP1 EXP2..
-            inputs = [i.split().strip() for i in output[:-1].split('\n')]
+            inputs = [i.split() for i in output[:-1].split('\n')]
             for an_input in inputs:
                 if an_input[0] == self.expname:
                     obsdate = an_input[1]
@@ -129,8 +138,6 @@ class Experiment():
         """Obtains the time range, antennas, sources, and frequencies of the observation
         from the specified MS file and incorporate them into the current object.
         """
-        # NOTE: Do this, recycle from the casa gmrt/evn pipeline.
-        # NOTE: Antennas should be converted to upper cases to make everything easier
         with pt.table(msfile, readonly=True, ack=False) as ms:
             with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
                 self._antennas = [ant.upper() for ant in ms_ant.getcol('NAME')]
@@ -142,6 +149,7 @@ class Experiment():
                 self._starttime, self._endtime = dt.datetime(1858, 11, 17, 0, 0, 2) + \
                                      ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
 
+        # NOTE: Get also the frequency (subband) information.
 
 
 

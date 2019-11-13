@@ -11,7 +11,7 @@ import logging
 # All command functions return the terminal command that was executed and the output.
 
 header_comment_log = lambda command : "\n{0}\n{0}\n>>>>> {1}\n".format('#'*82, command)
-commands_output_to_show = ["checklis.py", "flag_weights.py"]
+commands_output_to_show = ["checklis.py", "flag_weights.py", "standardplots"]
 
 def decorator_log(func):
     """Decorates each function to log the input and output to the common log file, and individually.
@@ -31,20 +31,32 @@ def decorator_log(func):
         logger1.addHandler(logger1_file)
         logger2.addHandler(logger2_file)
 
-        if len(output_func) == 1:
+        # print(f"The output is: {output_func}")
+        if isinstance(output_func, tuple):
+            if len(output_func) == 1:
+                logger2.info(output_func)
+
+            elif len(output_func) == 2:
+                if not isinstance(output_func[0], list):
+                    output_func = [[output_func[0],], [output_func[1],]]
+
+                for a_cmd, an_output in zip(*output_func):
+                    logger1.info(f"\n{a_cmd}")
+                    # If this is one of the wild commands where the output should be shown, show it!
+                    for a_wild_command in commands_output_to_show:
+                        if a_wild_command in a_cmd:
+                            if a_wild_command is "standardplots":
+                                a_mod_output = extract_tail_standardplots_output(an_output)
+                                print(f"{a_cmd}:\n{a_mod_output}")
+                                logger1.info(a_mod_output)
+                            else:
+                                print(f"{a_cmd}:\n{an_output}")
+                                logger1.info(an_output)
+
+                    logger2.info(header_comment_log(a_cmd))
+                    logger2.info(an_output)
+        else:
             logger2.info(output_func)
-
-        elif len(output_func) == 2:
-            for a_cmd, an_output in zip(*output_func):
-                logger1.info(f"\n{a_cmd}")
-                # If this is one of the wild commands where the output should be shown, show it!
-                for a_wild_command in commands_output_to_show:
-                    if a_wild_command in a_cmd:
-                        print(f"{a_cmd}:\n{an_output}")
-                        logger1.info(an_output)
-
-                logger2.info(header_comment_log(a_cmd))
-                logger2.info(an_output)
 
         return output_func
 
@@ -66,7 +78,7 @@ def ask_user(text, valtype=str, accepted_values=None):
 
     accepted_values can be a list of all possible values that are accepted.
     """
-    answer = input(f"{text} (q to exit): ")
+    answer = input(f"\n{text} (q to exit): ")
     while True:
         try:
             if answer is 'q':
@@ -94,7 +106,7 @@ def yes_or_no_question(text):
     """Asks to the user for a yes or no question. Accepted values are y/yes/n/no. Always q to quit.
     Returns a bool.
     """
-    value = ask_user(text + " (y/yes/n/no)", accepted_values=['y','yes','n','no'])
+    value = ask_user(f"\n{text} (y/yes/n/no)", accepted_values=['y','yes','n','no'])
     if value is 'y' or value is 'yes':
         return True
     elif value is 'n' or 'no':
@@ -106,14 +118,14 @@ def yes_or_no_question(text):
 def can_continue(text):
     """Asks to the user if the program can continue running or if it should stop at this step.
     """
-    answer = input(f"{text} (y/yes/enter, or 'q' to exit): ")
+    answer = input(f"\n{text} (y/yes/enter, or 'q' to exit): ")
     while True:
         try:
             if answer is 'q':
                 sys.exit(0)
 
             if answer.lower() not in ('y', 'yes', ''):
-                raise ValueError
+                return False
 
             return True
 
@@ -146,7 +158,7 @@ def scp(originpath, destpath):
     if process != 0:
         raise ValueError(f"Error code {process} when running scp {originpath} {destpath} in ccs.")
 
-    return process
+    return f"scp {originpath} {destpath}", process
 
 
 def ssh(computer, commands):
@@ -159,7 +171,7 @@ def ssh(computer, commands):
     if process.returncode != 0 and process.returncode is not None:
         raise ValueError(f"Error code {process.returncode} when running ssh {computer}:{commands} in ccs.")
 
-    return process.communicate()[0].decode('utf-8')
+    return f"ssh {computer}:{commands}", process.communicate()[0].decode('utf-8')
 
 
 @decorator_log
@@ -179,7 +191,7 @@ def shell_command(command, parameters=None):
     if process.returncode != 0 and process.returncode is not None:
         raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
 
-    return process.communicate()[0].decode('utf-8')
+    return ' '.join(full_shell_command), process.communicate()[0].decode('utf-8')
 
 
 @decorator_log
@@ -197,7 +209,7 @@ def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
         eEVNname : str [DEFAULT: None]
             In case of an e-EVN run, this is the name of the e-EVN run.
     """
-    eEVNname = expname if eEVNname is None else expname
+    eEVNname = expname if eEVNname is None else eEVNname
     overwrite = True
     cmds, outputs = [], []
     if len(glob.glob("*lis")) > 0:
@@ -206,21 +218,36 @@ Do you want to overwrite them (it also applies to vex, piletter, expsum files)?"
 
     if overwrite:
         print("Creating lis file...")
-        cmd = "cd /ccs/expr/{expname};/ccs/bin/make_lis -e {expname} -p prod".format(expname=eEVNname)
+        # Commenting out -p prod because of spectral line exper
+        cmd = "cd /ccs/expr/{expname};/ccs/bin/make_lis -e {expname}".format(expname=eEVNname)
         output = ssh(computer_ccs, cmd)
         cmds.append(f"ssh {computer_ccs}:{cmd}")
+        # If there is a "prod_cont" and "prod_line" in the lis file, remake them to make separate files.
         outputs.append(output)
 
+        print("Getting lis and vix files from ccs...")
         for ext in ('lis', 'vix'):
             # cmd = ["{}:/ccs/expr/{}/{}*.{}".format(computer, eEVNname, eEVNname.lower(), ext), '.']
-            cmds.append(f"scp {computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext} .")
-            outputs.append(scp(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext}", '.'))
+            cmd, output = scp(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext}", '.')
+            cmds.append(cmd)
+            outputs.append(output)
 
+        # Checks if the lis file(s) contain prod_cont and prod_line profiles. And those cases split
+        # the lis files for the two profiles.
+        for a_lis in glob.glob("*.lis"):
+            split_lis_cont_line(a_lis)
 
+        print(f"Getting the PI letter and .expsum files from {computer_piletter.split('@')[1]}...")
         # Finally, copy the piletter and expsum files
         for ext in ('piletter', 'expsum'):
-            scp(f"{computer_piletter}:piletters/{eEVNname.lower()}.{ext}", '.')
-            outputs.append(cmds.append(f"scp {computer_piletter}:piletters/{eEVNname.lower()}.{ext} ."))
+            cmd, output = scp(f"{computer_piletter}:piletters/{eEVNname.lower()}.{ext}", '.')
+            cmds.append(cmd)
+            outputs.append(output)
+
+        if not os.path.isfile(f"{expname}.vix"):
+            os.symlink(f"{eEVNname.lower()}.vix", f"{expname}.vix")
+            cmds.append(f"ln -s {eEVNname.lower()}.vix {expname}.vix")
+            outputs.append('')
 
         # In the case of e-EVN runs, a renaming of the lis files may be required:
         if eEVNname != expname:
@@ -229,28 +256,58 @@ Do you want to overwrite them (it also applies to vex, piletter, expsum files)?"
                 cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), expname.lower())}")
                 outputs.append('')
 
-        for a_lis in glob.glob("*.lis"):
-            cmds.append(f"checklis.py {a_lis}")
-            outputs.append(shell_command("checklis.py", a_lis))
-            # print(f"\n{cmds[-1]}:\n{outputs[-1]}")
+        if can_continue('Check the lis file(s) and modify them if needed. Are they ready to be check now?'):
+            while True:
+                for a_lis in glob.glob("*.lis"):
+                    cmd, output = shell_command("checklis.py", a_lis)
+                    cmds.append(cmd)
+                    outputs.append(output)
+                    # print(f"\n{cmds[-1]}:\n{outputs[-1]}")
 
-        if not os.path.isfile(f"{expname}.vix"):
-            os.symlink(f"{eEVNname.lower()}.vix", f"{expname}.vix")
-            cmds.append(f"ln -s {eEVNname.lower()}.vix {expname}.vix")
-            outputs.append('')
+                if yes_or_no_question('Are lis file(s) OK to continue and get the data?\nNo to check them again'):
+                    break
+
+
+
 
     return cmds, outputs
+
+
+def split_lis_cont_line(fulllisfile):
+    """Given a lis file, it checks if there are jobs set as prod_cont and prod_line.
+    If not, it does nothing. Otherwise, it splits the lis file into two lis files,
+    one for the continuum pass and another one for the line pass.
+    """
+    if (subprocess.call(["grep", "prod_line", fulllisfile], stdout=subprocess.DEVNULL) == 0) and \
+       (subprocess.call(["grep", "prod_cont", fulllisfile], stdout=subprocess.DEVNULL) == 0):
+        print('This is a spectral line experiment with line and continuum passes.')
+
+        lis_cont = fulllisfile.replace('.lis', '_cont.lis')
+        lis_line = fulllisfile.replace('.lis', '_line.lis')
+        with open(lis_cont, 'w') as f_cont, open(lis_line, 'w') as f_line:
+            with open(fulllisfile) as f_full:
+                for a_fileline in f_full.readlines():
+                    if a_fileline[0] not in ('+', '-'):
+                        f_cont.write(a_fileline.replace('.ms', '_cont.ms'))
+                        f_line.write(a_fileline.replace('.ms', '_line.ms'))
+
+            f_cont.write(subprocess.check_output(["grep", "prod_cont", fulllisfile]).decode('utf-8'))
+            f_line.write(subprocess.check_output(["grep", "prod_line", fulllisfile]).decode('utf-8'))
+
+        os.remove(fulllisfile)
+
 
 
 @decorator_log
 def get_data(expname, eEVNname=None):
     """Retrieves the data using getdata.pl and expname.lis file.
     """
-    eEVNname = expname if eEVNname is None else expname
+    eEVNname = expname if eEVNname is None else eEVNname
     cmds, outputs = [], []
     for a_lisfile in glob.glob(f"{expname.lower()}*lis"):
-        cmds.append(f"getdata.pl -proj {eEVNname} -lis {a_lisfile}")
-        outputs.append(shell_command("getdata.pl", ["-proj", eEVNname, "-lis", a_lisfile]))
+        cmd, output = shell_command("getdata.pl", ["-proj", eEVNname, "-lis", a_lisfile])
+        cmds.append(cmd)
+        outputs.append(output)
 
     return cmds, outputs
 
@@ -264,9 +321,14 @@ def j2ms2(expname):
         with open(a_lisfile) as f:
             outms = [a for a in f.readline().replace('\n','').split(' ') if (('.ms' in a) and ('.UVF' not in a))][0]
         if os.path.isdir(outms):
-            if yes_or_no_question(f"{outms} exists. Delete and run j2sm2 again?"):
-                cmds.append(f"j2ms2 -v {a_lisfile}")
-                outputs.append(shell_command("j2ms2", ["-v", a_lisfile]))
+            if yes_or_no_question(f"{outms} exists. Delete and run j2ms2 again?"):
+                cmd, output = shell_command("j2ms2", ["-v", a_lisfile])
+                cmds.append(cmd)
+                outputs.append(output)
+        else:
+            cmd, output = shell_command("j2ms2", ["-v", a_lisfile])
+            cmds.append(cmd)
+            outputs.append(output)
 
     return cmds, outputs
 
@@ -284,9 +346,9 @@ def scale1bit(expname, antennas):
     """
     cmds, outputs = [], []
     for a_msfile in glob.glob(f"{expname.lower()}*.ms*"):
-        # outputs.append(shell_command("scale1bit.py", [a_msfile, antennas.replace(',', ' ')))
-        cmds.append(f"\nscale1bit.py {a_msfile} {antennas.replace(',', ' ')}")
-        outputs.append(shell_command("scale1bit.py", [a_msfile, *antennas.split(',')]))
+        cmd, output = shell_command("scale1bit.py", [a_msfile, *antennas.split(',')])
+        cmds.append(cmd)
+        outputs.append(output)
 
     return cmds, outputs
 
@@ -308,14 +370,33 @@ def standardplots(expname, refant, calsources):
             List (comma-separated, no spaces) of source names to be considered for the plots.
             Usually only the strong sources like fringe-finders.
     """
-    cmd = ["standardplots", ["-weight", glob.glob(f"{expname.lower()}*.ms*")[0], refant, calsources]]
-    output = shell_command(*cmd)
+    cmd, output = shell_command("standardplots",
+                                ["-weight", glob.glob(f"{expname.lower()}*.ms*")[0], refant, calsources])
     # Process the final lines of the output. It should interpretate it and return time range, sources,
     # antennas, and freqs.
     # return get_setup_from_standardplots_output(output)
     # NOTE: NO NEEDED ANYMORE BECAUSE IT IS WITHIN METADATA.PY BUT LAST BITS SHOULD STILL BE PROCESSED FOR THE
     # PROCESSING.LOG FILE.
-    return [f"{cmd[0]} {' '.join(cmd[1])}"], [output]
+    return cmd, output
+
+
+def extract_tail_standardplots_output(stdplt_output):
+    """Given a full log output from standardplots, it returns only the last bits that contain
+    the information provided by the "r" command.
+    """
+    last_lines = []
+    for a_line in stdplt_output.split('\n')[::-1]:
+        # All "r" output lines always start with those messages
+        # (listTimeRage: , listSources: , listAntennas: , listFreqs: ):
+        if ('list' in a_line) or (a_line.strip() is ''):
+            last_lines.append(a_line)
+        else:
+            # We are already done
+            return last_lines[::-1]
+
+    # Just in case something went unexpected...
+    print('\n'.join(last_lines[::-1]))
+    return '\n'.join(last_lines[::-1])
 
 
 @decorator_log
@@ -324,10 +405,9 @@ def archive(flag, experiment, rest_parameters):
     (metadata class).
     Flag can be -auth, -stnd, -fits,...
     """
-    cmd = ["archive", [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters]]
-    output = shell_command(*cmd)
-    print(' '.join(cmd))
-    return [' '.join(cmd)], [output]
+    cmd, output = shell_command("archive.pl",
+                    [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters])
+    return cmd, output
 
 
 
@@ -337,6 +417,7 @@ def pipe_create_dirs(expname, supsci):
     for a_midpath in ('in', 'out', 'in/{}'.format(supsci)):
         if not os.path.isdir('/jop83_0/pipe/{}/{}'.format(a_midpath, expname.lower())):
             os.mkdir('/jop83_0/pipe/{}/{}'.format(a_midpath, expname.lower()))
+
 
 
 
