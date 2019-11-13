@@ -46,7 +46,9 @@ parser.add_argument('supsci', type=str, help='Surname of EVN Support Scientist.'
 parser.add_argument('refant', type=str, help='Reference antenna.')
 parser.add_argument('-s', '--calsources', type=str, default=None, help=help_calsources)
 parser.add_argument('--onebit', type=str, default=None, help='Antennas that observed at 1 bit (comma-separated)')
+parser.add_argument('--pipe', type=bool, default=False, help='If running in pipe (jop83). Otherwise eee is assumed.')
 parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
+# Add one line with the steps to run. By default all the script
 args = parser.parse_args()
 
 
@@ -77,7 +79,7 @@ config.read(os.path.abspath(sys.argv[0][:-8]) + '/setup.inp')
 log_cmd = logging.getLogger('Executed commands')
 log_cmd.setLevel(logging.INFO)
 log_cmd_file = logging.FileHandler('./processing.log')
-# log_cmd_stdout = logging.StreamHandler(sys.stdout)
+log_cmd_stdout = logging.StreamHandler(sys.stdout)
 log_cmd_file.setFormatter(logging.Formatter('\n\n%(message)s\n'))
 log_cmd.addHandler(log_cmd_file)
 # log_cmd.addHandler(log_cmd_stdout)
@@ -92,7 +94,9 @@ log_full.addHandler(log_full_file)
 # It creates the experiment object
 exp = metadata.Experiment(args.expname)
 
+# log_cmd.info('#'*82)
 log_cmd.info('Processing experiment {} observed on {}.'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
+print('Processing experiment {} observed on {}.'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
 log_cmd.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
 
 
@@ -114,6 +118,9 @@ actions.j2ms2(exp.expname)
 # NOTE: this step must be conducted always.
 # Retrieve the information from the MS and appends in in exp (antennas, sources, freqs.)
 exp.get_setup_from_ms(glob.glob(f"{exp.expname.lower()}*.ms")[0])
+
+# NOTE: I should probably write the output? standardplots do it.  I need to do it again for line exp.
+# At least to know which IF(s) is in the line and which one is from the continuum.
 
 
 # 1-bit scaling. Only runs if provided.
@@ -144,7 +151,7 @@ while True:
             run_standardplots = actions.yes_or_no_question('Plots exist. Run standardplots again?')
 
         if run_standardplots:
-            # actions.standardplots(exp.expname, args.refant, args.calsources)
+            actions.standardplots(exp.expname, args.refant, args.calsources)
             # Get all plots done and show them in the best order:
             standardplots = []
             for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
@@ -168,16 +175,8 @@ while True:
         break
 
 
-weight_threshold = actions.ask_user("Which weight flagging threshold should be used?", valtype=float)
+weight_threshold = actions.ask_user("A couple of questions:\nWhich weight flagging threshold should be used?", valtype=float)
 swap_pols = actions.yes_or_no_question("Is polswap required?")
-
-if ('ys' in exp.antennas) or ('YS' in exp.antennas) or ('Ys' in exp.antennas):
-    for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
-        actions.shell_command("ysfocus.py", msfile)
-
-# Flag weights
-for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
-    actions.shell_command("flag_weights.py", [msfile, str(weight_threshold)])
 
 if swap_pols:
     swap_pol_ants = actions.ask_user("List the antennas requiring swapping polarizations (comma-separated list)",
@@ -187,23 +186,34 @@ if swap_pols:
             actions.shell_command("polswap.py", [msfile, a_swap_ant])
 
 
+if ('ys' in exp.antennas) or ('YS' in exp.antennas) or ('Ys' in exp.antennas):
+    for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
+        actions.shell_command("ysfocus.py", msfile)
 
-actions.can_continue('Is everything ready to run tConvert?')
+# Flag weights
+# TODO: Check why the output of flag_weights is not written in the terminal
+for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
+    actions.shell_command("flag_weights.py", [msfile, str(weight_threshold)])
+
+
+
+
+actions.can_continue('Is everything ready to run tConvert? You can update the PI letter in the mean time')
 
 
 for i, msfile in enumerate(glob.glob(f"{exp.expname.lower()}*.ms")):
     actions.shell_command("tConvert", [msfile, f"{exp.expname.lower()}_{i+1}_1.IDI"])
 
 
-pol_convert_ants = actions.ask_user("Are there antennas requiring Pol Convert? (provide comma-separated list)",
-                                    accepted_values=['no', *exp.antennas])
+actions.can_continue('If PolConvert is required, do it manually NOW and then continue')
 
-if pol_convert_ants is not 'no':
-    actions.can_continue('Please, run PolConvert manually and let me know if I can continue?')
+# pol_convert_ants = actions.ask_user("Are there antennas requiring Pol Convert? (provide comma-separated list)",
+#                                     accepted_values=['no', *exp.antennas])
+
+# if pol_convert_ants is not 'no':
+#     actions.can_continue('Please, run PolConvert manually and let me know if I can continue?')
 
 
-
-actions.can_continue('Please, update the PI letter before continuing')
 
 # Preparations for archive
 
@@ -212,15 +222,20 @@ actions.can_continue('Please, update the PI letter before continuing')
 # NOTE: This should always run
 if len(glob.glob("*_*.auth")) == 1:
     # the file should have the form username_password.auth.
-    exp.credentials( *glob.glob("*_*.auth").split('.')[0].split('_')  )
+    exp.set_credentials( *glob.glob("*_*.auth").split('.')[0].split('_')  )
+    if not os.path.isfile(f"{exp.expname.lower()}.pipelet"):
+        actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
+
 elif len(glob.glob("*_*.auth")) > 1:
     answer = actions.ask_user("WARNING: multiple auth files found. Please introduce username and password (space separated)")
-    exp.credentials( *[a.strip() for a in answer.split(' ')] )
-    actions.shell_command("touch", f"{'_'.join(exp.credentials)}.auth")
+    exp.set_credentials( *[a.strip() for a in answer.split(' ')] )
+    actions.shell_command("touch", f"{exp.credentials.username}'_'{exp.credentials.password}.auth")
+    actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
 else:
-    possible_char = string.digits + string.letters
-    exp.credentials(username=exp.expname.lower(), password="".join(random.sample(possible_char, 12)))
-    actions.shell_command("touch", f"{'_'.join(exp.credentials)}.auth")
+    possible_char = string.digits + string.ascii_letters
+    exp.set_credentials(username=exp.expname.lower(), password="".join(random.sample(possible_char, 12)))
+    actions.shell_command("touch", f"{exp.credentials.username}'_'{exp.credentials.password}.auth")
+    actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
 
 
 # NOTE: Should I mention in the log and terminal?
@@ -232,8 +247,6 @@ actions.archive("-auth", exp, f"-n {exp.credentials.username} -p {exp.credential
 actions.archive("-stnd", exp, f"{exp.expname.lower()}.piletter *ps.gz")
 actions.archive("-fits", exp, "*IDI*")
 
-if not os.path.isfile(f"{exp.expname.lower()}.pipelet"):
-    actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
 
 
 # Work at eee done!!
