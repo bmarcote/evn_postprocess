@@ -5,6 +5,16 @@ This is the change log for the different production (master) versions of the pro
 
 
 
+## Version 0.4 -- 14 November 2019
+
+First version that fully works for all steps than in the eee computer.
+
+Fixed:
+    - Several bugs across the entire program.
+Known errors:
+    - Log files show multiple repeated lines.
+
+
 ## Version 0.3 -- 13 November 2019
 
 Changed:

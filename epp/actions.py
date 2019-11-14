@@ -11,17 +11,16 @@ import logging
 # All command functions return the terminal command that was executed and the output.
 
 header_comment_log = lambda command : "\n{0}\n{0}\n>>>>> {1}\n".format('#'*82, command)
-commands_output_to_show = ["checklis.py", "flag_weights.py", "standardplots"]
+commands_output_to_show = ["checklis.py", "flag_weights.py", "standardplots", "archive"]
 
 def decorator_log(func):
     """Decorates each function to log the input and output to the common log file, and individually.
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        # print(f"Executing {func.__name__} {*args} {**kwargs}")
-        output_func = func(*args, **kwargs)
         # output_func can have one or two elements... If only one then it is only the output.
         # Otherwise it has the command that has been run and the output.
+        output_func = func(*args, **kwargs)
         logger1 = logging.getLogger('Executed commands')
         logger2 = logging.getLogger('Commands full log')
         logger1.setLevel(logging.INFO)
@@ -31,7 +30,6 @@ def decorator_log(func):
         logger1.addHandler(logger1_file)
         logger2.addHandler(logger2_file)
 
-        # print(f"The output is: {output_func}")
         if isinstance(output_func, tuple):
             if len(output_func) == 1:
                 logger2.info(output_func)
@@ -47,10 +45,12 @@ def decorator_log(func):
                         if a_wild_command in a_cmd:
                             if a_wild_command is "standardplots":
                                 a_mod_output = extract_tail_standardplots_output(an_output)
-                                print(f"{a_cmd}:\n{a_mod_output}")
+                                # print(f"{a_cmd}:\n{a_mod_output}")
+                                print(f"{a_mod_output}")
                                 logger1.info(a_mod_output)
                             else:
-                                print(f"{a_cmd}:\n{an_output}")
+                                # print(f"{a_cmd}:\n{an_output}")
+                                print(f"{an_output}")
                                 logger1.info(an_output)
 
                     logger2.info(header_comment_log(a_cmd))
@@ -150,6 +150,7 @@ def station_1bit_in_vix(vexfile):
         raise FileNotFoundError
 
 
+@decorator_log
 def scp(originpath, destpath):
     """Does a scp from originpath to destpath. If the process returns an error, then it raises ValueError.
     """
@@ -161,6 +162,7 @@ def scp(originpath, destpath):
     return f"scp {originpath} {destpath}", process
 
 
+@decorator_log
 def ssh(computer, commands):
     """Sends a ssh command to the indicated computer. Returns the output or raises ValueError in case
     of errors. The output is expected to be in UTF-8 format.
@@ -175,7 +177,7 @@ def ssh(computer, commands):
 
 
 @decorator_log
-def shell_command(command, parameters=None):
+def shell_command(command, parameters=None, shell=False):
     """Runs the provided command in the shell with some arguments if necessary.
     Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError if fails.
     Parameters must be a single string if provided.
@@ -186,15 +188,29 @@ def shell_command(command, parameters=None):
         full_shell_command = [command] if parameters is None else [command, parameters]
 
     print(f"{' '.join(full_shell_command)}...")
-    process = subprocess.Popen(full_shell_command, shell=False, stdout=subprocess.PIPE,
+
+    if shell:
+        process = subprocess.Popen(' '.join(full_shell_command), shell=shell, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE)
+    else:
+        process = subprocess.Popen(full_shell_command, shell=shell, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+
     if process.returncode != 0 and process.returncode is not None:
         raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
+
+    output = process.communicate()
+    if isinstance(output, tuple):
+        output = [p.decode('utf-8') for p in output]
+        for an_output in output:
+            if an_output != '':
+                return ' '.join(full_shell_command), an_output
+
+        return ' '.join(full_shell_command), output
 
     return ' '.join(full_shell_command), process.communicate()[0].decode('utf-8')
 
 
-@decorator_log
 def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
     """Produces the lis file(s) for this experiment in ccs and copy them to eee.
     It also retrieves the vex file and creates the required symb. links.
@@ -240,7 +256,7 @@ Do you want to overwrite them (it also applies to vex, piletter, expsum files)?"
         print(f"Getting the PI letter and .expsum files from {computer_piletter.split('@')[1]}...")
         # Finally, copy the piletter and expsum files
         for ext in ('piletter', 'expsum'):
-            cmd, output = scp(f"{computer_piletter}:piletters/{eEVNname.lower()}.{ext}", '.')
+            cmd, output = scp(f"{computer_piletter}:piletters/{expname.lower()}.{ext}", '.')
             cmds.append(cmd)
             outputs.append(output)
 
@@ -262,7 +278,6 @@ Do you want to overwrite them (it also applies to vex, piletter, expsum files)?"
                     cmd, output = shell_command("checklis.py", a_lis)
                     cmds.append(cmd)
                     outputs.append(output)
-                    # print(f"\n{cmds[-1]}:\n{outputs[-1]}")
 
                 if yes_or_no_question('Are lis file(s) OK to continue and get the data?\nNo to check them again'):
                     break
@@ -298,7 +313,6 @@ def split_lis_cont_line(fulllisfile):
 
 
 
-@decorator_log
 def get_data(expname, eEVNname=None):
     """Retrieves the data using getdata.pl and expname.lis file.
     """
@@ -312,7 +326,6 @@ def get_data(expname, eEVNname=None):
     return cmds, outputs
 
 
-@decorator_log
 def j2ms2(expname):
     """Runs j2ms2 using all lis files found in the directory with the name expname*lis (lower cases).
     """
@@ -322,6 +335,9 @@ def j2ms2(expname):
             outms = [a for a in f.readline().replace('\n','').split(' ') if (('.ms' in a) and ('.UVF' not in a))][0]
         if os.path.isdir(outms):
             if yes_or_no_question(f"{outms} exists. Delete and run j2ms2 again?"):
+                cmd, output = shell_command("rm", ["-rf", outms])
+                cmds.append(cmd)
+                outputs.append(output)
                 cmd, output = shell_command("j2ms2", ["-v", a_lisfile])
                 cmds.append(cmd)
                 outputs.append(output)
@@ -333,7 +349,6 @@ def j2ms2(expname):
     return cmds, outputs
 
 
-@decorator_log
 def scale1bit(expname, antennas):
     """Scale 1-bit data to correct quentization losses for the given telescopes in all
     MS files associated with the given experiment name.
@@ -353,7 +368,6 @@ def scale1bit(expname, antennas):
     return cmds, outputs
 
 
-@decorator_log
 def standardplots(expname, refant, calsources):
     """Runs the standardplots on the specified experiment using refant as reference antenna and
     calsources as the sources to be picked for the auto- and cross-correlations.
@@ -399,14 +413,13 @@ def extract_tail_standardplots_output(stdplt_output):
     return '\n'.join(last_lines[::-1])
 
 
-@decorator_log
 def archive(flag, experiment, rest_parameters):
     """Runs the archive command with the flag and rest_parameters string for the given experiment object
     (metadata class).
     Flag can be -auth, -stnd, -fits,...
     """
     cmd, output = shell_command("archive.pl",
-                    [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters])
+            [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters], shell=True)
     return cmd, output
 
 

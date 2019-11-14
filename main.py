@@ -4,16 +4,6 @@ It runs all steps although it requires user interaction to
 verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 
-
-Usage: post_processing.py  <expname>
-
-Options:
-    expname : str   The experiment name to be processed (case insensitive).
-
-
-Version: 0.2
-Date: Sep 2019
-Written by Benito Marcote (marcote@jive.eu)
 """
 
 
@@ -32,7 +22,7 @@ from epp import actions
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
-__version__ = 0.2
+__version__ = 0.4
 __prog__ = 'evn_postprocess.py'
 description = 'Post-processing of EVN experiments.'
 usage = "%(prog)s [-h]  experiment_name  support_scientist  refant"
@@ -94,11 +84,14 @@ log_full.addHandler(log_full_file)
 # It creates the experiment object
 exp = metadata.Experiment(args.expname)
 
-# log_cmd.info('#'*82)
-log_cmd.info('Processing experiment {} observed on {}.'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
-print('Processing experiment {} observed on {}.'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y')))
-log_cmd.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
+for a_log in (log_cmd, log_full):
+    a_log.info('Processing experiment {} observed on {} ({}).'.format(exp.expname,
+                                    exp.obsdatetime.strftime('%d %b %Y'), exp.obsdatetime.strftime('%y%m%d')))
+    a_log.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
 
+
+print('Processing experiment {} observed on {} ({}).'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y'),
+                                                    exp.obsdatetime.strftime('%y%m%d')))
 
 
 # Should make a check that all required computers are accessible!
@@ -175,7 +168,8 @@ while True:
         break
 
 
-weight_threshold = actions.ask_user("A couple of questions:\nWhich weight flagging threshold should be used?", valtype=float)
+weight_threshold = actions.ask_user("A couple of questions:\nWhich weight flagging threshold should be used?",
+                                    valtype=float)
 swap_pols = actions.yes_or_no_question("Is polswap required?")
 
 if swap_pols:
@@ -189,9 +183,16 @@ if swap_pols:
 if ('ys' in exp.antennas) or ('YS' in exp.antennas) or ('Ys' in exp.antennas):
     for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
         actions.shell_command("ysfocus.py", msfile)
+else:
+    print('\nYebes is not in the array.\n')
 
-# Flag weights
-# TODO: Check why the output of flag_weights is not written in the terminal
+# I keep it separately as Ho is not commonly in EVN observations
+if ('ho' in exp.antennas) or ('HO' in exp.antennas) or ('Ho' in exp.antennas):
+    print('\nHobart is in the array:\n')
+    for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
+        actions.shell_command("ysfocus.py", msfile)
+
+
 for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
     actions.shell_command("flag_weights.py", [msfile, str(weight_threshold)])
 
@@ -222,32 +223,31 @@ actions.can_continue('If PolConvert is required, do it manually NOW and then con
 # NOTE: This should always run
 if len(glob.glob("*_*.auth")) == 1:
     # the file should have the form username_password.auth.
-    exp.set_credentials( *glob.glob("*_*.auth").split('.')[0].split('_')  )
+    exp.set_credentials( *glob.glob("*_*.auth")[0].split('.')[0].split('_')  )
     if not os.path.isfile(f"{exp.expname.lower()}.pipelet"):
         actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
 
 elif len(glob.glob("*_*.auth")) > 1:
     answer = actions.ask_user("WARNING: multiple auth files found. Please introduce username and password (space separated)")
     exp.set_credentials( *[a.strip() for a in answer.split(' ')] )
-    actions.shell_command("touch", f"{exp.credentials.username}'_'{exp.credentials.password}.auth")
+    actions.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
     actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
 else:
     possible_char = string.digits + string.ascii_letters
     exp.set_credentials(username=exp.expname.lower(), password="".join(random.sample(possible_char, 12)))
-    actions.shell_command("touch", f"{exp.credentials.username}'_'{exp.credentials.password}.auth")
+    actions.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
     actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
 
 
-# NOTE: Should I mention in the log and terminal?
-
 # Compress all figures from standardplots
-actions.shell_command("gzip", "*ps")
+actions.shell_command("gzip", "*ps", shell=True)
 
 actions.archive("-auth", exp, f"-n {exp.credentials.username} -p {exp.credentials.password}")
 actions.archive("-stnd", exp, f"{exp.expname.lower()}.piletter *ps.gz")
 actions.archive("-fits", exp, "*IDI*")
 
 
+print('Everything is archived. Please continue manually in pipe.')
 
 # Work at eee done!!
 
