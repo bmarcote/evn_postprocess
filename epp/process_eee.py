@@ -73,9 +73,10 @@ log_full.addHandler(log_full_file)
 exp = metadata.Experiment(args.expname)
 
 # log_cmd.info('#'*82)
-log_cmd.info('Processing experiment {} observed on {} ({}).'.format(exp.expname,
+for a_log in (log_cmd, log_full):
+    a_log.info('Processing experiment {} observed on {} ({}).'.format(exp.expname,
                                     exp.obsdatetime.strftime('%d %b %Y'), exp.obsdatetime.strftime('%y%m%d')))
-log_cmd.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
+    a_log.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
 
 
 print('Processing experiment {} observed on {} ({}).'.format(exp.expname, exp.obsdatetime.strftime('%d %b %Y'),
@@ -169,6 +170,15 @@ if swap_pols:
 if ('ys' in exp.antennas) or ('YS' in exp.antennas) or ('Ys' in exp.antennas):
     for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
         actions.shell_command("ysfocus.py", msfile)
+else:
+    print('\nYebes is not in the array.\n')
+
+# I keep it separately as Ho is not commonly in EVN observations
+if ('ho' in exp.antennas) or ('HO' in exp.antennas) or ('Ho' in exp.antennas):
+    print('\nHobart is in the array:\n')
+    for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
+        actions.shell_command("ysfocus.py", msfile)
+
 
 # Flag weights
 # TODO: Check why the output of flag_weights is not written in the terminal
@@ -221,7 +231,7 @@ else:
 # NOTE: Should I mention in the log and terminal?
 
 # Compress all figures from standardplots
-actions.shell_command("gzip", "*ps")
+actions.shell_command('gzip', '*ps', shell=True)
 
 actions.archive("-auth", exp, f"-n {exp.credentials.username} -p {exp.credentials.password}")
 actions.archive("-stnd", exp, f"{exp.expname.lower()}.piletter *ps.gz")
