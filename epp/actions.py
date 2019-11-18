@@ -424,12 +424,23 @@ def archive(flag, experiment, rest_parameters):
 
 
 
+################################################################################
+################################################################################
+##  Functions to be executed in pipe
+################################################################################
+################################################################################
+
 def pipe_create_dirs(expname, supsci):
     """Create all necessary directories in the Pipeline computer
     """
     for a_midpath in ('in', 'out', 'in/{}'.format(supsci)):
         if not os.path.isdir('/jop83_0/pipe/{}/{}'.format(a_midpath, expname.lower())):
             os.mkdir('/jop83_0/pipe/{}/{}'.format(a_midpath, expname.lower()))
+
+
+def get_files_from_vlbeer(exp):
+    """Retrieves the antabfs and log files that should be in vlbeer for the given experiment.
+    """
 
 
 
