@@ -10,6 +10,12 @@ from pyrap import tables as pt
 
 
 class Credentials(object):
+    """Authentification for a given experiment. This class specifies two attributes:
+        - username : str
+        - password : str
+    No restrictions on length/format for them. Once set, they cannot be modified
+    (a new object needs to be created).
+    """
     @property
     def username(self):
         return self._username
@@ -19,8 +25,25 @@ class Credentials(object):
         return self._password
 
     def __init__(self, username, password):
+        assert (isinstance(username, str) & isinstance(password, str))
         self._username = username
         self._password = password
+
+
+class CorrelatorPass(object):
+    """Defines one correlator pass for a given experiment.
+    It contains all relevant information that is pass-depended, e.g. associated .lis and
+    MS files, frequency setup, etc.
+    """
+
+    @property
+    def sources(self):
+        """List of sources present in this correlator pass.
+        """
+        return self._sources
+
+    def __init__(self):
+        self._sources = []
 
 
 
@@ -40,6 +63,14 @@ class Experiment(object):
         Otherwise returns None
         """
         return self._eEVN
+
+    @property
+    def piname(self):
+        return self._piname
+
+    @property
+    def email(self):
+        return self._email
 
     @property
     def obsdate(self):
@@ -72,6 +103,34 @@ class Experiment(object):
         """
         return self._sources
 
+
+    @property
+    def passes(self):
+        """List of all correlator passes (one or more) that have been conducted.
+        Each element of the list is a CorrelatorPass object with all the relevant
+        associated information that may vary for each pass.
+        The order of the elements is relevant as the first one is considered the
+        reference pass (e.g. the one to produce the *_1_1.IDI files).
+        """
+        return self._passes
+
+
+    @setter.passes
+    def passes(self, new_passes_list):
+        assert isinstance(new_passes_list, list)
+        self._passes = new_passes_list
+
+
+    def add_pass(self, a_new_pass):
+        """Appends a new correlator pass to the existing list of passes associated
+        to this experiment.
+        Input:
+            a_new_pass : CorrelatorPass
+        """
+        assert isinstance(a_new_pass, CorrelatorPass)
+        self._passes.append(a_new_pass)
+
+
     @property
     def credentials(self):
         """Username and password to access the experiment data from the EVN
@@ -92,13 +151,15 @@ class Experiment(object):
                The name of the experiment (case insensitive).
         """
         self._expname = expname.upper()
+        self._piname = None
+        self._email = None
         self._obsdate = self.get_obsdate_from_ccs()
         # Attributes not known until the MS file is created
         self._startime = None
         self._endtime = None
         self._antennas = []
-        self._sources = []
         self._credentials = Credentials(None, None)
+        self._passes = []
 
 
     def get_obsdate_from_ccs(self):
@@ -132,6 +193,38 @@ class Experiment(object):
 
         else:
             raise ValueError(f"{self.expname} not found in (ccs) MASTER_PROJECTS.LIS or connection not set.")
+
+
+    def get_pi_from_expsum(self):
+        """Obtains the PI name and the email from the .expsum file that is expected to be
+        placed in the current directory. Adds this information to the object.
+        """
+        try:
+            with open(f"{self.expname.lower()}.expsum", 'r') as expsumfile:
+                for a_line in expsumfile.readlines():
+                    if 'Principal Investigator:' in a_line:
+                        # The line is expected to be '  Principal Investigator: SURNAME  (EMAIL)'
+                        piname, email = a_line.split(':')[1].split('(')
+                        self._piname = piname.strip()
+                        self._email = email.replace(')','').strip()
+        except FileNotFoundError as e:
+            raise e(f"ERROR: {self.expname.lower()}.expsum is not found.")
+
+
+    def print_sourcelist_from_expsum(self):
+        """Prints the source list as appears in the .expsum file for the given experiment.
+        """
+        try:
+            with open(f"{self.expname.lower()}.expsum", 'r') as expsumfile:
+                sourcelist = []
+                for a_line in expsumfile.readlines():
+                    if 'src =' in a_line:
+                        sourcelist.append(a_line)
+
+                print('\nSource list:')
+                print('\n'.join(sourcelist))
+        except FileNotFoundError as e:
+            raise e(f"ERROR: {self.expname.lower()}.expsum is not found.")
 
 
     def get_setup_from_ms(self, msfile):

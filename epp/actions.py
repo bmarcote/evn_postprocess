@@ -134,6 +134,31 @@ def can_continue(text):
             print(f"Invalid input ({text}). Cannot be converted to {valtype}.\nPlease try again: ")
 
 
+def parse_steps(step_list, all_steps):
+    """The post-processing program can run all steps of the post-process or just a subset of them.
+    Given an input comma-separated list of steps to be run, it returns the list of all steps to be conducted.
+
+    Inputs:
+        - step_list : str
+            String with a comma-separated list of steps to be executed. If there is only one step,
+            Then all steps from this one (included) to the end will be executed.
+        - all_steps : list
+            List with all available steps. Therefore, the steps specified in step_list must be a subset
+            of this list.
+    """
+    selected_steps = [s.strip() for s in step_list.split(',')]
+    # Safety check: all provided steps must be included in all_steps.
+    for a_step in selected_steps:
+        assert a_step in all_steps
+
+    if len(selected_steps) == 1:
+        return all_steps[all_steps.index(selected_steps[0]):]
+    elif len(selected_steps) == 0:
+        raise ValueError('No steps to run have been specified.')
+    else:
+        return selected_steps
+
+
 def station_1bit_in_vix(vexfile):
     """Checks if there is any station in the vex file that recorded at 1 bit.
     Note that this/these station(s) may or may not have recorded at 1 bit in this experiment,
