@@ -99,11 +99,12 @@ def ask_user(text, valtype=str, accepted_values=None):
             return valtype(answer)
         except ValueError:
             # raise ValueError(f"Invalid input ({text}). Cannot be converted to {valtype}.")
-            print(f"Invalid input ({text}). Cannot be converted to {valtype}.\nPlease try again: ")
+            print(f"Invalid input {text}. Cannot be converted to {valtype}.\nPlease try again: ")
 
 
 def yes_or_no_question(text):
-    """Asks to the user for a yes or no question. Accepted values are y/yes/n/no. Always q to quit.
+    """Asks to the user for a yes or no question.
+    Accepted values are y/yes/n/no. Always q to quit.
     Returns a bool.
     """
     value = ask_user(f"\n{text} (y/yes/n/no)", accepted_values=['y','yes','n','no'])
@@ -131,20 +132,25 @@ def can_continue(text):
 
         except ValueError:
             # raise ValueError(f"Invalid input ({text}). Cannot be converted to {valtype}.")
-            print(f"Invalid input ({text}). Cannot be converted to {valtype}.\nPlease try again: ")
+            print(f"Invalid input {text}. Cannot be converted to {valtype}.\nPlease try again: ")
 
 
-def parse_steps(step_list, all_steps):
+def parse_steps(step_list, all_steps, wild_steps=None):
     """The post-processing program can run all steps of the post-process or just a subset of them.
-    Given an input comma-separated list of steps to be run, it returns the list of all steps to be conducted.
+    Given an input comma-separated list of steps to be run, it returns the list of all steps to
+    be conducted.
 
     Inputs:
         - step_list : str
             String with a comma-separated list of steps to be executed. If there is only one step,
             Then all steps from this one (included) to the end will be executed.
-        - all_steps : list
-            List with all available steps. Therefore, the steps specified in step_list must be a subset
-            of this list.
+        - all_steps : dict
+            Dict with all available steps. Therefore, the steps specified in step_list must be
+            a subset of this list. The keys are the steps and the values must be the functions
+            to execute.
+        - wild_steps : list [OPTIONAL; default=None]
+            List of steps that will be still included in the returned list even if they are not
+            listed in step_list.
     """
     selected_steps = [s.strip() for s in step_list.split(',')]
     # Safety check: all provided steps must be included in all_steps.
@@ -154,9 +160,17 @@ def parse_steps(step_list, all_steps):
     if len(selected_steps) == 1:
         return all_steps[all_steps.index(selected_steps[0]):]
     elif len(selected_steps) == 0:
-        raise ValueError('No steps to run have been specified.')
+        raise ValueError('No steps have been specified.')
     else:
-        return selected_steps
+        # I do the reverse way because then I can easily add the mandatory steps that
+        # pile up information to the current experiment
+        steps_to_execute = {}
+        for a_step in all_steps:
+            if (a_step in selected_steps) or (a_step in wild_steps):
+                steps_to_execute.append(all_steps[a_step])
+
+        return steps_to_execute
+
 
 
 def station_1bit_in_vix(vexfile):
@@ -215,11 +229,11 @@ def shell_command(command, parameters=None, shell=False):
     print(f"{' '.join(full_shell_command)}...")
 
     if shell:
-        process = subprocess.Popen(' '.join(full_shell_command), shell=shell, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE)
+        process = subprocess.Popen(' '.join(full_shell_command), shell=shell,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
         process = subprocess.Popen(full_shell_command, shell=shell, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE)
+                                   stderr=subprocess.PIPE)
 
     if process.returncode != 0 and process.returncode is not None:
         raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
@@ -293,24 +307,96 @@ Do you want to overwrite them (it also applies to vex, piletter, expsum files)?"
         # In the case of e-EVN runs, a renaming of the lis files may be required:
         if eEVNname != expname:
             for a_lis in glob.glob("*.lis"):
+                # Modify the references for eEVNname to expname inside the lis files
+                update_lis_file(a_lis)
+                cmds.append(f"{a_lis} exp name updated from {eEVNname} to {expname}")
+                outputs.append('')
                 os.rename(a_lis, a_lis.replace(eEVNname.lower(), expname.lower()))
                 cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), expname.lower())}")
                 outputs.append('')
 
-        if can_continue('Check the lis file(s) and modify them if needed. Are they ready to be check now?'):
+        if can_continue('Check the lis file(s) and modify them if needed.'+\
+                        'Are they ready to be check now?'):
             while True:
                 for a_lis in glob.glob("*.lis"):
                     cmd, output = shell_command("checklis.py", a_lis)
                     cmds.append(cmd)
                     outputs.append(output)
 
-                if yes_or_no_question('Are lis file(s) OK to continue and get the data?\nNo to check them again'):
+                if yes_or_no_question('Are lis file(s) OK to continue and get the data?\n'+\
+                                      'No to check them again'):
                     break
 
-
-
-
     return cmds, outputs
+
+
+def update_lis_file(lisfilename, oldexp, newexp):
+    """Updates the lis file (the header lines) referring to an experiment named oldexp
+    to newexp. Note that it does not replace all references to oldexp as some of them
+    would point to correlator output files that would keep the name.
+    """
+    with open(lisfilename, 'r') as lisfile:
+        lisfilelines = lisfile.readlines()
+        for i,aline in enumerate(lisfilelines):
+            if aline[0] not in ('+', '-'):
+                lisfilelines[i] = aline.replace(oldexp, newexp)
+                lisfilelines[i] = lisfilelines[i].replace(oldexp.lower(), newexp.lower())
+
+    with open(lisfilename, 'w') as lisfile:
+        lisfile.write('\n'.join(lisfilelines))
+
+
+def get_pi_from_expsum(exp):
+    """Obtains the PI name and the email from the .expsum file that is expected to be
+    placed in the current directory. Adds this information to the object.
+    """
+    try:
+        with open(f"{exp.expname.lower()}.expsum", 'r') as expsumfile:
+            for a_line in expsumfile.readlines():
+                if 'Principal Investigator:' in a_line:
+                    # The line is expected to be '  Principal Investigator: SURNAME  (EMAIL)'
+                    piname, email = a_line.split(':')[1].split('(')
+                    exp.piname = piname.strip()
+                    exp.email = email.replace(')','').strip()
+    except FileNotFoundError as e:
+        raise e(f"ERROR: {self.expname.lower()}.expsum not found.")
+
+
+def get_passes_from_listfiles(exp):
+    """Gets all .lis files in the direcotory, which mean different correlator passes.
+    Append this information to the current experiment (exp object), together with the MS file
+    associated for each of them.
+    """
+    for a_lisfile in glob.glob(f"{exp.expname.lower()}*.lis"):
+        with open(a_lisfile, 'r') as lisfile:
+            for a_lisline in listfile.readlines():
+                if '.ms' in a_lisline:
+                    # there is only one .ms input there
+                    msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
+                    exp.add_pass(CorrelatorPass(a_lisfile, msname))
+
+
+def print_sourcelist_from_expsum(exp):
+    """Prints the source list as appears in the .expsum file for the given experiment.
+    """
+    try:
+        with open(f"{exp.expname.lower()}.expsum", 'r') as expsumfile:
+            sourcelist = []
+            for a_line in expsumfile.readlines():
+                if 'src =' in a_line:
+                    sourcelist.append(a_line)
+
+            print('\nSource list:')
+            print('\n'.join(sourcelist))
+    except FileNotFoundError as e:
+        raise e(f"ERROR: {self.expname.lower()}.expsum not found.")
+
+
+def append_freq_setup_from_ms_to_exp(exp):
+    """Runs the get_setup_from_ms function from the given experiment to import the metadata
+    from the frequency setup, read from the MS files, to the object.
+    """
+    exp.get_setup_from_ms()
 
 
 def split_lis_cont_line(fulllisfile):

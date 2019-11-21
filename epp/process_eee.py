@@ -21,15 +21,18 @@ import metadata
 import actions
 
 
+
+# NOTE: For most of these functions the parameter args is not used at all.
+# However, this allows consistency across the different functions and then be called
+# uniformly.
+
 def ccs(exp):
-    """Runs the initial post-processing steps in ccs: showlog, retrieving the lis, vix files from ccs,
-    Running checklis, and retrieving the PI letter and .expsum files.
+    """Runs the initial post-processing steps in ccs: showlog, retrieving the lis,
+    vix files from ccs, running checklis, and retrieving the PI letter and .expsum files.
     """
-    return actions.get_lis_vex(exp.expname, config['computers']['ccs'], config['computers']['piletter'],
-                    eEVNname=exp.eEVNname)
-
-
-actions.can_continue('Check the lis file(s) and modify them if needed. Can I continue?')
+    output = actions.get_lis_vex(exp.expname, 'jops@ccs', 'jops@jop83', eEVNname=exp.eEVNname)
+    actions.can_continue('Check the lis file(s) and modify them if needed. Can I continue?')
+    return output
 
 
 def getdata(exp):
@@ -70,8 +73,8 @@ def onebit(exp, args):
 
 def standardplots(exp, args):
     if args.calsources is None:
-        args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for standardplots
-    as a comma-separated list (the MS contains: {', '.join(exp.sources)})""")
+        args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for
+        standardplots as a comma-separated list (the MS contains: {', '.join(exp.sources)})""")
 
     # Open produced plots, ask user if wants to continue / repeate plots with different inputs / q:
     while True:
@@ -110,13 +113,6 @@ def standardplots(exp, args):
     return True
 
 
-weight_threshold = actions.ask_user("A couple of questions:\nWhich weight flagging threshold should be used?",
-                                    valtype=float)
-swap_pols = actions.yes_or_no_question("Is polswap required?")
-
-if swap_pols:
-    pass
-
 def polswap(exp):
     swap_pol_ants = actions.ask_user("List the antennas requiring swapping polarizations (comma-separated list)",
                                      accepted_values=[*exp.antennas])
@@ -148,21 +144,40 @@ def ysfocus(exp):
 
 
 def flag_weights(exp, threshold):
+    # TODO: use map() to parallelize this function. Is it true parallelization?
     for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
         actions.shell_command("flag_weights.py", [msfile, str(threshold)])
 
     return True
 
 
+def MSoperations(exp):
+    """Runs polswap if requierd, ysfocus, and flag_weights.
+    """
+    weight_threshold = actions.ask_user("A couple of questions:\nWhich weight flagging threshold should be used?", valtype=float)
+    swap_pols = actions.yes_or_no_question("Is polswap required?")
+    if swap_pols:
+        polswap(exp)
+
+    ysfocus(exp)
+    flag_weights(exp, weight_threshold)
+
+
+
+
 actions.can_continue('Is everything ready to run tConvert? You can update the PI letter in the mean time')
 
 
 def tConvert(exp):
+    """Runs tConvert in all MS files available in the directory
+    """
+    # TODO: Modify to follow the order of the passes in exp.
     for i, msfile in enumerate(glob.glob(f"{exp.expname.lower()}*.ms")):
         actions.shell_command("tConvert", [msfile, f"{exp.expname.lower()}_{i+1}_1.IDI"])
 
 
-actions.can_continue('If PolConvert is required, do it manually NOW before continuing')
+def polConvert(exp):
+    actions.can_continue('If PolConvert is required, do it manually NOW before continuing')
 
 # pol_convert_ants = actions.ask_user("Are there antennas requiring Pol Convert? (provide comma-separated list)",
 #                                     accepted_values=['no', *exp.antennas])
@@ -185,7 +200,8 @@ def letters(exp, args):
             actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
 
     elif len(glob.glob("*_*.auth")) > 1:
-        answer = actions.ask_user("WARNING: multiple auth files found. Please introduce username and password (space separated)")
+        answer = actions.ask_user("WARNING: multiple auth files found." +\
+                 "Please introduce username and password (space separated)")
         exp.set_credentials( *[a.strip() for a in answer.split(' ')] )
         actions.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
         actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
@@ -226,6 +242,19 @@ def main(exp, args, steps):
     # print("Two log files will be created:")
     # print("  - processing.log: contains the executed commands and very minimal output.")
     # print("  - full_log_output.log: contains the full output received from all commands.\n\n")
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

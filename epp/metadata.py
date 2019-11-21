@@ -30,6 +30,7 @@ class Credentials(object):
         self._password = password
 
 
+
 class CorrelatorPass(object):
     """Defines one correlator pass for a given experiment.
     It contains all relevant information that is pass-depended, e.g. associated .lis and
@@ -37,13 +38,33 @@ class CorrelatorPass(object):
     """
 
     @property
+    def lisfile(self):
+        """Returns the name of the .lis file used for this correlator pass.
+        """
+        return self._lisfile
+
+    @property
+    def msfile(self):
+        """Returns the name of the MS file associated for this correlator pass.
+        """
+        return self._msfile
+
+    @property
     def sources(self):
         """List of sources present in this correlator pass.
         """
         return self._sources
 
-    def __init__(self):
+    @sources.setter
+    def sources(self, list_of_sources):
+        self._sources = list_of_sources
+
+
+    def __init__(self, lisfile, msfile):
+        self._lisfile = lisfile
+        self._msfile = msfile
         self._sources = []
+        self._freqsetup = None # Must be an object with subbands, freqs, channels, pols.
 
 
 
@@ -68,9 +89,17 @@ class Experiment(object):
     def piname(self):
         return self._piname
 
+    @piname.setter
+    def piname(self, new_piname):
+        self._piname = new_piname
+
     @property
     def email(self):
         return self._email
+
+    @email.setter
+    def email(self, new_email):
+        self._email = new_email
 
     @property
     def obsdate(self):
@@ -90,12 +119,24 @@ class Experiment(object):
         """
         return self._startime, self._endtime
 
+    @timerange.setter
+    def timerange(self, starttime, endtime):
+        """Start and end time of the observation in datetime format.
+        """
+        assert isinstance(starttime, datetime)
+        assert isinstance(endtime, datetime)
+        self._startime = starttime
+        self._endtime = endtime
+
     @property
     def antennas(self):
         """List of antennas available in the experiment.
         """
         return self._antennas
 
+    @antennas.setter
+    def antennas(self, new_antennas):
+        self._antennas = tuple(new_antennas)
 
     @property
     def sources(self):
@@ -103,6 +144,11 @@ class Experiment(object):
         """
         return self._sources
 
+    @sources.setter
+    def sources(self, new_sources):
+        """List of sources observed in the experiment.
+        """
+        self._sources = tuple(new_sources)
 
     @property
     def passes(self):
@@ -115,7 +161,7 @@ class Experiment(object):
         return self._passes
 
 
-    @setter.passes
+    @passes.setter
     def passes(self, new_passes_list):
         assert isinstance(new_passes_list, list)
         self._passes = new_passes_list
@@ -141,6 +187,26 @@ class Experiment(object):
 
     def set_credentials(self, username, password):
         self._credentials = Credentials(username, password)
+
+
+    # @property
+    # def operations(self):
+    #     """Dictionary with parameters that have been used during the post-process.
+    #     They key will may refer to the action/program that has been used and the value
+    #     the parameter that has been used to trigger it.
+    #     For example,  'flag_weights.py': 0.9  or 'polswap.py': 'Ef,Tr' will make reference
+    #     to the weight threshold established when running flag_weights.py, and the two
+    #     stations that exhibited swap pols.
+    #     """
+    #     return self._operations
+    #
+    # @property
+    # def operations(self, new_dict):
+    #     """A new dictionary with pair(s) key/value to be added to the current operations
+    #     is expected.
+    #     """
+    #     for a_new_key in new_dict:
+    #         self._operations[a_new_key] = new_dict[a_new_key]
 
 
     def __init__(self, expname, **kwargs):
@@ -195,52 +261,22 @@ class Experiment(object):
             raise ValueError(f"{self.expname} not found in (ccs) MASTER_PROJECTS.LIS or connection not set.")
 
 
-    def get_pi_from_expsum(self):
-        """Obtains the PI name and the email from the .expsum file that is expected to be
-        placed in the current directory. Adds this information to the object.
-        """
-        try:
-            with open(f"{self.expname.lower()}.expsum", 'r') as expsumfile:
-                for a_line in expsumfile.readlines():
-                    if 'Principal Investigator:' in a_line:
-                        # The line is expected to be '  Principal Investigator: SURNAME  (EMAIL)'
-                        piname, email = a_line.split(':')[1].split('(')
-                        self._piname = piname.strip()
-                        self._email = email.replace(')','').strip()
-        except FileNotFoundError as e:
-            raise e(f"ERROR: {self.expname.lower()}.expsum is not found.")
-
-
-    def print_sourcelist_from_expsum(self):
-        """Prints the source list as appears in the .expsum file for the given experiment.
-        """
-        try:
-            with open(f"{self.expname.lower()}.expsum", 'r') as expsumfile:
-                sourcelist = []
-                for a_line in expsumfile.readlines():
-                    if 'src =' in a_line:
-                        sourcelist.append(a_line)
-
-                print('\nSource list:')
-                print('\n'.join(sourcelist))
-        except FileNotFoundError as e:
-            raise e(f"ERROR: {self.expname.lower()}.expsum is not found.")
-
-
-    def get_setup_from_ms(self, msfile):
+    def get_setup_from_ms(self):
         """Obtains the time range, antennas, sources, and frequencies of the observation
-        from the specified MS file and incorporate them into the current object.
+        from all existing passes with MS files and incorporate them into the current object.
         """
-        with pt.table(msfile, readonly=True, ack=False) as ms:
-            with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
-                self._antennas = [ant.upper() for ant in ms_ant.getcol('NAME')]
+        for a_pass in self.passes:
+            with pt.table(a_pass.msfile, readonly=True, ack=False) as ms:
+                with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
+                    self.antennas = [ant.upper() for ant in ms_ant.getcol('NAME')]
 
-            with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
-                self._sources = ms_field.getcol('NAME')
+                with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
+                    self.sources = ms_field.getcol('NAME')
 
-            with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
-                self._starttime, self._endtime = dt.datetime(1858, 11, 17, 0, 0, 2) + \
-                                     ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
+                with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
+                    # TODO: check this. It is wrong
+                    self.starttime = dt.datetime(1858, 11, 17, 0, 0, 2) + \
+                                         ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
 
         # NOTE: Get also the frequency (subband) information.
 
