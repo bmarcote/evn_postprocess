@@ -16,6 +16,7 @@ import argparse
 import configparser
 import logging
 import subprocess
+from inspect import signature
 from datetime import datetime
 from epp import metadata
 from epp import actions
@@ -42,21 +43,42 @@ The available steps are:
     - standardplots : runs standardplots.
     - MSoperations : runs the full MS operations like ysfocus, polswap, flag_weights, etc.
     - tConvert : runs tConvert on all available MS files, and asks if polConvert is required.
-    - archive : sets the credentials for the experiment, create the pipe letter and archive all the data.
-    - prepipeline : retrieves all ANTAB, uvflg files, and prepares a draft input file for the pipeline.
+    - archive : sets the credentials for the experiment, create the pipe letter and archive
+                all the data.
+    - prepipeline : retrieves all ANTAB, uvflg files, and prepares a draft input file for the
+                    pipeline.
     - pipeline : Runs the EVN Pipeline for all correlated passes.
-    - postpipeline : runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
-    - letters : Asks to update the PI letter, and sends it and pipeletter. Also runs parsePIletter.py.
+    - postpipeline : runs all steps to be done after the pipeline: creates tasav, comment
+                     files, feedback.pl
+    - letters : Asks to update the PI letter, and sends it and pipeletter. Also runs
+                parsePIletter.py.
 
 """
 
 help_calsources = 'Calibrator sources to use in standardplots (comma-separated, no spaces). If not provided, the user will be asked at due time'
 help_steps = """Run only the specified steps (comma-separated list of steps). Run with -h to see the available steps. If only one provided, then it runs the program from that step to the end. If multiple provided, only
 runs the specified steps."""
-all_steps = ['showlog', 'j2ms2', 'standardplots', 'MSoperations', 'tConvert', 'archive',
-                    'prepipeline', 'pipeline', 'postpipeline', 'letters']
 
 
+# From Python 3.6 dicts keep order of keys.
+# all_steps = ['showlog', 'j2ms2', 'standardplots', 'MSoperations', 'tConvert', 'archive',
+#                     'prepipeline', 'pipeline', 'postpipeline', 'letters']
+
+all_steps = {'showlog': [eee.ccs],
+             'pi_expsum': [actions.get_pi_from_expsum, actions.get_passes_from_lisfiles],
+             'j2ms2': [eee.getdata, eee.j2ms2, eee.onebit],
+             'standardplots': [eee.standardplots],
+             'MSmetadata': [actions.append_freq_setup_from_ms_to_exp],
+             'MSoperations': [eee.MSoperations],
+             'tConvert': [eee.tConvert, eee.polConvert],
+             'archive': [eee.letters, eee.archive],
+             'prepipeline': [None],
+             'pipeline': [None],
+             'postpipeline': [None],
+             'letters': [None]}
+
+# Steps hidden for the user but that they need to be triggered under all circunstances.
+wild_steps = ['pi_expsum', 'MSmetadata']
 
 
 if __name__ == '__main__':
@@ -66,9 +88,11 @@ if __name__ == '__main__':
     parser.add_argument('supsci', type=str, help='Surname of EVN Support Scientist.')
     parser.add_argument('refant', type=str, help='Reference antenna.')
     parser.add_argument('-s', '--calsources', type=str, default=None, help=help_calsources)
-    parser.add_argument('--onebit', type=str, default=None, help='Antennas recording at 1 bit (comma-separated)')
+    parser.add_argument('--onebit', type=str, default=None,
+                         help='Antennas recording at 1 bit (comma-separated)')
     parser.add_argument('--steps', type=str, default=None, help=help_steps)
-    parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
+    parser.add_argument('-v', '--version', action='version',
+                        version='%(prog)s {}'.format(__version__))
 
     args = parser.parse_args()
 
@@ -109,12 +133,29 @@ if __name__ == '__main__':
     # TODO: Should make a check that all required computers are accessible!
     # actions.check_systems_up()
 
+    for a_step in args.steps:
+        if len(signature(a_step).parameters) == 1:
+            a_step(exp)
+        elif len(signature(a_step).parameters) == 2:
+            a_step(exp, args)
+        else:
+            # Should never happend
+            raise ValueError(f"Function {a_step} has unexpected number of arguments")
+
+
+
+
+
+
+
+
+    # OLD CODE
 
     actions.get_lis_vex(exp.expname, config['computers']['ccs'], config['computers']['piletter'],
                         eEVNname=exp.eEVNname)
 
         # print("\n\nYou SHOULD check now the lis files and modify them if needed.")
-    actions.can_continue('Check the lis file(s) and modify them if needed. Can I continue?')
+    # actions.can_continue('Check the lis file(s) and modify them if needed. Can I continue?')
 
     actions.get_data(exp.expname, eEVNname=exp.eEVNname)
 
