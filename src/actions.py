@@ -12,6 +12,7 @@ import logging
 
 header_comment_log = lambda command : "\n{0}\n{0}\n>>>>> {1}\n".format('#'*82, command)
 commands_output_to_show = ["checklis.py", "flag_weights.py", "standardplots", "archive"]
+# TODO: Add pipeline output and cat the last rows only.
 
 def decorator_log(func):
     """Decorates each function to log the input and output to the common log file, and individually.
@@ -173,21 +174,6 @@ def parse_steps(step_list, all_steps, wild_steps=None):
 
 
 
-def station_1bit_in_vix(vexfile):
-    """Checks if there is any station in the vex file that recorded at 1 bit.
-    Note that this/these station(s) may or may not have recorded at 1 bit in this experiment,
-    but only at other moment of the run.
-    """
-    output = subprocess.call(["grep", "1bit", vexfile], shell=False, stdout=subprocess.PIPE)
-    if output == 0:
-        # There is at least one station recording at 1 bit.
-        return True
-    elif output == 1:
-        return False
-    else:
-        # File not found
-        raise FileNotFoundError
-
 
 @decorator_log
 def scp(originpath, destpath):
@@ -219,7 +205,7 @@ def ssh(computer, commands):
 def shell_command(command, parameters=None, shell=False):
     """Runs the provided command in the shell with some arguments if necessary.
     Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError if fails.
-    Parameters must be a single string if provided.
+    Parameters must be either a single string or a list, if provided.
     """
     if isinstance(parameters, list):
         full_shell_command = [command] + parameters
@@ -362,34 +348,45 @@ def get_pi_from_expsum(exp):
         raise e(f"ERROR: {self.expname.lower()}.expsum not found.")
 
 
-def get_passes_from_listfiles(exp):
+def get_passes_from_lisfiles(exp):
     """Gets all .lis files in the direcotory, which mean different correlator passes.
     Append this information to the current experiment (exp object), together with the MS file
     associated for each of them.
     """
-    for a_lisfile in glob.glob(f"{exp.expname.lower()}*.lis"):
+    lisfiles = glob.glob(f"{exp.expname.lower()}*.lis")
+    if len(lisfiles) > 1:
+        print("")
+    for i,a_lisfile in enumerate(lisfiles):
+    for i,a_lisfile in enumerate(lisfiles):
         with open(a_lisfile, 'r') as lisfile:
-            for a_lisline in listfile.readlines():
+            for a_lisline in lisfile.readlines():
                 if '.ms' in a_lisline:
                     # there is only one .ms input there
                     msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
                     exp.add_pass(CorrelatorPass(a_lisfile, msname))
+    if len(exp.passes) > 1:
+        print(f"More than one correlation pass to be process. Which passes should be pipelined at due time?")
+        print('\n'.join([f"{i}: {a_pass.msfile.replace('.ms', '')}" for i,a_pass in enumerate(exp.passes)]))
+        passes2pipeline = ask_user(f"Write the number of the passes to pipeline")
+        for i in set(range(len(exp.passes))).difference(set(passes2pipeline)):
+            exp.passes[i].pipeline = False
 
 
 def print_sourcelist_from_expsum(exp):
     """Prints the source list as appears in the .expsum file for the given experiment.
     """
-    try:
-        with open(f"{exp.expname.lower()}.expsum", 'r') as expsumfile:
-            sourcelist = []
-            for a_line in expsumfile.readlines():
-                if 'src =' in a_line:
-                    sourcelist.append(a_line)
+    if os.path.isdir(f"{path}{exp.expname.lower()}.expsum"):
+        filepath = f"{path}{exp.expname.lower()}.expsum"
+    elif os.path.isdir(f"/export/jive/jops/piletters/{path}{exp.expname.lower()}.expsum"):
+        filepath = f"/export/jive/jops/piletters/{path}{exp.expname.lower()}.expsum"
+    else:
+        raise FileNotFoundError(f"{self.expname.lower()}.expsum not found.")
 
-            print('\nSource list:')
-            print('\n'.join(sourcelist))
-    except FileNotFoundError as e:
-        raise e(f"ERROR: {self.expname.lower()}.expsum not found.")
+    with open(filepath, 'r') as expsumfile:
+        print('\nSource list:')
+        for a_line in expsumfile.readlines():
+            if 'src =' in a_line:
+                print(a_line)
 
 
 def append_freq_setup_from_ms_to_exp(exp):
@@ -423,63 +420,42 @@ def split_lis_cont_line(fulllisfile):
         os.remove(fulllisfile)
 
 
-
-def get_data(expname, eEVNname=None):
-    """Retrieves the data using getdata.pl and expname.lis file.
+def station_1bit_in_vix(vexfile):
+    """Checks if there is any station in the vex file that recorded at 1 bit.
+    Note that this/these station(s) may or may not have recorded at 1 bit in this experiment,
+    but only at other moment of the run.
     """
-    eEVNname = expname if eEVNname is None else eEVNname
-    cmds, outputs = [], []
-    for a_lisfile in glob.glob(f"{expname.lower()}*lis"):
-        cmd, output = shell_command("getdata.pl", ["-proj", eEVNname, "-lis", a_lisfile])
-        cmds.append(cmd)
-        outputs.append(output)
-
-    return cmds, outputs
-
-
-def j2ms2(expname):
-    """Runs j2ms2 using all lis files found in the directory with the name expname*lis (lower cases).
-    """
-    cmds, outputs = [], []
-    for a_lisfile in glob.glob(f"{expname.lower()}*lis"):
-        with open(a_lisfile) as f:
-            outms = [a for a in f.readline().replace('\n','').split(' ') if (('.ms' in a) and ('.UVF' not in a))][0]
-        if os.path.isdir(outms):
-            if yes_or_no_question(f"{outms} exists. Delete and run j2ms2 again?"):
-                cmd, output = shell_command("rm", ["-rf", outms])
-                cmds.append(cmd)
-                outputs.append(output)
-                cmd, output = shell_command("j2ms2", ["-v", a_lisfile])
-                cmds.append(cmd)
-                outputs.append(output)
-        else:
-            cmd, output = shell_command("j2ms2", ["-v", a_lisfile])
-            cmds.append(cmd)
-            outputs.append(output)
-
-    return cmds, outputs
+    output = subprocess.call(["grep", "1bit", vexfile], shell=False, stdout=subprocess.PIPE)
+    if output == 0:
+        # There is at least one station recording at 1 bit.
+        return True
+    elif output == 1:
+        return False
+    else:
+        # File not found
+        raise FileNotFoundError(f"{vexfile} file not found.")
 
 
-def scale1bit(expname, antennas):
+def scale1bit(exp, antennas):
     """Scale 1-bit data to correct quentization losses for the given telescopes in all
     MS files associated with the given experiment name.
 
     Inputs:
-        - expaname : str
-            The experiment name (preffix used for the associated MS files, typically expname lower cases)
+        - exp : Experiment
+            The experiment containing all MS files to be scaled from 1 bit.
         - antennas : str
             Comma-separated list of antennas that recorded at 1 bit.
     """
-    cmds, outputs = [], []
-    for a_msfile in glob.glob(f"{expname.lower()}*.ms*"):
-        cmd, output = shell_command("scale1bit.py", [a_msfile, *antennas.split(',')])
+    cmds = []
+    for a_pass in exp.passes:
+        cmd, output = shell_command("scale1bit.py", [a_pass.msfile, *antennas.split(',')])
         cmds.append(cmd)
-        outputs.append(output)
+        # outputs.append(output)
 
-    return cmds, outputs
+    return cmds
 
 
-def standardplots(expname, refant, calsources):
+def standardplots(exp, refant, calsources):
     """Runs the standardplots on the specified experiment using refant as reference antenna and
     calsources as the sources to be picked for the auto- and cross-correlations.
 
@@ -487,8 +463,8 @@ def standardplots(expname, refant, calsources):
     only one and in case of multi-phase centers this behavior may be replaced.
 
     Inputs:
-        - expname : str
-            The name of the experiment as preffix of the MS files to read (typically lower cases).
+        - expname : Experiment
+            The experiment containing the MS file to read (it will take only the first pass from the experiment).
         - refant : str
             The antenna name to use as reference in the plots (showing only baselines to this station).
         - calsources : str
@@ -496,7 +472,7 @@ def standardplots(expname, refant, calsources):
             Usually only the strong sources like fringe-finders.
     """
     cmd, output = shell_command("standardplots",
-                                ["-weight", glob.glob(f"{expname.lower()}*.ms*")[0], refant, calsources])
+                                ["-weight", exp.passes[0].msfile, refant, calsources])
     # Process the final lines of the output. It should interpretate it and return time range, sources,
     # antennas, and freqs.
     # return get_setup_from_standardplots_output(output)
@@ -540,21 +516,5 @@ def archive(flag, experiment, rest_parameters):
 ##  Functions to be executed in pipe
 ################################################################################
 ################################################################################
-
-def pipe_create_dirs(expname, supsci):
-    """Create all necessary directories in the Pipeline computer
-    """
-    for a_midpath in ('in', 'out', 'in/{}'.format(supsci)):
-        if not os.path.isdir('/jop83_0/pipe/{}/{}'.format(a_midpath, expname.lower())):
-            os.mkdir('/jop83_0/pipe/{}/{}'.format(a_midpath, expname.lower()))
-
-
-def get_files_from_vlbeer(exp):
-    """Retrieves the antabfs and log files that should be in vlbeer for the given experiment.
-    """
-
-
-
-
 
 

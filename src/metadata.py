@@ -31,6 +31,53 @@ class Credentials(object):
 
 
 
+class Subbands(object):
+    """Defines the frequency setup of a given observation with the following data:
+        - n_subbands : float
+            Number of subbands.
+        - channels : array-like
+            Number of channels per subband (N-array, with N number of subbands).
+        - freqs : array-like
+            Reference frequency for each channel and subband (NxM array, with N
+            number of subbands, and M number of channels per subband).
+        - bandwidths : array-like
+            Total bandwidth for each subband (N array, with N number of subbands).
+
+    """
+    @property
+    def n_subbands(self):
+        return self._n_subbands
+
+    @property
+    def channels(self):
+        return self._channels
+
+    @property
+    def freqs(self):
+        return self._freqs
+
+    @property
+    def bandwidths(self):
+        return self._bandwidths
+
+    def __init__(self, chans, freqs, bandwidths):
+        """Inputs:
+            - chans : array-like
+                Number of channels per subband (N-array, with N number of subbands).
+            - freqs : array-like
+                Reference frequency for each channel and subband (NxM array, M number
+                of channels per subband.
+            - bandwidths : array-like
+                Total bandwidth for each subband (N array, with N number of subbands).
+        """
+        self._n_subbands = len(chans)
+        assert self._n_subbands == len(bandwidths)
+        assert freqs.shape = (self._n_subbands, chans[0])
+        self._channels = np.copy(chans)
+        self._freqs = np.copy(freqs)
+        self._bandwidths = np.copy(bandwidths)
+
+
 class CorrelatorPass(object):
     """Defines one correlator pass for a given experiment.
     It contains all relevant information that is pass-depended, e.g. associated .lis and
@@ -50,6 +97,16 @@ class CorrelatorPass(object):
         return self._msfile
 
     @property
+    def pipeline(self):
+        """If this pass should be pipelined.
+        """
+        return self._pipeline
+
+    @pipeline.setter
+    def pipeline(self, pipeline):
+        self._pipeline = pipeline
+
+    @property
     def sources(self):
         """List of sources present in this correlator pass.
         """
@@ -57,13 +114,30 @@ class CorrelatorPass(object):
 
     @sources.setter
     def sources(self, list_of_sources):
-        self._sources = list_of_sources
+        self._sources = tuple(list_of_sources)
 
+    @property
+    def freqsetup(self):
+        return self._freqsetup
 
-    def __init__(self, lisfile, msfile):
+    def freqsetup(self, channels, frequencies, bandwidths):
+        """Sets the frequency setup for the given correlator pass.
+        Inputs:
+            - channels : array-like
+                Number of channels per subband (N-array, with N number of subbands).
+            - frequencies : array-like
+                Reference frequency for each channel and subband (NxM array, M number
+                of channels per subband.
+            - bandwidths : array-like
+                Total bandwidth for each subband (N array, with N number of subbands).
+        """
+        self._freqsetup = Subbands(channels, frequencies, bandwidths)
+
+    def __init__(self, lisfile, msfile, pipeline=True):
         self._lisfile = lisfile
         self._msfile = msfile
         self._sources = []
+        self._pipeline = pipeline
         self._freqsetup = None # Must be an object with subbands, freqs, channels, pols.
 
 
@@ -120,7 +194,7 @@ class Experiment(object):
         return self._startime, self._endtime
 
     @timerange.setter
-    def timerange(self, starttime, endtime):
+    def timerange(self, (starttime, endtime)):
         """Start and end time of the observation in datetime format.
         """
         assert isinstance(starttime, datetime)
@@ -138,17 +212,17 @@ class Experiment(object):
     def antennas(self, new_antennas):
         self._antennas = tuple(new_antennas)
 
-    @property
-    def sources(self):
-        """List of sources observed in the experiment.
-        """
-        return self._sources
-
-    @sources.setter
-    def sources(self, new_sources):
-        """List of sources observed in the experiment.
-        """
-        self._sources = tuple(new_sources)
+    # @property
+    # def sources(self):
+    #     """List of sources observed in the experiment.
+    #     """
+    #     return self._sources
+    #
+    # @sources.setter
+    # def sources(self, new_sources):
+    #     """List of sources observed in the experiment.
+    #     """
+    #     self._sources = tuple(new_sources)
 
     @property
     def passes(self):
@@ -160,11 +234,10 @@ class Experiment(object):
         """
         return self._passes
 
-
     @passes.setter
     def passes(self, new_passes_list):
         assert isinstance(new_passes_list, list)
-        self._passes = new_passes_list
+        self._passes = list(new_passes_list)
 
 
     def add_pass(self, a_new_pass):
@@ -185,7 +258,7 @@ class Experiment(object):
         return self._credentials
 
 
-    def set_credentials(self, username, password):
+    def credentials(self, username, password):
         self._credentials = Credentials(username, password)
 
 
@@ -254,8 +327,13 @@ class Experiment(object):
             return obsdate[2:]
 
         elif output.count('\n') == 1:
-            self._eEVN = None
-            return output[:-1].split()[1].strip()[2:]
+            expline = output[:-1].split()
+            if len(expline) > 2:
+                # This is an e-EVN, and this experiment was the first one (so e-EVN is called the same)
+                self._eEVN = expline[0].strip()
+            else:
+                self._eEVN = None
+            return expline[1].strip()[2:]
 
         else:
             raise ValueError(f"{self.expname} not found in (ccs) MASTER_PROJECTS.LIS or connection not set.")
@@ -266,17 +344,22 @@ class Experiment(object):
         from all existing passes with MS files and incorporate them into the current object.
         """
         for a_pass in self.passes:
-            with pt.table(a_pass.msfile, readonly=True, ack=False) as ms:
-                with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
-                    self.antennas = [ant.upper() for ant in ms_ant.getcol('NAME')]
+            try:
+                with pt.table(a_pass.msfile, readonly=True, ack=False) as ms:
+                    with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
+                        self.antennas = [ant.upper() for ant in ms_ant.getcol('NAME')]
 
-                with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
-                    self.sources = ms_field.getcol('NAME')
+                    with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
+                        a_pass.sources = ms_field.getcol('NAME')
 
-                with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
-                    # TODO: check this. It is wrong
-                    self.starttime = dt.datetime(1858, 11, 17, 0, 0, 2) + \
-                                         ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
+                    with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
+                        self.timerange = dt.datetime(1858, 11, 17, 0, 0, 2) + \
+                                             ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
+                    with pt.table(ms.getkeyword('SPECTRAL_WINDOW'), readonly=True, ack=False) as ms_spw:
+                        a_pass.freqsetup(ms_spw.getcol('NUM_CHAN'), ms_spw.getcol('CHAN_FREQ'),
+                                             ms_spw.getcol('TOTAL_BANDWIDTH'))
+            except RuntimeError:
+                print(f"WARNING: {a_pass.msfile} not found.")
 
         # NOTE: Get also the frequency (subband) information.
 
