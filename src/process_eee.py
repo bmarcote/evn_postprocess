@@ -21,10 +21,25 @@ import metadata
 import actions
 
 
+def folders(exp, args):
+    """Moves to the folder associated to the given experiment. If it does not exist, it creates it.
+    """
+    # If required, move to the required directory (create it if needed).
+    expdir = '/data0/{}/{}'.format(args.supsci, exp.expname.upper())
+    if expdir is not os.getcwd():
+        if not os.path.isdir(expdir):
+            os.makedirs(expdir)
+            print(f"Directory {expdir} has been created.")
 
-# NOTE: For most of these functions the parameter args is not used at all.
-# However, this allows consistency across the different functions and then be called
-# uniformly.
+        os.chdir(expdir)
+        print(f"Moved to {expdir}.")
+    else:
+        print(f"Running at {expdir}.")
+
+    # print("Two log files will be created:")
+    # print("  - processing.log: contains the executed commands and very minimal output.")
+    # print("  - full_log_output.log: contains the full output received from all commands.\n\n")
+
 
 def ccs(exp):
     """Runs the initial post-processing steps in ccs: showlog, retrieving the lis,
@@ -39,19 +54,25 @@ def getdata(exp):
     """Gets the data into eee from all existing .lis files from the given experiment.
     inputs: exp : metadata.Experiment
     """
-    return actions.get_data(exp.expname, eEVNname=exp.eEVNname)
+    for a_pass in exp.passes:
+        actions.shell_command("getdata.pl", ["proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
+                                            "-lis", a_pass.lisfile])
 
 
 def j2ms2(exp):
     """Runs j2ms2 on all existing .lis files from the given experiment.
     inputs: exp : metadata.Experiment
     """
-    return actions.j2ms2(exp.expname)
-
-
-# NOTE: this step must be conducted always.
-# Retrieve the information from the MS and appends in in exp (antennas, sources, freqs.)
-exp.get_setup_from_ms(glob.glob(f"{exp.expname.lower()}*.ms")[0])
+    for a_pass in exp.passes:
+        with open(a_pass.lisfile) as f:
+            outms = [a for a in f.readline().replace('\n','').split(' ') \
+                                 if (('.ms' in a) and ('.UVF' not in a))][0]
+        if os.path.isdir(outms):
+            if yes_or_no_question(f"{outms} exists. Delete and run j2ms2 again?"):
+                actions.shell_command("rm", ["-rf", outms])
+                actions.shell_command("j2ms2", ["-v", a_lisfile])
+        else:
+            actions.shell_command("j2ms2", ["-v", a_lisfile])
 
 
 def onebit(exp, args):
@@ -60,14 +81,15 @@ def onebit(exp, args):
     # If 1-bit antennas are present somewhere, it asks user to confirm that no correction is required
     # or to provide the list of stations.
     if args.onebit is not None:
-        return actions.scale1bit(exp.expname, args.onebit)
+        return actions.scale1bit(exp, args.onebit)
     else:
         # Checks if there is some station that recorded at 1bit in the vex file (it may or may not
         # affect to this experiment.
         if actions.station_1bit_in_vix(f"{exp.expname}.vix"):
-            scale1bit_stations = actions.ask_user("Are you sure scale1bit is not required? Specify the affected stations or 'none' otherwise")
+            scale1bit_stations = actions.ask_user("Are you sure scale1bit is not required?\n" +\
+                                            "Specify the affected stations or 'none' otherwise")
             if scale1bit_stations is not 'none':
-                return actions.scale1bit(exp.expname, scale1bit_stations)
+                return actions.scale1bit(exp, scale1bit_stations)
     return False
 
 
@@ -85,7 +107,7 @@ def standardplots(exp, args):
                 run_standardplots = actions.yes_or_no_question('Plots exist. Run standardplots again?')
 
             if run_standardplots:
-                actions.standardplots(exp.expname, args.refant, args.calsources)
+                actions.standardplots(exp, args.refant, args.calsources)
                 # Get all plots done and show them in the best order:
                 standardplots = []
                 for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
@@ -117,8 +139,8 @@ def polswap(exp):
     swap_pol_ants = actions.ask_user("List the antennas requiring swapping polarizations (comma-separated list)",
                                      accepted_values=[*exp.antennas])
     for a_swap_ant in swap_pol_ants:
-        for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
-            actions.shell_command("polswap.py", [msfile, a_swap_ant])
+        for a_pass in exp.passes:
+            actions.shell_command("polswap.py", [a_pass.msfile, a_swap_ant])
 
     return True
 
@@ -137,16 +159,16 @@ def ysfocus(exp):
     #     for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
     #         actions.shell_command("ysfocus.py", msfile)
     #
-    for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
-        actions.shell_command("ysfocus.py", msfile)
+    for a_pass in exp.passes:
+        actions.shell_command("ysfocus.py", a_pass.msfile)
 
     return True
 
 
 def flag_weights(exp, threshold):
     # TODO: use map() to parallelize this function. Is it true parallelization?
-    for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
-        actions.shell_command("flag_weights.py", [msfile, str(threshold)])
+    for a_pass in exp.passes:
+        actions.shell_command("flag_weights.py", [a_pass.msfile, str(threshold)])
 
     return True
 
@@ -154,31 +176,26 @@ def flag_weights(exp, threshold):
 def MSoperations(exp):
     """Runs polswap if requierd, ysfocus, and flag_weights.
     """
-    weight_threshold = actions.ask_user("A couple of questions:\nWhich weight flagging threshold should be used?", valtype=float)
+    weight_threshold = actions.ask_user("A couple of questions:\n" +\
+                       "Which weight flagging threshold should be used?", valtype=float)
     swap_pols = actions.yes_or_no_question("Is polswap required?")
     if swap_pols:
         polswap(exp)
 
     ysfocus(exp)
     flag_weights(exp, weight_threshold)
-
-
-
-
-actions.can_continue('Is everything ready to run tConvert? You can update the PI letter in the mean time')
+    actions.can_continue('Is everything ready to run tConvert? You can update the PI letter in the mean time')
 
 
 def tConvert(exp):
     """Runs tConvert in all MS files available in the directory
     """
-    # TODO: Modify to follow the order of the passes in exp.
-    for i, msfile in enumerate(glob.glob(f"{exp.expname.lower()}*.ms")):
-        actions.shell_command("tConvert", [msfile, f"{exp.expname.lower()}_{i+1}_1.IDI"])
+    for i, a_pass in enumerate(exp.passes):
+        actions.shell_command("tConvert", [a_pass.msfile, f"{exp.expname.lower()}_{i+1}_1.IDI"])
 
 
 def polConvert(exp):
     actions.can_continue('If PolConvert is required, do it manually NOW before continuing')
-
 # pol_convert_ants = actions.ask_user("Are there antennas requiring Pol Convert? (provide comma-separated list)",
 #                                     accepted_values=['no', *exp.antennas])
 
@@ -221,42 +238,27 @@ def archive(exp):
     actions.archive("-fits", exp, "*IDI*")
 
 
-print('Everything is archived. Please continue manually in pipe.\n')
-
-# Work at eee done!!
-
-
-def main(exp, args, steps):
-    """Runs the post-processing steps from a given EVN experiment in @eee.
+def letters(exp):
+    """Remembers you to update the PI letter and send it , and the pipeletter, to the PIs.
+    Finally, it runs parsePIletter.
     """
-    # If required, move to the required directory (create it if needed).
-    expdir = '/data0/{}/{}'.format(args.supsci, args.expname.upper())
-    if expdir is not os.getcwd():
-        if not os.path.isdir(expdir):
-            os.makedirs(expdir)
-            print(f"Directory {expdir} has been created.")
-
-        os.chdir(expdir)
-        print(f"Moved to {expdir}.")
-
-    # print("Two log files will be created:")
-    # print("  - processing.log: contains the executed commands and very minimal output.")
-    # print("  - full_log_output.log: contains the full output received from all commands.\n\n")
+    actions.can_continue("You should know update the PI letter.")
+    actions.shell_command("parsePIletter.py", ["-s", exp.obsdatetime.strftime("%b%y"),
+                                              f"{exp.expname.lower()}.piletter"])
+    actions.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")
+    print(f"Send the PI letter to {exp.piname.capitalize()}: {exp.email} (CC jops@jive.eu).")
+    print(f"Send the pipe letter to {exp.piname.capitalize()}: {exp.email}.")
+    if exp.expname[0] == 'N':
+        # This is a NME.
+        print('Now it is time to write the NME Report.')
 
 
+# def archive_piletter(exp):
+#     """(Re-)archive the PI letter.
+#     """
+#     actions.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+# print('Everything is archived. Please continue manually in pipe.\n')
+# Work at eee done!!
 
 
