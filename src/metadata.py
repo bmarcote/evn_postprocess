@@ -4,6 +4,7 @@ required during the post-processing.
 The metadata is obtained from different sources and/or at
 different stages of the post-processing.
 """
+import numpy as np
 import subprocess
 import datetime as dt
 from pyrap import tables as pt
@@ -25,7 +26,6 @@ class Credentials(object):
         return self._password
 
     def __init__(self, username, password):
-        assert (isinstance(username, str) & isinstance(password, str))
         self._username = username
         self._password = password
 
@@ -72,7 +72,7 @@ class Subbands(object):
         """
         self._n_subbands = len(chans)
         assert self._n_subbands == len(bandwidths)
-        assert freqs.shape = (self._n_subbands, chans[0])
+        assert freqs.shape == (self._n_subbands, chans[0])
         self._channels = np.copy(chans)
         self._freqs = np.copy(freqs)
         self._bandwidths = np.copy(bandwidths)
@@ -194,11 +194,15 @@ class Experiment(object):
         return self._startime, self._endtime
 
     @timerange.setter
-    def timerange(self, (starttime, endtime)):
+    def timerange(self, times):
         """Start and end time of the observation in datetime format.
+        Input:
+            - times : tuple of datetime
+                Tupple with (startime, endtime), each of them in datetime format.
         """
-        assert isinstance(starttime, datetime)
-        assert isinstance(endtime, datetime)
+        starttime, endtime = times
+        assert isinstance(starttime, dt.datetime)
+        assert isinstance(endtime, dt.datetime)
         self._startime = starttime
         self._endtime = endtime
 

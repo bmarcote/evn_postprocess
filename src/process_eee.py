@@ -17,24 +17,24 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-import metadata
-import actions
+from src import metadata
+from src import actions
 
 
 def folders(exp, args):
     """Moves to the folder associated to the given experiment. If it does not exist, it creates it.
     """
     # If required, move to the required directory (create it if needed).
-    expdir = '/data0/{}/{}'.format(args.supsci, exp.expname.upper())
+    expdir = '/data0/{}/test/{}'.format(args.supsci, exp.expname.upper())
     if expdir is not os.getcwd():
         if not os.path.isdir(expdir):
             os.makedirs(expdir)
             print(f"Directory {expdir} has been created.")
 
         os.chdir(expdir)
-        print(f"Moved to {expdir}.")
+        print(f"Moved to {expdir}.\n")
     else:
-        print(f"Running at {expdir}.")
+        print(f"Running at {expdir}.\n")
 
     # print("Two log files will be created:")
     # print("  - processing.log: contains the executed commands and very minimal output.")
@@ -45,9 +45,7 @@ def ccs(exp):
     """Runs the initial post-processing steps in ccs: showlog, retrieving the lis,
     vix files from ccs, running checklis, and retrieving the PI letter and .expsum files.
     """
-    output = actions.get_lis_vex(exp.expname, 'jops@ccs', 'jops@jop83', eEVNname=exp.eEVNname)
-    actions.can_continue('Check the lis file(s) and modify them if needed. Can I continue?')
-    return output
+    return actions.get_lis_vex(exp.expname, 'jops@ccs', 'jops@jop83', eEVNname=exp.eEVNname)
 
 
 def getdata(exp):
@@ -55,7 +53,7 @@ def getdata(exp):
     inputs: exp : metadata.Experiment
     """
     for a_pass in exp.passes:
-        actions.shell_command("getdata.pl", ["proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
+        actions.shell_command("getdata.pl", ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
                                             "-lis", a_pass.lisfile])
 
 
@@ -68,11 +66,11 @@ def j2ms2(exp):
             outms = [a for a in f.readline().replace('\n','').split(' ') \
                                  if (('.ms' in a) and ('.UVF' not in a))][0]
         if os.path.isdir(outms):
-            if yes_or_no_question(f"{outms} exists. Delete and run j2ms2 again?"):
+            if actions.yes_or_no_question(f"{outms} exists. Delete and run j2ms2 again?"):
                 actions.shell_command("rm", ["-rf", outms])
-                actions.shell_command("j2ms2", ["-v", a_lisfile])
+                actions.shell_command("j2ms2", ["-v", a_pass.lisfile])
         else:
-            actions.shell_command("j2ms2", ["-v", a_lisfile])
+            actions.shell_command("j2ms2", ["-v", a_pass.lisfile])
 
 
 def onebit(exp, args):
@@ -95,8 +93,8 @@ def onebit(exp, args):
 
 def standardplots(exp, args):
     if args.calsources is None:
-        args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for
-        standardplots as a comma-separated list (the MS contains: {', '.join(exp.sources)})""")
+        args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for standardplots as a comma-separated list.
+The MS contains: {', '.join(exp.passes[0].sources)})""")
 
     # Open produced plots, ask user if wants to continue / repeate plots with different inputs / q:
     while True:
@@ -116,14 +114,14 @@ def standardplots(exp, args):
                 for a_plot in standardplots:
                     actions.shell_command("gv", a_plot)
 
-                answer = actions.yes_or_no_question('Are the plots OK? No to pick other sources/stations')
+                answer = actions.yes_or_no_question('\nAre the plots OK? "no" to pick other sources/stations')
                 if answer:
                     return True
 
                 args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for standardplots
-        as a comma-separated list (the MS contains: {', '.join(exp.sources)})""")
+as a comma-separated list (the MS contains: {', '.join(exp.passes[0].sources)})""")
                 args.refant = actions.ask_user(f"""Please, introduce the antenna to be used for standardplots
-        (the MS contains: {', '.join(exp.antennas)})""")
+(the MS contains: {', '.join([e.capitalize() for e in exp.antennas])})""")
             else:
                 return False
 
@@ -238,11 +236,11 @@ def archive(exp):
     actions.archive("-fits", exp, "*IDI*")
 
 
-def letters(exp):
+def send_letters(exp):
     """Remembers you to update the PI letter and send it , and the pipeletter, to the PIs.
     Finally, it runs parsePIletter.
     """
-    actions.can_continue("You should know update the PI letter.")
+    actions.can_continue("You should now update the PI letter.")
     actions.shell_command("parsePIletter.py", ["-s", exp.obsdatetime.strftime("%b%y"),
                                               f"{exp.expname.lower()}.piletter"])
     actions.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")

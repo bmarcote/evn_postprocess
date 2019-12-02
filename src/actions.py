@@ -6,7 +6,7 @@ import glob
 import functools
 import subprocess
 import logging
-
+from src import metadata
 
 # All command functions return the terminal command that was executed and the output.
 
@@ -24,8 +24,8 @@ def decorator_log(func):
         output_func = func(*args, **kwargs)
         logger1 = logging.getLogger('Executed commands')
         logger2 = logging.getLogger('Commands full log')
-        logger1.setLevel(logging.INFO)
-        logger2.setLevel(logging.INFO)
+        # logger1.setLevel(logging.INFO)
+        # logger2.setLevel(logging.INFO)
         logger1_file = logging.FileHandler('./processing.log')
         logger2_file = logging.FileHandler('./full_log_output.log')
         logger1.addHandler(logger1_file)
@@ -156,19 +156,33 @@ def parse_steps(step_list, all_steps, wild_steps=None):
     selected_steps = [s.strip() for s in step_list.split(',')]
     # Safety check: all provided steps must be included in all_steps.
     for a_step in selected_steps:
-        assert a_step in all_steps
+        try:
+            assert a_step in all_steps
+        except AssertionError as e:
+            print(f"{a_step} is not a valid step. Not in {all_steps}")
+            raise e
 
     if len(selected_steps) == 1:
-        return all_steps[all_steps.index(selected_steps[0]):]
+        steps_to_execute = {}
+        is_after = False
+        for a_step in all_steps:
+            if a_step == selected_steps[0]:
+                is_after = True
+
+            if is_after or (a_step in wild_steps):
+                steps_to_execute[a_step] = all_steps[a_step]
+
+        return steps_to_execute
+
     elif len(selected_steps) == 0:
-        raise ValueError('No steps have been specified.')
+        raise ValueError('No steps to run have been specified.')
     else:
         # I do the reverse way because then I can easily add the mandatory steps that
         # pile up information to the current experiment
         steps_to_execute = {}
         for a_step in all_steps:
             if (a_step in selected_steps) or (a_step in wild_steps):
-                steps_to_execute.append(all_steps[a_step])
+                steps_to_execute[a_step] = all_steps[a_step]
 
         return steps_to_execute
 
@@ -301,17 +315,17 @@ Do you want to overwrite them (it also applies to vex, piletter, expsum files)?"
                 cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), expname.lower())}")
                 outputs.append('')
 
-        if can_continue('Check the lis file(s) and modify them if needed.'+\
-                        'Are they ready to be check now?'):
-            while True:
-                for a_lis in glob.glob("*.lis"):
-                    cmd, output = shell_command("checklis.py", a_lis)
-                    cmds.append(cmd)
-                    outputs.append(output)
+        # if can_continue('Check the lis file(s) and modify them if needed.\n'+\
+        #                 'Are they ready to be checked now?'):
+        while True:
+            for a_lis in glob.glob("*.lis"):
+                cmd, output = shell_command("checklis.py", a_lis)
+                cmds.append(cmd)
+                outputs.append(output)
 
-                if yes_or_no_question('Are lis file(s) OK to continue and get the data?\n'+\
-                                      'No to check them again'):
-                    break
+            if yes_or_no_question('Are the .lis file(s) OK to continue and get the data?\n'+\
+                                  '"no" to check them again'):
+                break
 
     return cmds, outputs
 
@@ -349,21 +363,19 @@ def get_pi_from_expsum(exp):
 
 
 def get_passes_from_lisfiles(exp):
-    """Gets all .lis files in the direcotory, which mean different correlator passes.
+    """Gets all .lis files in the directory, which mean different correlator passes.
     Append this information to the current experiment (exp object), together with the MS file
     associated for each of them.
     """
     lisfiles = glob.glob(f"{exp.expname.lower()}*.lis")
-    if len(lisfiles) > 1:
-        print("")
-    for i,a_lisfile in enumerate(lisfiles):
+
     for i,a_lisfile in enumerate(lisfiles):
         with open(a_lisfile, 'r') as lisfile:
             for a_lisline in lisfile.readlines():
                 if '.ms' in a_lisline:
                     # there is only one .ms input there
                     msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
-                    exp.add_pass(CorrelatorPass(a_lisfile, msname))
+                    exp.add_pass(metadata.CorrelatorPass(a_lisfile, msname))
     if len(exp.passes) > 1:
         print(f"More than one correlation pass to be process. Which passes should be pipelined at due time?")
         print('\n'.join([f"{i}: {a_pass.msfile.replace('.ms', '')}" for i,a_pass in enumerate(exp.passes)]))
@@ -493,10 +505,9 @@ def extract_tail_standardplots_output(stdplt_output):
             last_lines.append(a_line)
         else:
             # We are already done
-            return last_lines[::-1]
+            return '\n'.join(last_lines[::-1])
 
     # Just in case something went unexpected...
-    print('\n'.join(last_lines[::-1]))
     return '\n'.join(last_lines[::-1])
 
 
