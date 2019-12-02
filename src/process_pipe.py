@@ -15,8 +15,8 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-import metadata
-import actions
+from src import metadata
+from src import actions
 
 
 # TODO: Make a decorator function to run all functions remotely in pipe (but launched in eee)
@@ -56,7 +56,7 @@ def get_files_from_vlbeer(exp):
     """Retrieves the antabfs and log files that should be in vlbeer for the given experiment.
     """
     for ext in ('log', 'antabfs'):
-        actions.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/{exp.obsdatetime.strftime(%b%y).lower()}/{exp.expname.lower()}*.{ext}", ".")
+        actions.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}*.{ext}", ".")
 
     # TODO: check if there are ANTAB files in the previous/following month...
     print(actions.shell_command("ls", ["-l", "*antab*", "*log"], shell=True)[1])

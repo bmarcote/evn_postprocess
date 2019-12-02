@@ -66,16 +66,16 @@ all_steps = {'eee_folders': [eee.folders],
              'showlog': [eee.ccs],
              'pi_expsum': [actions.get_pi_from_expsum, actions.get_passes_from_lisfiles],
              'j2ms2': [eee.getdata, eee.j2ms2, eee.onebit],
-             'standardplots': [eee.standardplots],
              'MSmetadata': [actions.append_freq_setup_from_ms_to_exp],
+             'standardplots': [eee.standardplots],
              'MSoperations': [eee.MSoperations],
              'tConvert': [eee.tConvert, eee.polConvert],
              'archive': [eee.letters, eee.archive],
-             'pipe_folders', [pipe.folders],
+             'pipe_folders': [pipe.folders],
              'prepipeline': [None], # pipe.pre_pipeline
              'pipeline': [None], # pipe.pipeline
              'postpipeline': [None], # pipe.post_pipeline
-             'letters': [None] # pipe.ampcal, eee.letters
+             'letters': [None] # pipe.ampcal, eee.send_letters
              }
 
 # Steps hidden for the user but that they need to be triggered under all circunstances.
@@ -102,20 +102,20 @@ if __name__ == '__main__':
     if args.steps is None:
         args.steps = all_steps
     else:
-        args.steps = actions.parse_steps(args.steps)
+        args.steps = actions.parse_steps(args.steps, all_steps, wild_steps=wild_steps)
 
 
     # # TODO: Logger. To remove? Better implemantation?
-    # log_cmd = logging.getLogger('Executed commands')
-    # log_cmd.setLevel(logging.INFO)
+    log_cmd = logging.getLogger('Executed commands')
+    log_cmd.setLevel(logging.INFO)
     # log_cmd_file = logging.FileHandler('./processing.log')
     # # log_cmd_stdout = logging.StreamHandler(sys.stdout)
     # log_cmd_file.setFormatter(logging.Formatter('\n\n%(message)s\n'))
     # log_cmd.addHandler(log_cmd_file)
     # # log_cmd.addHandler(log_cmd_stdout)
 
-    # log_full = logging.getLogger('Commands full log')
-    # log_full.setLevel(logging.INFO)
+    log_full = logging.getLogger('Commands full log')
+    log_full.setLevel(logging.INFO)
     # log_full_file = logging.FileHandler('./full_log_output.log')
     # log_full.addHandler(log_full_file)
 
@@ -123,25 +123,21 @@ if __name__ == '__main__':
     # It creates the experiment object
     exp = metadata.Experiment(args.expname)
 
-    print(f"Processing experiment {exp.expname}.")
-    print(f"Observed on {exp.obsdatetime.strftime('%d %b %Y')} ({exp.obsdatetime.strftime('%y%m%d')}).")
-    print("Current Date: {datetime.today().strftime('%d %b %Y')}.")
-    # for a_log in (log_cmd, log_full):
-    #     a_log.info('Processing experiment {} observed on {} ({}).'.format(exp.expname,
-    #                                     exp.obsdatetime.strftime('%d %b %Y'), exp.obsdatetime.strftime('%y%m%d')))
-    #     a_log.info('Current Date: {}\n'.format(datetime.today().strftime('%d %b %Y')))
+    print(f"Processing experiment {exp.expname}.\n")
+    print(f"Observation Date: {exp.obsdatetime.strftime('%d %b %Y')} ({exp.obsdatetime.strftime('%y%m%d')}).")
+    print(f"Current Date: {datetime.today().strftime('%d %b %Y')}.\n")
 
     # TODO: Should make a check that all required computers are accessible!
     # actions.check_systems_up()
-
-    for a_step in args.steps:
-        if len(signature(a_step).parameters) == 1:
-            a_step(exp)
-        elif len(signature(a_step).parameters) == 2:
-            a_step(exp, args)
-        else:
-            # Should never happend
-            raise ValueError(f"Function {a_step} has unexpected number of arguments")
+    for a_step_name in args.steps:
+        for a_step in all_steps[a_step_name]:
+            if len(signature(a_step).parameters) == 1:
+                a_step(exp)
+            elif len(signature(a_step).parameters) == 2:
+                a_step(exp, args)
+            else:
+                # Should never happend
+                raise ValueError(f"Function {a_step} has unexpected number of arguments")
 
     print('The post-processing pipeline finished happily.\n\nBye.')
     # Work done!!
