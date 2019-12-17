@@ -25,7 +25,7 @@ def folders(exp, args):
     """Moves to the folder associated to the given experiment. If it does not exist, it creates it.
     """
     # If required, move to the required directory (create it if needed).
-    expdir = '/data0/{}/test/{}'.format(args.supsci, exp.expname.upper())
+    expdir = '/data0/{}/{}'.format(args.supsci, exp.expname.upper())
     if expdir is not os.getcwd():
         if not os.path.isdir(expdir):
             os.makedirs(expdir)

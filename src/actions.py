@@ -308,7 +308,7 @@ Do you want to overwrite them (it also applies to vex, piletter, expsum files)?"
         if eEVNname != expname:
             for a_lis in glob.glob("*.lis"):
                 # Modify the references for eEVNname to expname inside the lis files
-                update_lis_file(a_lis)
+                update_lis_file(a_lis, eEVNname, expname)
                 cmds.append(f"{a_lis} exp name updated from {eEVNname} to {expname}")
                 outputs.append('')
                 os.rename(a_lis, a_lis.replace(eEVNname.lower(), expname.lower()))
