@@ -262,7 +262,7 @@ class Experiment(object):
         return self._credentials
 
 
-    def credentials(self, username, password):
+    def set_credentials(self, username, password):
         self._credentials = Credentials(username, password)
 
 
@@ -314,7 +314,8 @@ class Experiment(object):
                                stderr=subprocess.PIPE)
         output = process.communicate()[0].decode('utf-8')
         if process.returncode != 0:
-            raise ValueError(f"Error code {process.returncode} when reading MASTER_PROJECTS.LIS from ccs.")
+            raise ValueError(f"Error code {process.returncode} when reading MASTER_PROJECTS.LIS from ccs.\n" +\
+			     f"{self.expname} is probably not in the EVN database.")
 
         if output.count('\n') == 2:
             # It is an e-EVN experiment!

@@ -71,7 +71,7 @@ all_steps = {'eee_folders': [eee.folders],
              'MSoperations': [eee.MSoperations],
              'tConvert': [eee.tConvert, eee.polConvert],
              'archive': [eee.letters, eee.archive],
-             'pipe_folders': [pipe.folders],
+             'pipe_folders': [None], # [pipe.folders],
              'prepipeline': [None], # pipe.pre_pipeline
              'pipeline': [None], # pipe.pipeline
              'postpipeline': [None], # pipe.post_pipeline
@@ -131,15 +131,17 @@ if __name__ == '__main__':
     # actions.check_systems_up()
     for a_step_name in args.steps:
         for a_step in all_steps[a_step_name]:
-            if len(signature(a_step).parameters) == 1:
-                a_step(exp)
-            elif len(signature(a_step).parameters) == 2:
-                a_step(exp, args)
-            else:
-                # Should never happend
-                raise ValueError(f"Function {a_step} has unexpected number of arguments")
+            if a_step is not None:
+                if len(signature(a_step).parameters) == 1:
+                    a_step(exp)
+                elif len(signature(a_step).parameters) == 2:
+                    a_step(exp, args)
+                else:
+                    # Should never happend
+                    raise ValueError(f"Function {a_step} has unexpected number of arguments")
 
     print('The post-processing pipeline finished happily.\n\nBye.')
+    print('Please continue manually in pipe.')
     # Work done!!
 
 
