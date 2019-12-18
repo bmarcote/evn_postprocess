@@ -21,7 +21,9 @@ def decorator_log(func):
     def wrapper(*args, **kwargs):
         # output_func can have one or two elements... If only one then it is only the output.
         # Otherwise it has the command that has been run and the output.
+        print('First time')
         output_func = func(*args, **kwargs)
+        print('Second time')
         logger1 = logging.getLogger('Executed commands')
         logger2 = logging.getLogger('Commands full log')
         # logger1.setLevel(logging.INFO)

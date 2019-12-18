@@ -16,51 +16,49 @@ import logging
 import subprocess
 from inspect import signature
 from datetime import datetime
-from src import metadata
-from src import actions
-from src import process_eee as eee
-from src import process_pipe as pipe
+# from src import metadata
+# from src import actions
+# from src import process_eee as eee
+# from src import process_pipe as pipe
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
-__version__ = 0.4
+__version__ = 0.5
 __prog__ = 'evn_postprocess.py'
 usage = "%(prog)s [-h]  <experiment_name>  <support_scientist>  <refant>"
 description = """Post-processing of EVN experiments.
-The program runs the full post-process for a correlated EVN experiment, from retrieving the
-correlated products to run the EVN pipeline following the steps described in the EVN Post-Processing Guide
-(see the JIVE Wiki: http://www.jive.nl/jivewiki/doku.php?id=evn:supportscientists).
+The program runs the full post-process for a correlated EVN experiment, from retrieving the correlated products to run the EVN pipeline following the steps described in the EVN Post-Processing Guide (see the JIVE Wiki: http://www.jive.nl/jivewiki/doku.php?id=evn:supportscientists).
 
 The user can also specify to run only some of the steps or to start the process from a given step
 (for those cases when the process has partially run previously).
 
 The available steps are:
+
     - showlog : produces a .lis file in @ccs and copies them to @eee.
     - j2ms2 : gets the data for all available .lis files and runs j2ms2 to produce MS files.
               Runs scale 1 bit if necessary.
     - standardplots : runs standardplots.
     - MSoperations : runs the full MS operations like ysfocus, polswap, flag_weights, etc.
     - tConvert : runs tConvert on all available MS files, and asks if polConvert is required.
-    - archive : sets the credentials for the experiment, create the pipe letter and archive
-                all the data.
-    - prepipeline : retrieves all ANTAB, uvflg files, and prepares a draft input file for the
-                    pipeline.
+    - archive : sets the credentials for the experiment, create the pipe letter and archive all the data.
+    - prepipeline : retrieves all ANTAB, uvflg files, and prepares a draft input file for the pipeline.
     - pipeline : Runs the EVN Pipeline for all correlated passes.
-    - postpipeline : runs all steps to be done after the pipeline: creates tasav, comment
-                     files, feedback.pl
-    - letters : Asks to update the PI letter, and sends it and pipeletter. Also runs
-                parsePIletter.py.
+    - postpipeline : runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
+    - letters : Asks to update the PI letter, and sends it and pipeletter. Also runs parsePIletter.py.
 
 """
 
 help_calsources = 'Calibrator sources to use in standardplots (comma-separated, no spaces). If not provided, the user will be asked at due time'
-help_steps = """Run only the specified steps (comma-separated list of steps). Run with -h to see the available steps. If only one provided, then it runs the program from that step to the end. If multiple provided, only
-runs the specified steps."""
+help_steps = """Run only the specified steps (comma-separated list of steps).
+Run with -h to see the available steps. If only one provided, then it runs the program from that step to the end.
+If multiple provided, only runs the specified steps.
+"""
 
 
 # From Python 3.6 dicts keep order of keys.
 # all_steps = ['showlog', 'j2ms2', 'standardplots', 'MSoperations', 'tConvert', 'archive',
 #                     'prepipeline', 'pipeline', 'postpipeline', 'letters']
+
 
 all_steps = {'eee_folders': [eee.folders],
              'showlog': [eee.ccs],
@@ -84,7 +82,8 @@ wild_steps = ['eee_folders', 'pi_expsum', 'MSmetadata', 'pipe_folders']
 
 if __name__ == '__main__':
     # Input parameters
-    parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage)
+    parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
+                                    formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('expname', type=str, help='Name of the EVN experiment.')
     parser.add_argument('supsci', type=str, help='Surname of EVN Support Scientist.')
     parser.add_argument('refant', type=str, help='Reference antenna.')

@@ -315,7 +315,7 @@ class Experiment(object):
         output = process.communicate()[0].decode('utf-8')
         if process.returncode != 0:
             raise ValueError(f"Error code {process.returncode} when reading MASTER_PROJECTS.LIS from ccs.\n" +\
-			     f"{self.expname} is probably not in the EVN database.")
+                             f"{self.expname} is probably not in the EVN database.")
 
         if output.count('\n') == 2:
             # It is an e-EVN experiment!
