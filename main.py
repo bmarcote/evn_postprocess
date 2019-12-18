@@ -16,10 +16,10 @@ import logging
 import subprocess
 from inspect import signature
 from datetime import datetime
-# from src import metadata
-# from src import actions
-# from src import process_eee as eee
-# from src import process_pipe as pipe
+from src import metadata
+from src import actions
+from src import process_eee as eee
+from src import process_pipe as pipe
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
