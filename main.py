@@ -106,7 +106,7 @@ if __name__ == '__main__':
 
     # # TODO: Logger. To remove? Better implemantation?
     log_cmd = logging.getLogger('Executed commands')
-    log_cmd.setLevel(logging.INFO)
+    log_cmd.setLevel(logging.ERROR)
     # log_cmd_file = logging.FileHandler('./processing.log')
     # # log_cmd_stdout = logging.StreamHandler(sys.stdout)
     # log_cmd_file.setFormatter(logging.Formatter('\n\n%(message)s\n'))
@@ -114,7 +114,7 @@ if __name__ == '__main__':
     # # log_cmd.addHandler(log_cmd_stdout)
 
     log_full = logging.getLogger('Commands full log')
-    log_full.setLevel(logging.INFO)
+    log_full.setLevel(logging.ERROR)
     # log_full_file = logging.FileHandler('./full_log_output.log')
     # log_full.addHandler(log_full_file)
 
@@ -122,9 +122,9 @@ if __name__ == '__main__':
     # It creates the experiment object
     exp = metadata.Experiment(args.expname)
 
-    print(f"Processing experiment {exp.expname}.\n")
-    print(f"Observation Date: {exp.obsdatetime.strftime('%d %b %Y')} ({exp.obsdatetime.strftime('%y%m%d')}).")
-    print(f"Current Date: {datetime.today().strftime('%d %b %Y')}.\n")
+    actions.write_to_log(f"Processing experiment {exp.expname}.\n")
+    actions.write_to_log(f"Observation Date: {exp.obsdatetime.strftime('%d %b %Y')} --{exp.obsdatetime.strftime('%y%m%d')}.")
+    actions.write_to_log(f"Current Date: {datetime.today().strftime('%d %b %Y %H:%M')}.\n")
 
     # TODO: Should make a check that all required computers are accessible!
     # actions.check_systems_up()
@@ -136,11 +136,11 @@ if __name__ == '__main__':
                 elif len(signature(a_step).parameters) == 2:
                     a_step(exp, args)
                 else:
-                    # Should never happend
+                    # Should never happen
                     raise ValueError(f"Function {a_step} has unexpected number of arguments")
 
-    print('The post-processing pipeline finished happily.\n\nBye.')
-    print('Please continue manually in pipe.')
+    actions.write_to_log('\n\nThe post-processing pipeline finished happily.\n\nBye.')
+    actions.write_to_log('Please continue manually in pipe.')
     # Work done!!
 
 
