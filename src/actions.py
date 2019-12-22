@@ -1,5 +1,6 @@
 """All steps to be performed divided in different terminal commands.
 """
+import io
 import os
 import sys
 import glob
@@ -14,6 +15,19 @@ header_comment_log = lambda command : "\n{0}\n{0}\n>>>>> {1}\n".format('#'*82, c
 commands_output_to_show = ["checklis.py", "flag_weights.py", "standardplots", "archive"]
 # TODO: Add pipeline output and cat the last rows only.
 
+
+def write_to_log(text, also_print=True):
+    """Writes the given text into the two log files created in the program.
+    also_print defines if the text should also be written in terminal.
+    """
+    with open('./processing.log', 'a') as file1, open('./full_log_output.log', 'a') as file2:
+        file1.write(text+'\n')
+        file2.write(text+'\n')
+        if also_print:
+            print(text)
+
+
+
 def decorator_log(func):
     """Decorates each function to log the input and output to the common log file, and individually.
     """
@@ -21,46 +35,60 @@ def decorator_log(func):
     def wrapper(*args, **kwargs):
         # output_func can have one or two elements... If only one then it is only the output.
         # Otherwise it has the command that has been run and the output.
-        print('First time')
         output_func = func(*args, **kwargs)
-        print('Second time')
         logger1 = logging.getLogger('Executed commands')
         logger2 = logging.getLogger('Commands full log')
-        # logger1.setLevel(logging.INFO)
-        # logger2.setLevel(logging.INFO)
+        logger1.setLevel(logging.WARNING)
+        logger2.setLevel(logging.WARNING)
         logger1_file = logging.FileHandler('./processing.log')
         logger2_file = logging.FileHandler('./full_log_output.log')
         logger1.addHandler(logger1_file)
         logger2.addHandler(logger2_file)
 
-        if isinstance(output_func, tuple):
-            if len(output_func) == 1:
+        # TODO: For some reason, logger writes multiple times each line.
+        # In this way I get the output I want.
+        try:
+            file1 = open('./processing.log', 'a')
+            file2 = open('./full_log_output.log', 'a')
+            if isinstance(output_func, tuple):
+                if len(output_func) == 1:
+                    logger2.info(output_func)
+                    file2.write(output_func)
+
+                elif len(output_func) == 2:
+                    if not isinstance(output_func[0], list):
+                        output_func = [[output_func[0],], [output_func[1],]]
+
+                    for a_cmd, an_output in zip(*output_func):
+                        logger1.info(f"\n{a_cmd}")
+                        file1.write(f"\n{a_cmd}")
+                        # If this is one of the wild commands where the output should be shown, show it!
+                        for a_wild_command in commands_output_to_show:
+                            if a_wild_command in a_cmd:
+                                if a_wild_command is "standardplots":
+                                    a_mod_output = extract_tail_standardplots_output(an_output)
+                                    # print(f"{a_cmd}:\n{a_mod_output}")
+                                    print(f"{a_mod_output}")
+                                    logger1.info(a_mod_output)
+                                    file1.write(a_mod_output)
+                                else:
+                                    # print(f"{a_cmd}:\n{an_output}")
+                                    print(f"{an_output}")
+                                    file1.write(an_output)
+
+                        logger2.info(header_comment_log(a_cmd))
+                        logger2.info(an_output)
+                        file2.write(header_comment_log(a_cmd))
+                        if isinstance(an_output, list):
+                            file2.write(' '.join(an_output))
+                        else:
+                            file2.write(an_output)
+            else:
                 logger2.info(output_func)
-
-            elif len(output_func) == 2:
-                if not isinstance(output_func[0], list):
-                    output_func = [[output_func[0],], [output_func[1],]]
-
-                for a_cmd, an_output in zip(*output_func):
-                    logger1.info(f"\n{a_cmd}")
-                    # If this is one of the wild commands where the output should be shown, show it!
-                    for a_wild_command in commands_output_to_show:
-                        if a_wild_command in a_cmd:
-                            if a_wild_command is "standardplots":
-                                a_mod_output = extract_tail_standardplots_output(an_output)
-                                # print(f"{a_cmd}:\n{a_mod_output}")
-                                print(f"{a_mod_output}")
-                                logger1.info(a_mod_output)
-                            else:
-                                # print(f"{a_cmd}:\n{an_output}")
-                                print(f"{an_output}")
-                                logger1.info(an_output)
-
-                    logger2.info(header_comment_log(a_cmd))
-                    logger2.info(an_output)
-        else:
-            logger2.info(output_func)
-
+                file2.write(output_func)
+        finally:
+            file1.close()
+            file2.close()
         return output_func
 
     return wrapper
@@ -228,16 +256,34 @@ def shell_command(command, parameters=None, shell=False):
     else:
         full_shell_command = [command] if parameters is None else [command, parameters]
 
-    print(f"{' '.join(full_shell_command)}...")
+    print(f"\033[1m> {' '.join(full_shell_command)}\033[0m")
 
     if shell:
         process = subprocess.Popen(' '.join(full_shell_command), shell=shell,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
-        process = subprocess.Popen(full_shell_command, shell=shell, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE)
+        # TODO: I am changing everything to shell=True...
+        process = subprocess.Popen(' '.join(full_shell_command), shell=True, stdout=subprocess.PIPE,
+        # process = subprocess.Popen(full_shell_command, shell=shell, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, bufsize=1)
 
-    if process.returncode != 0 and process.returncode is not None:
+    # for line in process.stdout:
+    #     print(line.decode('utf-8').replace('\n', ''))
+
+    while process.poll() is None:
+        out = process.stdout.read(1).decode('utf-8')
+        sys.stdout.write(out)
+        sys.stdout.flush()
+
+# while True:
+    #     out = process.stderr.read(1).decode('utf-8')
+    #     if (out == '') and (process.poll() != None):
+    #         break
+    #     if out != '':
+    #         sys.stdout.write(out)
+    #         sys.stdout.flush()
+
+    if (process.returncode != 0) and (process.returncode is not None):
         raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
 
     output = process.communicate()
