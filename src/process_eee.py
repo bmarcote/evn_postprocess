@@ -108,8 +108,9 @@ The MS contains: {', '.join(exp.passes[0].sources)})""")
                 actions.standardplots(exp, args.refant, args.calsources)
                 # Get all plots done and show them in the best order:
                 standardplots = []
-                for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
-                    standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
+                # for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
+                    # standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
+                standardplots += glob.glob(f"{exp.expname.lower()}*.ps")
 
                 for a_plot in standardplots:
                     actions.shell_command("gv", a_plot)

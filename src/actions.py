@@ -74,15 +74,15 @@ def decorator_log(func):
                                 else:
                                     # print(f"{a_cmd}:\n{an_output}")
                                     print(f"{an_output}")
-                                    file1.write(an_output)
+                                    file1.write(str(an_output))
 
                         logger2.info(header_comment_log(a_cmd))
                         logger2.info(an_output)
                         file2.write(header_comment_log(a_cmd))
                         if isinstance(an_output, list):
-                            file2.write(' '.join(an_output))
+                            file2.write(' '.join(an_output)+ '\n')
                         else:
-                            file2.write(an_output)
+                            file2.write(str(an_output))
             else:
                 logger2.info(output_func)
                 file2.write(output_func)
@@ -256,7 +256,7 @@ def shell_command(command, parameters=None, shell=False):
     else:
         full_shell_command = [command] if parameters is None else [command, parameters]
 
-    print(f"\033[1m> {' '.join(full_shell_command)}\033[0m")
+    print(f"\n\033[1m> {' '.join(full_shell_command)}\033[0m")
 
     if shell:
         process = subprocess.Popen(' '.join(full_shell_command), shell=shell,
@@ -387,11 +387,15 @@ def update_lis_file(lisfilename, oldexp, newexp):
         lisfilelines = lisfile.readlines()
         for i,aline in enumerate(lisfilelines):
             if aline[0] not in ('+', '-'):
+                # Replace the EXP (upper) entries
                 lisfilelines[i] = aline.replace(oldexp, newexp)
+                # Replace the exp (lower) entries
                 lisfilelines[i] = lisfilelines[i].replace(oldexp.lower(), newexp.lower())
+                # Replace the exp.vix to EXP.vix (as symb link was done)
+                lisfilelines[i] = lisfilelines[i].replace(f"{newexp.lower()}.vix", f"{newexp.upper()}.vix")
 
     with open(lisfilename, 'w') as lisfile:
-        lisfile.write('\n'.join(lisfilelines))
+        lisfile.write(''.join(lisfilelines))
 
 
 def get_pi_from_expsum(exp):
