@@ -298,6 +298,7 @@ def shell_command(command, parameters=None, shell=False):
     return ' '.join(full_shell_command), process.communicate()[0].decode('utf-8')
 
 
+
 def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
     """Produces the lis file(s) for this experiment in ccs and copy them to eee.
     It also retrieves the vex file and creates the required symb. links.

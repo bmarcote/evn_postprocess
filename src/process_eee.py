@@ -36,6 +36,13 @@ def folders(exp, args):
     else:
         print(f"Running at {expdir}.\n")
 
+    # NOTE: this is a temporary command until the pipeline fully works
+    if exp.eEVNname is not None:
+        actions.shell_command("create_processing_log.py", [exp.expname, "-e", exp.eEVNname,
+                                                           "-o", "processing_manual.log"])
+    else:
+        actions.shell_command("create_processing_log.py", [exp.expname, "-o", "processing_manual.log"])
+
     # print("Two log files will be created:")
     # print("  - processing.log: contains the executed commands and very minimal output.")
     # print("  - full_log_output.log: contains the full output received from all commands.\n\n")
