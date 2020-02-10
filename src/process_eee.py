@@ -102,6 +102,7 @@ def standardplots(exp, args):
     if args.calsources is None:
         args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for standardplots as a comma-separated list.
 The MS contains: {', '.join(exp.passes[0].sources)})""")
+        args.calsources = args.calsources.replace(' ', '')
 
     # Open produced plots, ask user if wants to continue / repeate plots with different inputs / q:
     while True:
@@ -114,10 +115,10 @@ The MS contains: {', '.join(exp.passes[0].sources)})""")
             if run_standardplots:
                 actions.standardplots(exp, args.refant, args.calsources)
                 # Get all plots done and show them in the best order:
-                standardplots = []
+                # standardplots = []
                 # for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
-                    # standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
-                standardplots += glob.glob(f"{exp.expname.lower()}*.ps")
+                #     standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
+                standardplots = glob.glob(f"{exp.expname.lower()}*.ps")
 
                 for a_plot in standardplots:
                     actions.shell_command("gv", a_plot)
