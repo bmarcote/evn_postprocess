@@ -25,7 +25,7 @@ from src import process_pipe as pipe
 
 __version__ = 0.5
 __prog__ = 'evn_postprocess.py'
-usage = "%(prog)s [-h]  <experiment_name>  <support_scientist>  <refant>"
+usage = "%(prog)s [-h]  <experiment_name>  <support_scientist>  <refant>\n"
 description = """Post-processing of EVN experiments.
 The program runs the full post-process for a correlated EVN experiment, from retrieving the correlated products to run the EVN pipeline following the steps described in the EVN Post-Processing Guide (see the JIVE Wiki: http://www.jive.nl/jivewiki/doku.php?id=evn:supportscientists).
 
