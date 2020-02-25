@@ -321,13 +321,14 @@ def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
 Do you want to overwrite them (it also applies to vex, piletter, expsum files)?""")
 
     if overwrite:
-        print("Creating lis file...")
-        # Commenting out -p prod because of spectral line exper
-        cmd = "cd /ccs/expr/{expname};/ccs/bin/make_lis -e {expname}".format(expname=eEVNname)
-        output = ssh(computer_ccs, cmd)
-        cmds.append(f"ssh {computer_ccs}:{cmd}")
-        # If there is a "prod_cont" and "prod_line" in the lis file, remake them to make separate files.
-        outputs.append(output)
+        if yes_or_no_question("Create again the .lis file in ccs?"):
+            print("Creating lis file...")
+            # Commenting out -p prod because of spectral line exper
+            cmd = "cd /ccs/expr/{expname};/ccs/bin/make_lis -e {expname}".format(expname=eEVNname)
+            output = ssh(computer_ccs, cmd)
+            cmds.append(f"ssh {computer_ccs}:{cmd}")
+            # If there is a "prod_cont" and "prod_line" in the lis file, remake them to make separate files.
+            outputs.append(output)
 
         print("Getting lis and vix files from ccs...")
         for ext in ('lis', 'vix'):
