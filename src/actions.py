@@ -270,33 +270,32 @@ def shell_command(command, parameters=None, shell=False):
     # for line in process.stdout:
     #     print(line.decode('utf-8').replace('\n', ''))
 
+    output_lines = []
     while process.poll() is None:
-        out = process.stdout.read(1).decode('utf-8')
+        out = process.stdout.readline()
         sys.stdout.write(out)
+        output_lines.append(out)
         sys.stdout.flush()
-
-# while True:
-    #     out = process.stderr.read(1).decode('utf-8')
-    #     if (out == '') and (process.poll() != None):
-    #         break
-    #     if out != '':
-    #         sys.stdout.write(out)
-    #         sys.stdout.flush()
 
     if (process.returncode != 0) and (process.returncode is not None):
         raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
 
-    output = process.communicate()
-    if isinstance(output, tuple):
-        output = [p.decode('utf-8') for p in output]
-        for an_output in output:
-            if an_output != '':
-                return ' '.join(full_shell_command), an_output
+    return ' '.join(full_shell_command), '\n'.join(output_lines)
 
-        return ' '.join(full_shell_command), output
 
-    return ' '.join(full_shell_command), process.communicate()[0].decode('utf-8')
+def remote_file_exists(host, path):
+    """Checks if a file or path exists in a remote computer returning a bool.
+    It may raise an Exception.
+    """
+    # Test does not work if finds multiple files.
+    # status = subprocess.call(['ssh', host, f"test -f {path}"])
+    status = subprocess.call(['ssh', host, f"ls {path}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if status == 0:
+        return True
+    elif (status == 1) or (status == 2):
+        return False
 
+    raise Exception(f"SSH connection to {host} failed.")
 
 
 def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
@@ -317,65 +316,63 @@ def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
     overwrite = True
     cmds, outputs = [], []
     if len(glob.glob("*lis")) > 0:
-        overwrite = yes_or_no_question("""lis files already found in the directory.
-Do you want to overwrite them (it also applies to vex, piletter, expsum files)?""")
+        if yes_or_no_question("""lis file(s) found in the directory. Do you want to overwrite them?"""):
+            if (not remote_file_exists('jops@ccs', f"/ccs/expr/{eEVNname}/{eEVNname.lower()}*.lis")) or \
+                                                yes_or_no_question("Create again the .lis file in ccs?"):
+                print("Creating lis file...")
+                # Commenting out -p prod because of spectral line exper
+                cmd = f"cd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}")
+                output = ssh(computer_ccs, cmd)
+                cmds.append(f"ssh {computer_ccs}:{cmd}")
+                # If there is a "prod_cont" and "prod_line" in the lis file, remake them to make separate files.
+                outputs.append(output)
 
-    if overwrite:
-        if yes_or_no_question("Create again the .lis file in ccs?"):
-            print("Creating lis file...")
-            # Commenting out -p prod because of spectral line exper
-            cmd = "cd /ccs/expr/{expname};/ccs/bin/make_lis -e {expname}".format(expname=eEVNname)
-            output = ssh(computer_ccs, cmd)
-            cmds.append(f"ssh {computer_ccs}:{cmd}")
-            # If there is a "prod_cont" and "prod_line" in the lis file, remake them to make separate files.
-            outputs.append(output)
-
-        print("Getting lis and vix files from ccs...")
-        for ext in ('lis', 'vix'):
-            # cmd = ["{}:/ccs/expr/{}/{}*.{}".format(computer, eEVNname, eEVNname.lower(), ext), '.']
-            cmd, output = scp(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext}", '.')
-            cmds.append(cmd)
-            outputs.append(output)
-
-        # Checks if the lis file(s) contain prod_cont and prod_line profiles. And those cases split
-        # the lis files for the two profiles.
-        for a_lis in glob.glob("*.lis"):
-            split_lis_cont_line(a_lis)
-
-        print(f"Getting the PI letter and .expsum files from {computer_piletter.split('@')[1]}...")
-        # Finally, copy the piletter and expsum files
-        for ext in ('piletter', 'expsum'):
-            cmd, output = scp(f"{computer_piletter}:piletters/{expname.lower()}.{ext}", '.')
-            cmds.append(cmd)
-            outputs.append(output)
-
-        if not os.path.isfile(f"{expname}.vix"):
-            os.symlink(f"{eEVNname.lower()}.vix", f"{expname}.vix")
-            cmds.append(f"ln -s {eEVNname.lower()}.vix {expname}.vix")
-            outputs.append('')
-
-        # In the case of e-EVN runs, a renaming of the lis files may be required:
-        if eEVNname != expname:
-            for a_lis in glob.glob("*.lis"):
-                # Modify the references for eEVNname to expname inside the lis files
-                update_lis_file(a_lis, eEVNname, expname)
-                cmds.append(f"{a_lis} exp name updated from {eEVNname} to {expname}")
-                outputs.append('')
-                os.rename(a_lis, a_lis.replace(eEVNname.lower(), expname.lower()))
-                cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), expname.lower())}")
-                outputs.append('')
-
-        # if can_continue('Check the lis file(s) and modify them if needed.\n'+\
-        #                 'Are they ready to be checked now?'):
-        while True:
-            for a_lis in glob.glob("*.lis"):
-                cmd, output = shell_command("checklis.py", a_lis)
+            print("Getting lis and vix files from ccs...")
+            for ext in ('lis', 'vix'):
+                # cmd = ["{}:/ccs/expr/{}/{}*.{}".format(computer, eEVNname, eEVNname.lower(), ext), '.']
+                cmd, output = scp(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext}", '.')
                 cmds.append(cmd)
                 outputs.append(output)
 
-            if yes_or_no_question('Are the .lis file(s) OK to continue and get the data?\n'+\
-                                  '"no" to check them again'):
-                break
+            # Checks if the lis file(s) contain prod_cont and prod_line profiles. And those cases split
+            # the lis files for the two profiles.
+            for a_lis in glob.glob("*.lis"):
+                split_lis_cont_line(a_lis)
+
+            print(f"Getting the PI letter and .expsum files from {computer_piletter.split('@')[1]}...")
+            # Finally, copy the piletter and expsum files
+            for ext in ('piletter', 'expsum'):
+                cmd, output = scp(f"{computer_piletter}:piletters/{expname.lower()}.{ext}", '.')
+                cmds.append(cmd)
+                outputs.append(output)
+
+            if not os.path.isfile(f"{expname}.vix"):
+                os.symlink(f"{eEVNname.lower()}.vix", f"{expname}.vix")
+                cmds.append(f"ln -s {eEVNname.lower()}.vix {expname}.vix")
+                outputs.append('')
+
+            # In the case of e-EVN runs, a renaming of the lis files may be required:
+            if eEVNname != expname:
+                for a_lis in glob.glob("*.lis"):
+                    # Modify the references for eEVNname to expname inside the lis files
+                    update_lis_file(a_lis, eEVNname, expname)
+                    cmds.append(f"{a_lis} exp name updated from {eEVNname} to {expname}")
+                    outputs.append('')
+                    os.rename(a_lis, a_lis.replace(eEVNname.lower(), expname.lower()))
+                    cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), expname.lower())}")
+                    outputs.append('')
+
+            # if can_continue('Check the lis file(s) and modify them if needed.\n'+\
+            #                 'Are they ready to be checked now?'):
+            while True:
+                for a_lis in glob.glob("*.lis"):
+                    cmd, output = shell_command("checklis.py", a_lis)
+                    cmds.append(cmd)
+                    outputs.append(output)
+
+                if yes_or_no_question('Are the .lis file(s) OK to continue and get the data?\n'+\
+                                      '"no" to check them again'):
+                    break
 
     return cmds, outputs
 
