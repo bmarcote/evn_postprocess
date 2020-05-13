@@ -21,11 +21,12 @@ from src import metadata
 from src import actions
 
 
-def folders(exp, args):
-    """Moves to the folder associated to the given experiment. If it does not exist, it creates it.
+def folders(exp):
+    """Moves to the folder associated to the given experiment.
+    If it does not exist, it creates it.
     """
     # If required, move to the required directory (create it if needed).
-    expdir = '/data0/{}/{}'.format(args.supsci, exp.expname.upper())
+    expdir = '/data0/{}/{}'.format(exp.supsci.lower(), exp.expname.upper())
     if expdir is not os.getcwd():
         if not os.path.isdir(expdir):
             os.makedirs(expdir)
@@ -33,26 +34,44 @@ def folders(exp, args):
 
         os.chdir(expdir)
         print(f"Moved to {expdir}.\n")
-    else:
-        print(f"Running at {expdir}.\n")
 
     # NOTE: this is a temporary command until the pipeline fully works
     if exp.eEVNname is not None:
-        actions.shell_command("create_processing_log.py", [exp.expname, "-e", exp.eEVNname,
-                                                           "-o", "processing_manual.log"])
+        actions.shell_command("create_processing_log.py", \
+            [exp.expname, "-e", exp.eEVNname, "-o", "processing_manual.log"])
     else:
-        actions.shell_command("create_processing_log.py", [exp.expname, "-o", "processing_manual.log"])
+        actions.shell_command("create_processing_log.py", \
+            [exp.expname, "-o", "processing_manual.log"])
 
-    # print("Two log files will be created:")
-    # print("  - processing.log: contains the executed commands and very minimal output.")
-    # print("  - full_log_output.log: contains the full output received from all commands.\n\n")
+    if not os.path.isdir('log'):
+        os.makedirs('log')
 
 
-def ccs(exp):
-    """Runs the initial post-processing steps in ccs: showlog, retrieving the lis,
-    vix files from ccs, running checklis, and retrieving the PI letter and .expsum files.
+def get_passes_from_lisfiles(exp):
+    """Gets all .lis files in the directory, which imply different correlator passes.
+    Append this information to the current experiment (exp object),
+    together with the MS file associated for each of them.
     """
-    return actions.get_lis_vex(exp.expname, 'jops@ccs', 'jops@jop83', eEVNname=exp.eEVNname)
+    lisfiles = glob.glob(f"{exp.expname.lower()}*.lis")
+    thereis_line = True if (len(lisfiles) == 2 and '_line' in ''.join(lisfiles)) else False
+    passes = []
+    for i,a_lisfile in enumerate(lisfiles):
+        with open(a_lisfile, 'r') as lisfile:
+            for a_lisline in lisfile.readlines():
+                if '.ms' in a_lisline:
+                    # there is only one .ms input there
+                    msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
+                    if thereis_line:
+                        if '_line' in a_lisfile:
+                            fitsidiname = f"{exp.expname.lower()}_2_1.IDI"
+                        else:
+                            fitsidiname = f"{exp.expname.lower()}_1_1.IDI"
+                    else:
+                        fitsidiname = f"{exp.expname.lower()}_{i+1}_1.IDI"
+
+                    passes.add(metadata.CorrelatorPass(a_lisfile, msname, fitsidiname))
+
+    exp.passes = passes
 
 
 def getdata(exp):
@@ -60,12 +79,14 @@ def getdata(exp):
     inputs: exp : metadata.Experiment
     """
     for a_pass in exp.passes:
-        actions.shell_command("getdata.pl", ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
-                                            "-lis", a_pass.lisfile])
+        actions.shell_command("getdata.pl",
+                    ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
+                     "-lis", a_pass.lisfile])
 
 
 def j2ms2(exp):
     """Runs j2ms2 on all existing .lis files from the given experiment.
+    If the MS to produce already exists, then it will be removed.
     inputs: exp : metadata.Experiment
     """
     for a_pass in exp.passes:
@@ -73,83 +94,26 @@ def j2ms2(exp):
             outms = [a for a in f.readline().replace('\n','').split(' ') \
                                  if (('.ms' in a) and ('.UVF' not in a))][0]
         if os.path.isdir(outms):
-            if actions.yes_or_no_question(f"{outms} exists. Delete and run j2ms2 again?"):
-                actions.shell_command("rm", ["-rf", outms])
-                actions.shell_command("j2ms2", ["-v", a_pass.lisfile])
-        else:
-            actions.shell_command("j2ms2", ["-v", a_pass.lisfile])
+            # if actions.yes_or_no_question(f"{outms} exists. Delete and run j2ms2 again?"):
+            actions.shell_command("rm", ["-rf", outms])
+                # actions.shell_command("j2ms2", ["-v", a_pass.lisfile])
+        # else:
+        actions.shell_command("j2ms2", ["-v", a_pass.lisfile])
 
 
-def onebit(exp, args):
-    # 1-bit scaling. Only runs if provided.
-    # If not provided, checks that no 1-bit stations are in the vex file.
-    # If 1-bit antennas are present somewhere, it asks user to confirm that no correction is required
-    # or to provide the list of stations.
-    if args.onebit is not None:
-        return actions.scale1bit(exp, args.onebit)
-    else:
-        # Checks if there is some station that recorded at 1bit in the vex file (it may or may not
-        # affect to this experiment.
-        if actions.station_1bit_in_vix(f"{exp.expname}.vix"):
-            scale1bit_stations = actions.ask_user("Are you sure scale1bit is not required?\n" +\
-                                            "Specify the affected stations or 'none' otherwise")
-            if scale1bit_stations is not 'none':
-                return actions.scale1bit(exp, scale1bit_stations)
-    return False
+def onebit(exp):
+    """In case some stations recorded at 1 bit, scales 1-bit data to correct for
+    quantization losses in all MS associated with the given experiment name.
+    """
+    # Sanity check
+    ants2correct = set(exp.onebit_antennas).intersection(exp.antennas)
+    cmds, outputs = [], []
+    for a_pass in exp.passes:
+        cmd, output = shell_command("scale1bit.py", [a_pass.msfile, ' '.join(ants2correct)])
+        cmds.append(cmd)
+        outputs.append(output)
 
-
-def standardplots(exp, args):
-    if args.calsources is None:
-        args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for standardplots as a comma-separated list.
-The MS contains: {', '.join(exp.passes[0].sources)})""")
-        args.calsources = args.calsources.replace(' ', '')
-
-    # Open produced plots, ask user if wants to continue / repeate plots with different inputs / q:
-    while True:
-        try:
-            run_standardplots = True
-            if (len(glob.glob(f"{exp.expname.lower()}*ps")) > 0) or \
-               (len(glob .glob(f"{exp.expname.lower()}*ps.gz")) > 0):
-                run_standardplots = actions.yes_or_no_question('Plots exist. Run standardplots again?')
-
-            if run_standardplots:
-                actions.standardplots(exp, args.refant, args.calsources)
-                # Get all plots done and show them in the best order:
-                # standardplots = []
-                # for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
-                #     standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
-                standardplots = glob.glob(f"{exp.expname.lower()}*.ps")
-
-                for a_plot in standardplots:
-                    actions.shell_command("gv", a_plot)
-
-                answer = actions.yes_or_no_question('\nAre the plots OK? "no" to pick other sources/stations')
-                if answer:
-                    return True
-
-                args.calsources = actions.ask_user(f"""Please, introduce the sources to be used for standardplots
-as a comma-separated list (the MS contains: {', '.join(exp.passes[0].sources)})""")
-                args.refant = actions.ask_user(f"""Please, introduce the antenna to be used for standardplots
-(the MS contains: {', '.join([e.capitalize() for e in exp.antennas])})""")
-            else:
-                return False
-
-        except Exception as e:
-            # NOTE: To implement. Check errors...
-            print(f"WARNING: Standardplots crashed ({e}). But no implementation yet. Continuing..")
-            return False
-
-    return True
-
-
-def polswap(exp):
-    swap_pol_ants = actions.ask_user("List the antennas requiring swapping polarizations (comma-separated list)",
-                                     accepted_values=[*exp.antennas])
-    for a_swap_ant in swap_pol_ants:
-        for a_pass in exp.passes:
-            actions.shell_command("polswap.py", [a_pass.msfile, a_swap_ant])
-
-    return True
+    return cmds, outputs
 
 
 def ysfocus(exp):
@@ -172,42 +136,128 @@ def ysfocus(exp):
     return True
 
 
+
+def standardplots(exp, do_weights=True):
+    """Runs the standardplots on the specified experiment using a reference antenna
+    and sources to be picked for the auto- and cross-correlations.
+    """
+    # TODO: to be fully rewritten
+    # To run for all correlator passes that will be pipelined.
+    # Then once all of them finish, open the plots and ask user.
+    pass
+    # cmd, output = shell_command("standardplots",
+    #                 ["-weight", exp.passes[0].msfile, refant, calsources])
+    # # Get all plots done and show them in the best order:
+    # # standardplots = []
+    # # for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
+    # #     standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
+    # standardplots = glob.glob(f"{exp.expname.lower()}*.ps")
+    #
+    # for a_plot in standardplots:
+    #     actions.shell_command("gv", a_plot)
+
+
+def open_standardplot_files(exp):
+    """Calls gv to open all plots generated by standardplots.
+    """
+    pass
+
+
+def polswap(exp, antennas):
+    """Swaps the polarization of the given antennas for all associated MS files
+    to the given experiment.
+    """
+    for a_pass in exp.passes:
+        actions.shell_command("polswap.py", [a_pass.msfile, ','.join(antennas)])
+
+
+
 def flag_weights(exp, threshold):
     # TODO: use map() to parallelize this function. Is it true parallelization?
     for a_pass in exp.passes:
-        actions.shell_command("flag_weights.py", [a_pass.msfile, str(threshold)])
+        cmd, output = actions.shell_command("flag_weights.py", [a_pass.msfile, str(threshold)])
 
-    return True
+    #TODO: the return value must be the percentage of flagged data.
+    return output
 
 
-def MSoperations(exp):
-    """Runs polswap if requierd, ysfocus, and flag_weights.
+def ms_operations(exp):
+    """After standardplots already run, opens the generated plots and asks the user.
+    If needed, runs standardplots again with the updated parameters and
+    again if required, runs polswap, stores the info to run PolConvert later.
+    Runs flag_weights and finally standardplots if data modifed (no weights).
     """
-    weight_threshold = actions.ask_user("A couple of questions:\n" +\
-                       "Which weight flagging threshold should be used?", valtype=float)
-    swap_pols = actions.yes_or_no_question("Is polswap required?")
-    if swap_pols:
-        polswap(exp)
+    try:
+        open_standardplot_files(exp)
+    except Exception as e:
+        print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")
+        input("\n\033[1mPress enter to continue.\033[0m\n")
+    while True:
+        options = dialog.standardplots_dialog(exp)
+        if options['choice'] is dialog.Choice.ok:
+            break
+        elif options['choice'] is dialog.Choice.repeat:
+            # Checks if update values are requested.
+            if options['ref_ant'] is not None:
+                exp.ref_antennas = options['ref_ant']
 
-    ysfocus(exp)
-    flag_weights(exp, weight_threshold)
-    actions.can_continue('Is everything ready to run tConvert? You can update the PI letter in the mean time')
+            if options['cal_sources'] is not None:
+                exp.ref_sources = options['cal_sources']
+
+            standardplots(exp, do_weights=False)
+            try:
+                open_standardplot_files(exp)
+            except Exception as e:
+                print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")
+
+        elif options['choice'] is dialog.Choice.abort:
+            actions.end_program(exp)
+        else:
+            raise ValueError(f"Unexpected choice {options['choice']}.")
+
+    # Then do flag_weights and polswap if requested
+    # (in the later, run standardplots again without weights)
+    if options['polswap'] is not None:
+        polswap(exp, options['polswap'])
+
+    if options['polconvert'] is not None:
+        exp.polconvert_antennas = options['polconvert']
+
+    percent_flagged = flag_weights(exp, options['flagweight'])
+    update_piletter(exp, options['flagweight'], percent_flagged)
+    standardplots(exp, do_weights=False)
+
+
+def update_piletter(exp, weightthreshold, flaggeddata):
+    """Updates the PI letter by changing two things:
+    - Removing the trailing epoch-related character in the experiment name.
+    - Adding the weightthreshold that was used and how much data were flagged.
+    """
+    pass
+
 
 
 def tConvert(exp):
     """Runs tConvert in all MS files available in the directory
     """
-    for i, a_pass in enumerate(exp.passes):
-        actions.shell_command("tConvert", [a_pass.msfile, f"{exp.expname.lower()}_{i+1}_1.IDI"])
+    for a_pass in exp.passes:
+        # TODO: to parallelize
+        actions.shell_command("tConvert", [a_pass.msfile, a_pass.fitsidifile])
 
 
 def polConvert(exp):
-    actions.can_continue('If PolConvert is required, do it manually NOW before continuing')
-# pol_convert_ants = actions.ask_user("Are there antennas requiring Pol Convert? (provide comma-separated list)",
-#                                     accepted_values=['no', *exp.antennas])
+    """Checks if PolConvert is required for any antenna.
+    In that case, prepares the templates for running it and (potentially in the future?)
+    will run it. For now it just requests the user to run it manually.
+    """
+    if len(exp.polconvert_antennas) == 0:
+        print('PolConvert is not required in this experiment.')
+        return
 
-# if pol_convert_ants is not 'no':
-#     actions.can_continue('Please, run PolConvert manually and let me know if I can continue?')
+    dialog_text = "PolConvert is required.\n"
+    dialog_text += f"Please run it manually for {','.join(exp.polconvert_antennas)}."
+    dialog_text += "Once you are done (all FITS properly corrected), press Continue."
+    dialog.warning_dialog(dialog_text)
 
 
 
@@ -215,25 +265,29 @@ def polConvert(exp):
 
 # If the auth file exists, take the username and password from it. Otherwise create a new one.
 
-def letters(exp, args):
-    # NOTE: This should always run
+def set_credentials_pipelet(exp):
+    """Sets the credentials for the given experiment and creates the .pipelet file.
+    In case of an NME or test, it does not set any credential.
+    Otherwise, it will take the credentials from a .auth file if already exists,
+    or creates such file iwth a new password.
+    """
+    if (exp.expname.lower[0] is 'N') or (exp.expname.lower[0] is 'F'):
+        print(f"{exp.expname} is an NME or test experiment.\nNo authentification will be set.")
     if len(glob.glob("*_*.auth")) == 1:
-        # the file should have the form username_password.auth.
+        # Some credentials are already in place.
         exp.set_credentials( *glob.glob("*_*.auth")[0].split('.')[0].split('_')  )
         if not os.path.isfile(f"{exp.expname.lower()}.pipelet"):
-            actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
+            actions.shell_command("pipelet.py", [exp.expname.lower(), exp.supsci.lower()])
 
     elif len(glob.glob("*_*.auth")) > 1:
-        answer = actions.ask_user("WARNING: multiple auth files found." +\
-                 "Please introduce username and password (space separated)")
-        exp.set_credentials( *[a.strip() for a in answer.split(' ')] )
-        actions.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
-        actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
+        raise ValueError("More than one .auth file found in the directory.")
     else:
         possible_char = string.digits + string.ascii_letters
-        exp.set_credentials(username=exp.expname.lower(), password="".join(random.sample(possible_char, 12)))
-        actions.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
-        actions.shell_command("pipelet.py", [exp.expname.lower(), args.supsci])
+        exp.set_credentials(username=exp.expname.lower(),
+                            password="".join(random.sample(possible_char, 12)))
+        actions.shell_command("touch",
+                f"{exp.credentials.username}_{exp.credentials.password}.auth")
+        actions.shell_command("pipelet.py", [exp.expname.lower(), exp.supsci.lower()])
 
 
 def archive(exp):
