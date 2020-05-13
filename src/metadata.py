@@ -8,6 +8,8 @@ import numpy as np
 import subprocess
 import datetime as dt
 from pyrap import tables as pt
+from enum import Enum
+
 
 
 class Credentials(object):
@@ -29,6 +31,38 @@ class Credentials(object):
         self._username = username
         self._password = password
 
+
+class SourceType(Enum):
+    target = 0
+    calibrator = 1
+    fringefinder = 2
+    other = 3
+
+
+class Source(object):
+    """Defines a source by name, type (i.e. target, reference, fringefinder)
+    and if it must be protected or not (password required to get its data).
+    """
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def type(self):
+        return self._type
+
+    @property
+    def protected(self):
+        return self._protected
+
+    @protected.setter
+    def protected(self, tobeprotected):
+        self._protected = tobeprotected
+
+    def __init__(self, name, sourcetype, protected):
+        self._name = name
+        self._type = sourcetype
+        self.protected = protected
 
 
 class Subbands(object):
@@ -92,9 +126,20 @@ class CorrelatorPass(object):
 
     @property
     def msfile(self):
-        """Returns the name of the MS file associated for this correlator pass.
+        """Returns the name of the MS file associated to this correlator pass.
         """
         return self._msfile
+
+    @property
+    def fitsidifile(self):
+        """Returns the name of the FITS IDI files associated to this correlator pass.
+        Note that this is the common name for all files (without the trailing number)
+        """
+        return self._fitsidifile
+
+    @fitsidifile.setter
+    def fitsidifile(self, newfitsidifile):
+        self._fitsidifile = newfitsidifile
 
     @property
     def pipeline(self):
@@ -133,9 +178,10 @@ class CorrelatorPass(object):
         """
         self._freqsetup = Subbands(channels, frequencies, bandwidths)
 
-    def __init__(self, lisfile, msfile, pipeline=True):
+    def __init__(self, lisfile, msfile, fitsidifile, pipeline=True):
         self._lisfile = lisfile
         self._msfile = msfile
+        self._fitsidifile = fitsidifile
         self._sources = []
         self._pipeline = pipeline
         self._freqsetup = None # Must be an object with subbands, freqs, channels, pols.
@@ -159,6 +205,10 @@ class Experiment(object):
         """
         return self._eEVN
 
+    @eEVNname.setter
+    def eEVNname(self, eEVNname):
+        self._eEVN = eEVNname
+
     @property
     def piname(self):
         return self._piname
@@ -176,10 +226,22 @@ class Experiment(object):
         self._email = new_email
 
     @property
+    def supsci(self):
+        return self._supsci
+
+    @supsci.setter
+    def supsci(self, supsci):
+        self._supsci = supsci
+
+    @property
     def obsdate(self):
         """Epoch at which the EVN experiment was observed (starting date), in YYMMDD format.
         """
         return self._obsdate
+
+    @obsdate.setter
+    def obsdate(self, obsdate):
+        self._obsdate = obsdate
 
     @property
     def obsdatetime(self):
@@ -216,17 +278,71 @@ class Experiment(object):
     def antennas(self, new_antennas):
         self._antennas = tuple(new_antennas)
 
-    # @property
-    # def sources(self):
-    #     """List of sources observed in the experiment.
-    #     """
-    #     return self._sources
-    #
-    # @sources.setter
-    # def sources(self, new_sources):
-    #     """List of sources observed in the experiment.
-    #     """
-    #     self._sources = tuple(new_sources)
+    @property
+    def onebit_antennas(self):
+        """List of antennas that recorded with 1 bit.
+        """
+        return self._onebit_antennas
+
+    @onebit_antennas.setter
+    def onebit_antennas(self, new_onebit_antennas):
+        if new_onebit_antennas is None:
+            self._onebit_antennas = ()
+        else:
+            self._onebit_antennas = tuple(new_onebit_antennas)
+
+    @property
+    def ref_antennas(self):
+        """List of antennas to be used as reference in standardplots and Pipeline.
+        """
+        return self._ref_antennas
+
+    @ref_antennas.setter
+    def ref_antennas(self, new_ref_antennas):
+        self._ref_antennas = tuple(new_ref_antennas)
+
+    @property
+    def polconvert_antennas(self):
+        """List of antennas that require running PolConvert.
+        """
+        return self._polconvert_antennas
+
+    @polconvert_antennas.setter
+    def polconvert_antennas(self, new_list_antennas):
+        self._polconvert_antennas = tuple(new_list_antennas)
+
+    @property
+    def sources(self):
+        """List of sources observed in the experiment.
+        """
+        return self._sources
+
+    @sources.setter
+    def sources(self, new_sources):
+        """List of sources observed in the experiment.
+        """
+        self._sources = list(new_sources)
+
+    @property
+    def ref_sources(self):
+        """List of sources to be used for standardplots.
+        """
+        return self._ref_sources
+
+    @ref_sources.setter
+    def ref_sources(self, new_ref_sources):
+        """List of sources to be used for standardplots.
+        """
+        self._ref_sources = list(new_ref_sources)
+
+    @property
+    def correlator_passes(self):
+        "Number of correlator passes that have been performed."
+        return self._number_passes
+
+    @correlator_passes.setter
+    def correlator_passes(self, number_passes):
+        self._number_passes = number_passes
 
     @property
     def passes(self):
@@ -265,6 +381,27 @@ class Experiment(object):
     def set_credentials(self, username, password):
         self._credentials = Credentials(username, password)
 
+    @property
+    def existing_piletter(self):
+        """Returns if a piletter was already available in the experiment folder
+        before starting this post-process.
+        """
+        return self._existing_piletter
+
+    @existing_piletter.setter
+    def existing_piletter(self, status):
+        self._existing_piletter = status
+
+    @property
+    def existing_lisfile(self):
+        """Returns if the lis file(s) were already available in the experiment folder
+        before starting this post-process.
+        """
+        return self._existing_lisfiles
+
+    @existing_lisfile.setter
+    def existing_lisfile(self, status):
+        self._existing_lisfiles = status
 
     # @property
     # def operations(self):
@@ -286,7 +423,7 @@ class Experiment(object):
     #         self._operations[a_new_key] = new_dict[a_new_key]
 
 
-    def __init__(self, expname, **kwargs):
+    def __init__(self, expname, support_scientist):
         """Initializes an EVN experiment with the given name.
 
         Inputs:
@@ -294,54 +431,24 @@ class Experiment(object):
                The name of the experiment (case insensitive).
         """
         self._expname = expname.upper()
+        # self._eEVN = None
         self._piname = None
         self._email = None
-        self._obsdate = self.get_obsdate_from_ccs()
+        self._supsci = support_scientist
+        self._obsdate = None
+        self._processdate = dt.datetime.now()
         # Attributes not known until the MS file is created
         self._startime = None
         self._endtime = None
-        self._antennas = []
+        self._antennas = ()
+        self._ref_antennas = ()
+        self._onebit_antennas = ()
+        self._polconvert_antennas = ()
+        self._sources = None
+        self._ref_sources = None
         self._credentials = Credentials(None, None)
+        self._number_passes = None
         self._passes = []
-
-
-    def get_obsdate_from_ccs(self):
-        """Obtains the observing epoch from the MASTER_PROJECTS.LIS located in ccc.
-        In case of being an e-EVN experiment, it will add that information to self.eEVN.
-        """
-        cmd = f"grep {self.expname} /ccs/var/log2vex/MASTER_PROJECTS.LIS"
-        process = subprocess.Popen(["ssh", "jops@ccs", cmd], shell=False, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE)
-        output = process.communicate()[0].decode('utf-8')
-        if process.returncode != 0:
-            raise ValueError(f"Error code {process.returncode} when reading MASTER_PROJECTS.LIS from ccs.\n" +\
-                             f"{self.expname} is probably not in the EVN database.")
-
-        if output.count('\n') == 2:
-            # It is an e-EVN experiment!
-            # One line will have EXP EPOCH.
-            # The other one eEXP EPOCH EXP1 EXP2..
-            inputs = [i.split() for i in output[:-1].split('\n')]
-            for an_input in inputs:
-                if an_input[0] == self.expname:
-                    obsdate = an_input[1]
-                else:
-                    # The first element is the expname of the e-EVN run
-                    self._eEVN = an_input[0]
-
-            return obsdate[2:]
-
-        elif output.count('\n') == 1:
-            expline = output[:-1].split()
-            if len(expline) > 2:
-                # This is an e-EVN, and this experiment was the first one (so e-EVN is called the same)
-                self._eEVN = expline[0].strip()
-            else:
-                self._eEVN = None
-            return expline[1].strip()[2:]
-
-        else:
-            raise ValueError(f"{self.expname} not found in (ccs) MASTER_PROJECTS.LIS or connection not set.")
 
 
     def get_setup_from_ms(self):
@@ -357,16 +464,83 @@ class Experiment(object):
                     with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
                         a_pass.sources = ms_field.getcol('NAME')
 
-                    with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
+                    with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) \
+                                                                                 as ms_obs:
                         self.timerange = dt.datetime(1858, 11, 17, 0, 0, 2) + \
-                                             ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
-                    with pt.table(ms.getkeyword('SPECTRAL_WINDOW'), readonly=True, ack=False) as ms_spw:
+                             ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
+                    with pt.table(ms.getkeyword('SPECTRAL_WINDOW'), readonly=True, ack=False) \
+                                                                                    as ms_spw:
                         a_pass.freqsetup(ms_spw.getcol('NUM_CHAN'), ms_spw.getcol('CHAN_FREQ'),
-                                             ms_spw.getcol('TOTAL_BANDWIDTH'))
+                                         ms_spw.getcol('TOTAL_BANDWIDTH'))
             except RuntimeError:
                 print(f"WARNING: {a_pass.msfile} not found.")
 
         # NOTE: Get also the frequency (subband) information.
+
+
+    def parse_expsum(self):
+        """Parses the .expsum file associated to the experiment to get different
+        valuable data as:
+            PI/contact-author name(s) and emails.
+            Number of correlator passes.
+            Sources to be observed.
+        """
+        if not os.path.isfile(f"{self.expname.lower()}.expsum"):
+            raise FileNotFoundError(f"ERROR: {self.expname.lower()}.expsum file not found.")
+
+        with open(f"{self.expname.lower()}.expsum", 'r') as expsum:
+            expsumlines = expsum.readlines()
+            sources = []
+            for a_line in expsumlines:
+                if 'Principal Investigator:' in a_line:
+                    # The line is expected to be 'Principal Investigator: SURNAME  (EMAIL)'
+                    piname, email = a_line.split(':')[1].split('(')
+                    self.piname = piname.strip()
+                    self.email = email.split(')')[0].strip()
+                elif 'co-I information' in a_line:
+                    # Typically it does not show the :
+                    name,email = a_line.replace('co-I information','').replace(':','').split('(')
+                    name = name.strip()
+                    email = email.split(')')[0].strip()
+                    if isinstance(self.piname, list):
+                        self.piname += name
+                        self.email += email
+                    else:
+                        self.piname = [self.piname, name]
+                        self.email = [self.email, email]
+
+                elif 'correlator passes' in a_line:
+                    self.correlator_passes = int(a_line.split()[0])
+                elif 'src = ' in a_line:
+                    # Line with src = NAME, type = TYPE (something), use = PROTECTED (something)
+                    srcname, srctype, srcprot = a_line.split(',')
+                    srcname = srcname.split('=')[1].strip()
+                    srctype = srctype.split('=')[1].split('(')[0].strip()
+                    srcprot = srcprot.split('=')[1].split('(')[0].strip()
+                    if srctype == 'target':
+                        srctype = SourceType.target
+                    elif srctype == 'reference':
+                        srctype = SourceType.calibrator
+                    elif srctype == 'fringefinder':
+                        srctype = SourceType.fringefinder
+                    else:
+                        srctype = SourceType.other
+
+                    if srcprot == 'YES':
+                        srcprot = False
+                    elif srcprot == 'NO':
+                        srcprot = True
+                    else:
+                        raise ValueError(f"Unknown 'use' value ({srcprot}) found in the expsum.")
+
+                    sources.append(Source(srcname, srctype, srcprot))
+
+        self.sources = sources
+
+
+
+
+
 
 
 

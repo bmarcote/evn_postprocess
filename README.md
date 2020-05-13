@@ -22,6 +22,9 @@ To summarize them, this pipeline will (for a given EVN experiment):
 
 
 
+*NOTE*: The following is no updated and belongs to before the current refactoring period. To be checked once I have again a running version of the code.
+
+
 ## Bug List
 
 
@@ -57,6 +60,7 @@ To summarize them, this pipeline will (for a given EVN experiment):
 - [ ] Parallelize when multiple MS available (for j2ms2, tConvert).
 - [ ] Make standardplots smarter (both in processing & jplotter).
 - [ ] tConvert: if IDI exists, remove them.
+- [ ] Include IDI output names in the .lis file.
 - [ ] "-h" formatting.
 - [ ] No credentials for NME.
 - [ ] If different FREQ IDs. Does it work properly?

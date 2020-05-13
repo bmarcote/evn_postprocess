@@ -29,7 +29,8 @@ def write_to_log(text, also_print=True):
 
 
 def decorator_log(func):
-    """Decorates each function to log the input and output to the common log file, and individually.
+    """Decorates each function to log the input and output to the common log file,
+    and individually.
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -167,13 +168,14 @@ def can_continue(text):
 
 
 def parse_steps(step_list, all_steps, wild_steps=None):
-    """The post-processing program can run all steps of the post-process or just a subset of them.
+    """The post-processing program can run all steps of the post-process or just
+    a subset of them.
     Given an input comma-separated list of steps to be run, it returns the list of all steps to
     be conducted.
 
     Inputs:
         - step_list : str
-            String with a comma-separated list of steps to be executed. If there is only one step,
+            String with comma-separated list of steps to be executed. If there is only one step,
             Then all steps from this one (included) to the end will be executed.
         - all_steps : dict
             Dict with all available steps. Therefore, the steps specified in step_list must be
@@ -217,27 +219,27 @@ def parse_steps(step_list, all_steps, wild_steps=None):
         return steps_to_execute
 
 
-
-
 @decorator_log
 def scp(originpath, destpath):
-    """Does a scp from originpath to destpath. If the process returns an error, then it raises ValueError.
+    """Does a scp from originpath to destpath. If the process returns an error,
+    then it raises ValueError.
     """
-    process = subprocess.call(["scp", originpath, destpath], shell=False, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE)
+    process = subprocess.call(["scp", originpath, destpath], shell=False,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if process != 0:
-        raise ValueError(f"Error code {process} when running scp {originpath} {destpath} in ccs.")
+        raise ValueError(f"\nError code {process} when running scp {originpath} {destpath} in ccs.")
 
     return f"scp {originpath} {destpath}", process
 
 
 @decorator_log
 def ssh(computer, commands):
-    """Sends a ssh command to the indicated computer. Returns the output or raises ValueError in case
-    of errors. The output is expected to be in UTF-8 format.
+    """Sends a ssh command to the indicated computer.
+    Returns the output or raises ValueError in case of errors.
+    The output is expected to be in UTF-8 format.
     """
-    process = subprocess.Popen(["ssh", computer, commands], shell=False, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE)
+    process = subprocess.Popen(["ssh", computer, commands], shell=False,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # logger.info(output)
     if process.returncode != 0 and process.returncode is not None:
         raise ValueError(f"Error code {process.returncode} when running ssh {computer}:{commands} in ccs.")
@@ -248,8 +250,8 @@ def ssh(computer, commands):
 @decorator_log
 def shell_command(command, parameters=None, shell=False):
     """Runs the provided command in the shell with some arguments if necessary.
-    Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError if fails.
-    Parameters must be either a single string or a list, if provided.
+    Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError
+    if fails. Parameters must be either a single string or a list, if provided.
     """
     if isinstance(parameters, list):
         full_shell_command = [command] + parameters
@@ -263,18 +265,16 @@ def shell_command(command, parameters=None, shell=False):
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
         # TODO: I am changing everything to shell=True...
-        process = subprocess.Popen(' '.join(full_shell_command), shell=True, stdout=subprocess.PIPE,
+        process = subprocess.Popen(' '.join(full_shell_command), shell=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1)
         # process = subprocess.Popen(full_shell_command, shell=shell, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, bufsize=1)
-
     # for line in process.stdout:
     #     print(line.decode('utf-8').replace('\n', ''))
-
     output_lines = []
     while process.poll() is None:
         out = process.stdout.readline()
-        sys.stdout.write(out)
         output_lines.append(out)
+        sys.stdout.write(out)
         sys.stdout.flush()
 
     if (process.returncode != 0) and (process.returncode is not None):
@@ -298,85 +298,6 @@ def remote_file_exists(host, path):
     raise Exception(f"SSH connection to {host} failed.")
 
 
-def get_lis_vex(expname, computer_ccs, computer_piletter, eEVNname=None):
-    """Produces the lis file(s) for this experiment in ccs and copy them to eee.
-    It also retrieves the vex file and creates the required symb. links.
-
-    --- Params
-        expname : str
-            Name of the EVN experiment.
-        computer : str
-            Name of the computer where to create the lis file(s) and get the vex file.
-        logger : logging.Logger
-            The logger to register the log messages.
-        eEVNname : str [DEFAULT: None]
-            In case of an e-EVN run, this is the name of the e-EVN run.
-    """
-    eEVNname = expname if eEVNname is None else eEVNname
-    overwrite = True
-    cmds, outputs = [], []
-    if len(glob.glob("*lis")) > 0:
-        if yes_or_no_question("""lis file(s) found in the directory. Do you want to overwrite them?"""):
-            if (not remote_file_exists('jops@ccs', f"/ccs/expr/{eEVNname}/{eEVNname.lower()}*.lis")) or \
-                                                yes_or_no_question("Create again the .lis file in ccs?"):
-                print("Creating lis file...")
-                # Commenting out -p prod because of spectral line exper
-                cmd = f"cd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}")
-                output = ssh(computer_ccs, cmd)
-                cmds.append(f"ssh {computer_ccs}:{cmd}")
-                # If there is a "prod_cont" and "prod_line" in the lis file, remake them to make separate files.
-                outputs.append(output)
-
-            print("Getting lis and vix files from ccs...")
-            for ext in ('lis', 'vix'):
-                # cmd = ["{}:/ccs/expr/{}/{}*.{}".format(computer, eEVNname, eEVNname.lower(), ext), '.']
-                cmd, output = scp(f"{computer_ccs}:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.{ext}", '.')
-                cmds.append(cmd)
-                outputs.append(output)
-
-            # Checks if the lis file(s) contain prod_cont and prod_line profiles. And those cases split
-            # the lis files for the two profiles.
-            for a_lis in glob.glob("*.lis"):
-                split_lis_cont_line(a_lis)
-
-            print(f"Getting the PI letter and .expsum files from {computer_piletter.split('@')[1]}...")
-            # Finally, copy the piletter and expsum files
-            for ext in ('piletter', 'expsum'):
-                cmd, output = scp(f"{computer_piletter}:piletters/{expname.lower()}.{ext}", '.')
-                cmds.append(cmd)
-                outputs.append(output)
-
-            if not os.path.isfile(f"{expname}.vix"):
-                os.symlink(f"{eEVNname.lower()}.vix", f"{expname}.vix")
-                cmds.append(f"ln -s {eEVNname.lower()}.vix {expname}.vix")
-                outputs.append('')
-
-            # In the case of e-EVN runs, a renaming of the lis files may be required:
-            if eEVNname != expname:
-                for a_lis in glob.glob("*.lis"):
-                    # Modify the references for eEVNname to expname inside the lis files
-                    update_lis_file(a_lis, eEVNname, expname)
-                    cmds.append(f"{a_lis} exp name updated from {eEVNname} to {expname}")
-                    outputs.append('')
-                    os.rename(a_lis, a_lis.replace(eEVNname.lower(), expname.lower()))
-                    cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), expname.lower())}")
-                    outputs.append('')
-
-            # if can_continue('Check the lis file(s) and modify them if needed.\n'+\
-            #                 'Are they ready to be checked now?'):
-            while True:
-                for a_lis in glob.glob("*.lis"):
-                    cmd, output = shell_command("checklis.py", a_lis)
-                    cmds.append(cmd)
-                    outputs.append(output)
-
-                if yes_or_no_question('Are the .lis file(s) OK to continue and get the data?\n'+\
-                                      '"no" to check them again'):
-                    break
-
-    return cmds, outputs
-
-
 def update_lis_file(lisfilename, oldexp, newexp):
     """Updates the lis file (the header lines) referring to an experiment named oldexp
     to newexp. Note that it does not replace all references to oldexp as some of them
@@ -397,90 +318,65 @@ def update_lis_file(lisfilename, oldexp, newexp):
         lisfile.write(''.join(lisfilelines))
 
 
-def get_pi_from_expsum(exp):
-    """Obtains the PI name and the email from the .expsum file that is expected to be
-    placed in the current directory. Adds this information to the object.
-    """
-    try:
-        with open(f"{exp.expname.lower()}.expsum", 'r') as expsumfile:
-            for a_line in expsumfile.readlines():
-                if 'Principal Investigator:' in a_line:
-                    # The line is expected to be '  Principal Investigator: SURNAME  (EMAIL)'
-                    piname, email = a_line.split(':')[1].split('(')
-                    exp.piname = piname.strip()
-                    exp.email = email.replace(')','').strip()
-    except FileNotFoundError as e:
-        raise e(f"ERROR: {self.expname.lower()}.expsum not found.")
-
-
-def get_passes_from_lisfiles(exp):
-    """Gets all .lis files in the directory, which mean different correlator passes.
-    Append this information to the current experiment (exp object), together with the MS file
-    associated for each of them.
-    """
-    lisfiles = glob.glob(f"{exp.expname.lower()}*.lis")
-
-    for i,a_lisfile in enumerate(lisfiles):
-        with open(a_lisfile, 'r') as lisfile:
-            for a_lisline in lisfile.readlines():
-                if '.ms' in a_lisline:
-                    # there is only one .ms input there
-                    msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
-                    exp.add_pass(metadata.CorrelatorPass(a_lisfile, msname))
-    if len(exp.passes) > 1:
-        print(f"More than one correlation pass to be process. Which passes should be pipelined at due time?")
-        print('\n'.join([f"{i}: {a_pass.msfile.replace('.ms', '')}" for i,a_pass in enumerate(exp.passes)]))
-        passes2pipeline = ask_user(f"Write the number of the passes to pipeline")
-        for i in set(range(len(exp.passes))).difference(set(passes2pipeline)):
-            exp.passes[i].pipeline = False
-
-
-def print_sourcelist_from_expsum(exp):
-    """Prints the source list as appears in the .expsum file for the given experiment.
-    """
-    if os.path.isdir(f"{path}{exp.expname.lower()}.expsum"):
-        filepath = f"{path}{exp.expname.lower()}.expsum"
-    elif os.path.isdir(f"/export/jive/jops/piletters/{path}{exp.expname.lower()}.expsum"):
-        filepath = f"/export/jive/jops/piletters/{path}{exp.expname.lower()}.expsum"
-    else:
-        raise FileNotFoundError(f"{self.expname.lower()}.expsum not found.")
-
-    with open(filepath, 'r') as expsumfile:
-        print('\nSource list:')
-        for a_line in expsumfile.readlines():
-            if 'src =' in a_line:
-                print(a_line)
-
-
-def append_freq_setup_from_ms_to_exp(exp):
-    """Runs the get_setup_from_ms function from the given experiment to import the metadata
-    from the frequency setup, read from the MS files, to the object.
-    """
-    exp.get_setup_from_ms()
-
-
 def split_lis_cont_line(fulllisfile):
     """Given a lis file, it checks if there are jobs set as prod_cont and prod_line.
     If not, it does nothing. Otherwise, it splits the lis file into two lis files,
     one for the continuum pass and another one for the line pass.
     """
-    if (subprocess.call(["grep", "prod_line", fulllisfile], stdout=subprocess.DEVNULL) == 0) and \
-       (subprocess.call(["grep", "prod_cont", fulllisfile], stdout=subprocess.DEVNULL) == 0):
-        print('This is a spectral line experiment with line and continuum passes.')
+    # Checks that there are more than one PROD pass
+    n_prods = set()
+    with open(fulllisfile) as f_full:
+        for a_fileline in f_full.readlines():
+            temp = a_fileline.split()
+            if 'PROD' in temp:
+                n_prods.add(temp[temp.index('PROD')+1])
 
+    # TODO: possible problems if > 2 ?
+    if ('prod_line' in n_prods) and (len(n_prods) > 1):
+        print('This is a spectral line experiment with line and continuum passes.')
         lis_cont = fulllisfile.replace('.lis', '_cont.lis')
         lis_line = fulllisfile.replace('.lis', '_line.lis')
         with open(lis_cont, 'w') as f_cont, open(lis_line, 'w') as f_line:
             with open(fulllisfile) as f_full:
                 for a_fileline in f_full.readlines():
-                    if a_fileline[0] not in ('+', '-'):
+                    if a_fileline[0].strip() not in ('+', '-'):
                         f_cont.write(a_fileline.replace('.ms', '_cont.ms'))
                         f_line.write(a_fileline.replace('.ms', '_line.ms'))
-
-            f_cont.write(subprocess.check_output(["grep", "prod_cont", fulllisfile]).decode('utf-8'))
-            f_line.write(subprocess.check_output(["grep", "prod_line", fulllisfile]).decode('utf-8'))
+                    else:
+                        if 'prod_line' in a_fileline:
+                            f_line.write(a_fileline)
+                            f_cont.write(a_fileline.replace('+', '-'))
+                        else:
+                            f_line.write(a_fileline.replace('+', '-'))
+                            f_cont.write(a_fileline)
 
         os.remove(fulllisfile)
+
+
+def update_pipelinable_passes(exp, pipelinable):
+    """Updates the attribute of the CorrelatorPasses from exp to define
+    if the specific pass should run in the pipeline or not.
+
+    Input
+        exp : metadata.Experiment
+        pipelinable : list of bool or dict.
+            It can be either a list of bool. In that case it must have the same
+            dimensions as exp.passes. And the order should be the same. Each
+            value would then be applied to each CorrelatorPass from the list in passes.
+            If a dict, it must include the associated lisfile as key and then
+            the bool as value.
+    """
+    if isinstance(pipelinable, list):
+        assert len(pipelinable) == len(exp.passes)
+        for i,is_pipelinable in enumerate(pipelinable):
+            assert isinstance(is_pipelinable, bool)
+            exp.passes[i].pipeline = is_pipelinable
+    elif isinstance(pipelinable, dict):
+        for a_lisfile in pipelinable:
+            for a_exppass in exp.passes:
+                if a_exppass.lisfile == a_lisfile:
+                    a_exppass.pipeline = pipelinable[a_lisfile]
+                    break
 
 
 def station_1bit_in_vix(vexfile):
@@ -498,50 +394,6 @@ def station_1bit_in_vix(vexfile):
         # File not found
         raise FileNotFoundError(f"{vexfile} file not found.")
 
-
-def scale1bit(exp, antennas):
-    """Scale 1-bit data to correct quentization losses for the given telescopes in all
-    MS files associated with the given experiment name.
-
-    Inputs:
-        - exp : Experiment
-            The experiment containing all MS files to be scaled from 1 bit.
-        - antennas : str
-            Comma-separated list of antennas that recorded at 1 bit.
-    """
-    cmds = []
-    for a_pass in exp.passes:
-        cmd, output = shell_command("scale1bit.py", [a_pass.msfile, *antennas.split(',')])
-        cmds.append(cmd)
-        # outputs.append(output)
-
-    return cmds
-
-
-def standardplots(exp, refant, calsources):
-    """Runs the standardplots on the specified experiment using refant as reference antenna and
-    calsources as the sources to be picked for the auto- and cross-correlations.
-
-    It picks the first MS file found in glob.glob. In case of regular experiments there should be
-    only one and in case of multi-phase centers this behavior may be replaced.
-
-    Inputs:
-        - expname : Experiment
-            The experiment containing the MS file to read (it will take only the first pass from the experiment).
-        - refant : str
-            The antenna name to use as reference in the plots (showing only baselines to this station).
-        - calsources : str
-            List (comma-separated, no spaces) of source names to be considered for the plots.
-            Usually only the strong sources like fringe-finders.
-    """
-    cmd, output = shell_command("standardplots",
-                                ["-weight", exp.passes[0].msfile, refant, calsources])
-    # Process the final lines of the output. It should interpretate it and return time range, sources,
-    # antennas, and freqs.
-    # return get_setup_from_standardplots_output(output)
-    # NOTE: NO NEEDED ANYMORE BECAUSE IT IS WITHIN METADATA.PY BUT LAST BITS SHOULD STILL BE PROCESSED FOR THE
-    # PROCESSING.LOG FILE.
-    return cmd, output
 
 
 def extract_tail_standardplots_output(stdplt_output):
