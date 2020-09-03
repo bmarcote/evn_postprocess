@@ -68,6 +68,7 @@ To summarize them, this pipeline will (for a given EVN experiment):
 - [ ] Retrieve calibrators/targets from .expsum.
 - [ ] (Maybe independent program): check stations with empty .uvflgfs files and append the flags from SCHED.
 - [ ] Add spectral line EVN Pipeline support (under `$IN/immer/script/EVN_line.py`).
+- [ ] --nogui Option in the command line to not show e.g. standardplots or other visual tasks if any.
 
 
 
