@@ -122,7 +122,7 @@ if __name__ == '__main__':
     # It creates the experiment object
     exp = metadata.Experiment(args.expname)
 
-    actions.write_to_log("\n#"*82 + "\n")
+    actions.write_to_log("\n" + "#"*82 + "\n")
     actions.write_to_log(f"Processing experiment {exp.expname}.\n")
     actions.write_to_log(f"Observation Date: {exp.obsdatetime.strftime('%d %b %Y')} -- {exp.obsdatetime.strftime('%y%m%d')}.")
     actions.write_to_log(f"Current Date: {datetime.today().strftime('%d %b %Y %H:%M')}.\n")
