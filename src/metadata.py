@@ -4,6 +4,7 @@ required during the post-processing.
 The metadata is obtained from different sources and/or at
 different stages of the post-processing.
 """
+import os
 import numpy as np
 import subprocess
 import datetime as dt
@@ -431,7 +432,7 @@ class Experiment(object):
                The name of the experiment (case insensitive).
         """
         self._expname = expname.upper()
-        # self._eEVN = None
+        self._eEVN = None
         self._piname = None
         self._email = None
         self._supsci = support_scientist

@@ -15,8 +15,8 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-from src import metadata
-from src import actions
+from . import metadata
+from . import actions
 
 
 # TODO: Make a decorator function to run all functions remotely in pipe (but launched in eee)
