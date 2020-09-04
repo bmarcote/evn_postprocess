@@ -110,7 +110,8 @@ Experiment
 
 + *parse_masterprojects(exp)*
 + get_vixfile(exp)
-+ *get_expsumfile(exp)*
++ get_expsumfile(exp)
++ *parse_expsumfile(exp)*
 + get_piletter(exp)
 + lis_files_in_ccs(exp) --> bool
 + lis_files_in_local(exp) --> bool
@@ -129,7 +130,8 @@ Experiment
 + j2ms2(exp)
 + onebit(exp)
 + ysfocus(exp)
-+ standardplots(exp, do_weights=True)
++ standardplots(exp)
++ open_standardplot_files(exp)
 + polswap(exp, antennas)
 + flag_weights(exp, threshold)
 + ms_operations(exp)
