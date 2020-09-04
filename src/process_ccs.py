@@ -15,8 +15,8 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-from src import metadata
-from src import actions
+from . import metadata
+from . import actions
 
 
 def parse_masterprojects(exp):
@@ -59,7 +59,11 @@ def parse_masterprojects(exp):
         raise ValueError(f"{exp.expname} not found in (ccs) MASTER_PROJECTS.LIS" \
                          + "or connection problem.")
 
-    return cmd, ' '.join([exp.obsdate, exp.expname, exp.eEVNname])
+    if exp.eEVNname is not None:
+        return cmd, ' '.join([exp.obsdate, exp.expname, exp.eEVNname])
+    else:
+        return cmd, ' '.join([exp.obsdate, exp.expname])
+
 
 
 
@@ -73,7 +77,7 @@ def get_vixfile(exp):
 
     if not os.path.isfile(f"{exp.expname}.vix"):
         os.symlink(f"{eEVNname.lower()}.vix", f"{exp.expname}.vix")
-        return [cmd, f"ln -s {eEVNname.lower()}.vix {exp.expname}.vix")], [output, '']
+        return [cmd, f"ln -s {eEVNname.lower()}.vix {exp.expname}.vix"], [output, '']
 
     return cmd, output
 
@@ -81,22 +85,26 @@ def get_vixfile(exp):
 def get_expsumfile(exp):
     """Copies the .expsum file from jop83 to the current directory and parses it.
     """
-    cmd = '', output = ''
+    cmd = ''
+    output = ''
     if not os.path.isfile(f"{exp.expname.lower()}.expsum"):
         cmd, output = actions.scp(f"jops@jop83:piletters/{exp.expname.lower()}.expsum", '.')
 
-    exp.parse_expsum()
     return cmd, output
+
+
+def parse_expsumfile(exp):
+    exp.parse_expsum()
 
 
 def get_piletter(exp):
-    """Copies the piletter file from ccs to the current directory.
+    """Copies the piletter file from ccs to the current directory (unless it exists).
     """
-    if os.path.isfile(f"{exp.expname.lower()}.piletter"):
-        print(f"WARNING: {exp.expname.lower()}.piletter is being overwritten.")
-
-    cmd, output = actions.scp(f"jops@ccs:piletters/{exp.expname.lower()}.piletter", '.')
-    return cmd, output
+    if not os.path.isfile(f"{exp.expname.lower()}.piletter"):
+        # print(f"WARNING: {exp.expname.lower()}.piletter is being overwritten.")
+        cmd, output = actions.scp(f"jops@jop83:piletters/{exp.expname.lower()}.piletter", '.')
+        return cmd, output
+    return "#", "PI letter already exists in the current directory."
 
 
 def lis_files_in_ccs(exp):
@@ -111,7 +119,7 @@ def lis_files_in_local(exp):
     """Returns if there are already lis files created in the experiment in the current
     directory.
     """
-    return glob.glob(f"{expname.lower()}*.lis") > 0
+    return len(glob.glob(f"{exp.expname.lower()}*.lis")) > 0
 
 
 def create_lis_files(exp):
@@ -122,7 +130,7 @@ def create_lis_files(exp):
         print(f"WARNING: {eEVNname.lower()}*.lis files in ccs will be overwritten.")
 
     print("Creating lis file...")
-    cmd = f"cd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}")
+    cmd = f"cd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}"
     output = actions.ssh('jops@ccs', cmd)
     return 'ssh jops@ccs:'+cmd, output
 
@@ -160,26 +168,21 @@ def get_files(exp):
     """Retrieves all files from ccs (and piletter dir) that are relevant to the
     experiment. For piletter and .lis files checks if they already exist.
     """
-    files2modify = {'piletter': False, '.lis': False}
     cmd_output = []
-    cmd_output.append(get_visfile(exp))
+    cmd_output.append(get_vixfile(exp))
     cmd_output.append(get_expsumfile(exp))
-    if not os.path.isfile(f"{exp.expname.lower()}.piletter"):
+    exp.existing_piletter = os.path.isfile(f"{exp.expname.lower()}.piletter")
+    if not exp.existing_piletter:
         cmd_output.append(get_piletter(exp))
-        exp.existing_piletter = False
-    else:
-        exp.existing_piletter = True
 
-    if lis_files_in_local(exp):
-        exp.existing_lisfile = True
-    else:
+    exp.existing_lisfile = lis_files_in_local(exp)
+    if not exp.existing_lisfile:
         if not lis_files_in_ccs(exp):
             cmd_output.append(create_lis_files(exp))
 
         cmd_output.append(get_lis_files(exp))
-        exp.existing_lisfile = False
 
-    cmd_output.append(get_visfile(exp))
+    return cmd_output
 
 
 def check_lisfiles(exp):
@@ -192,9 +195,3 @@ def check_lisfiles(exp):
         outputs.append(output)
 
     return cmds, outputs
-
-
-
-
-
-

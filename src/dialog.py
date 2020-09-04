@@ -14,8 +14,9 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-from src import metadata
-from src import actions
+from . import metadata
+from . import actions
+from . import process_eee as eee
 
 import npyscreen as nps
 
@@ -29,6 +30,9 @@ class Choice(Enum):
 def first_dialog(exp):
     """Loads the FirstDialogForm
     """
+    # Needs to run checklis
+    # Also check that there are enough lis files.
+    # And if onebit antenna
     pass
 
 

@@ -17,8 +17,8 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-from src import metadata
-from src import actions
+from . import metadata
+from . import actions
 
 
 def folders(exp):
@@ -35,7 +35,7 @@ def folders(exp):
         os.chdir(expdir)
         print(f"Moved to {expdir}.\n")
 
-    # NOTE: this is a temporary command until the pipeline fully works
+    # TODO: this is a temporary command until the pipeline fully works
     if exp.eEVNname is not None:
         actions.shell_command("create_processing_log.py", \
             [exp.expname, "-e", exp.eEVNname, "-o", "processing_manual.log"])
@@ -58,7 +58,7 @@ def get_passes_from_lisfiles(exp):
     for i,a_lisfile in enumerate(lisfiles):
         with open(a_lisfile, 'r') as lisfile:
             for a_lisline in lisfile.readlines():
-                if '.ms' in a_lisline:
+                if '.ms' in a_lisline: # The header line
                     # there is only one .ms input there
                     msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
                     if thereis_line:
@@ -66,10 +66,17 @@ def get_passes_from_lisfiles(exp):
                             fitsidiname = f"{exp.expname.lower()}_2_1.IDI"
                         else:
                             fitsidiname = f"{exp.expname.lower()}_1_1.IDI"
+
+                        passes.append(metadata.CorrelatorPass(a_lisfile, msname, fitsidiname))
                     else:
                         fitsidiname = f"{exp.expname.lower()}_{i+1}_1.IDI"
+                        passes.append(metadata.CorrelatorPass(a_lisfile, msname, fitsidiname,
+                                                              False))
 
-                    passes.add(metadata.CorrelatorPass(a_lisfile, msname, fitsidiname))
+                    # Replaces the old *.UVF string in the .lis file with the FITS IDI
+                    # file name to generate in this pass.
+                    actions.shell_command('sed', ['-i',
+                            f"'s/{exp.expname.lower()}.ms.UVF/{fitsidiname}/g'", a_lisfile])
 
     exp.passes = passes
 
@@ -107,60 +114,54 @@ def onebit(exp):
     """
     # Sanity check
     ants2correct = set(exp.onebit_antennas).intersection(exp.antennas)
-    cmds, outputs = [], []
     for a_pass in exp.passes:
-        cmd, output = shell_command("scale1bit.py", [a_pass.msfile, ' '.join(ants2correct)])
-        cmds.append(cmd)
-        outputs.append(output)
+        cmd, output = actions.shell_command("scale1bit.py",
+                                            [a_pass.msfile, ' '.join(ants2correct)])
 
-    return cmds, outputs
 
 
 def ysfocus(exp):
-    # All this stuff is irrelevant as ysfocus.py already checks for it.
-    # if ('ys' in exp.antennas) or ('YS' in exp.antennas) or ('Ys' in exp.antennas):
-    #     for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
-    #         actions.shell_command("ysfocus.py", msfile)
-    # else:
-    #     print('\nYebes is not in the array.\n')
-    #
-    # # I keep it separately as Ho is not commonly in EVN observations
-    # if ('ho' in exp.antennas) or ('HO' in exp.antennas) or ('Ho' in exp.antennas):
-    #     print('\nHobart is in the array:\n')
-    #     for msfile in glob.glob(f"{exp.expname.lower()}*.ms"):
-    #         actions.shell_command("ysfocus.py", msfile)
-    #
     for a_pass in exp.passes:
         actions.shell_command("ysfocus.py", a_pass.msfile)
 
-    return True
 
-
-
-def standardplots(exp, do_weights=True):
+def standardplots(exp):
     """Runs the standardplots on the specified experiment using a reference antenna
     and sources to be picked for the auto- and cross-correlations.
     """
     # TODO: to be fully rewritten
     # To run for all correlator passes that will be pipelined.
     # Then once all of them finish, open the plots and ask user.
-    pass
+    refant = exp.ref_antennas[0] if len(exp.ref_antennas) == 1 \
+                              else f"({'|'.join(exp.ref_antennas)})"
+    calsources = ','.join([s.name for s in exp.ref_sources])
+    counter = 0
+    for a_pass in exp.passes:
+        if a_pass.pipeline:
+            counter += 1
+            if counter == 1:
+                actions.shell_command("standardplots",
+                              ["-weight", a_pass.msfile, refant, calsources])
+            else:
+                actions.shell_command("standardplots", [a_pass.msfile, refant, calsources])
+
     # cmd, output = shell_command("standardplots",
-    #                 ["-weight", exp.passes[0].msfile, refant, calsources])
     # # Get all plots done and show them in the best order:
-    # # standardplots = []
-    # # for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
-    # #     standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
-    # standardplots = glob.glob(f"{exp.expname.lower()}*.ps")
-    #
-    # for a_plot in standardplots:
-    #     actions.shell_command("gv", a_plot)
 
 
 def open_standardplot_files(exp):
     """Calls gv to open all plots generated by standardplots.
     """
-    pass
+    standardplots = []
+    for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
+        standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
+    # standardplots = glob.glob(f"{exp.expname.lower()}*.ps")
+
+    try:
+        for a_plot in standardplots:
+            actions.shell_command("gv", a_plot)
+    except Exception as e:
+        print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")
 
 
 def polswap(exp, antennas):
@@ -187,11 +188,6 @@ def ms_operations(exp):
     again if required, runs polswap, stores the info to run PolConvert later.
     Runs flag_weights and finally standardplots if data modifed (no weights).
     """
-    try:
-        open_standardplot_files(exp)
-    except Exception as e:
-        print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")
-        input("\n\033[1mPress enter to continue.\033[0m\n")
     while True:
         options = dialog.standardplots_dialog(exp)
         if options['choice'] is dialog.Choice.ok:

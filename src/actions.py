@@ -7,7 +7,7 @@ import glob
 import functools
 import subprocess
 import logging
-from src import metadata
+from . import metadata
 
 # All command functions return the terminal command that was executed and the output.
 
@@ -272,7 +272,7 @@ def shell_command(command, parameters=None, shell=False):
     #     print(line.decode('utf-8').replace('\n', ''))
     output_lines = []
     while process.poll() is None:
-        out = process.stdout.readline()
+        out = process.stdout.readline().decode('utf-8')
         output_lines.append(out)
         sys.stdout.write(out)
         sys.stdout.flush()

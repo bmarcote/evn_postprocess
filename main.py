@@ -16,10 +16,11 @@ import logging
 import subprocess
 from inspect import signature
 from datetime import datetime
-from src import metadata
-from src import actions
-from src import process_eee as eee
-from src import process_pipe as pipe
+from .src import metadata
+from .src import actions
+from .src import process_ccs as ccs
+from .src import process_eee as eee
+from .src import process_pipe as pipe
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
@@ -60,13 +61,15 @@ If multiple provided, only runs the specified steps.
 #                     'prepipeline', 'pipeline', 'postpipeline', 'letters']
 
 
-all_steps = {'eee_folders': [eee.folders],
-             'showlog': [eee.ccs],
-             'pi_expsum': [actions.get_pi_from_expsum, actions.get_passes_from_lisfiles],
+all_steps = {'eee_folders': [ccs.parse_masterprojects, eee.folders],
+             'showlog': [ccs.get_files],
+             'pi_expsum': [ccs.parse_expsumfile, eee.get_passes_from_lisfiles],
+             'checklis' : [dialog.first_dialog], # It also checks checklis, no passes/lis files
              'j2ms2': [eee.getdata, eee.j2ms2, eee.onebit],
-             'MSmetadata': [actions.append_freq_setup_from_ms_to_exp],
-             'standardplots': [eee.standardplots],
-             'MSoperations': [eee.MSoperations],
+             # 'MSmetadata': [actions.append_freq_setup_from_ms_to_exp],  # REQUIRED?
+             # for each corrpass run pass.freqsetup(channels, frequencies, bandwidths)
+             'standardplots': [eee.standardplots, eee.open_standardplot_files],
+             'MSoperations': [eee.ms_operations],
              'tConvert': [eee.tConvert, eee.polConvert],
              'archive': [eee.letters, eee.archive],
              'pipe_folders': [None], # [pipe.folders],
@@ -96,13 +99,11 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-
     # Gets the steps that need to be executed
     if args.steps is None:
         args.steps = all_steps
     else:
         args.steps = actions.parse_steps(args.steps, all_steps, wild_steps=wild_steps)
-
 
     # # TODO: Logger. To remove? Better implemantation?
     log_cmd = logging.getLogger('Executed commands')
@@ -112,15 +113,18 @@ if __name__ == '__main__':
     # log_cmd_file.setFormatter(logging.Formatter('\n\n%(message)s\n'))
     # log_cmd.addHandler(log_cmd_file)
     # # log_cmd.addHandler(log_cmd_stdout)
-
     log_full = logging.getLogger('Commands full log')
     log_full.setLevel(logging.ERROR)
     # log_full_file = logging.FileHandler('./full_log_output.log')
     # log_full.addHandler(log_full_file)
 
-
     # It creates the experiment object
-    exp = metadata.Experiment(args.expname)
+    exp = metadata.Experiment(args.expname, args.supsci)
+    if args.calsources is not None:
+        exp.ref_sources = args.calsources.split(',')
+
+    if args.onebit is not None:
+        exp.onebit_antennas = args.onebit.split(',')
 
     actions.write_to_log("\n" + "#"*82 + "\n")
     actions.write_to_log(f"Processing experiment {exp.expname}.\n")
