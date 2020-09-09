@@ -10,9 +10,11 @@ import glob
 import string
 import random
 import argparse
+from textwrap import wrap
 import configparser
 import logging
 import subprocess
+from enum import Enum
 from datetime import datetime
 from . import metadata
 from . import actions
@@ -27,13 +29,63 @@ class Choice(Enum):
     repeat = 2
 
 
+
+class FirstForm(nps.ActionForm):
+    def __init__(self, exp, *args, **kwargs):
+        self.exp = exp
+        super().__init__(*args, **kwargs)
+
+    def create(self):
+        x,y = self.useable_space()
+        # print(x)
+        all_ants = ', '.join([s.capitalize() for s in self.exp.antennas])
+        self.add(nps.BoxTitle, name="Scheduled antennas",
+                 values=wrap(all_ants, 40), editable=False, max_height=6, max_width=40)
+                 # value=', '.join([s.capitalize() for s in self.exp.antennas]), editable=False)
+        self.ref_ant = self.add(nps.TitleText, name="Ref. ant:", value='(ant code)')
+        # self.nextrely += 1  # To get more space between widgets
+        self.onebit = self.add(nps.TitleText, name="1-bit ant?:", value='(ant code)?')
+        # sources = set()
+        # type_sour = {metadata.SourceType.target: 't', metadata.SourceType.calibrator: 'c',
+        #              metadata.SourceType.fringefinder: 'ff', metadata.SourceType.other: 'o'}
+        # for a_pass in self.exp.passes:
+        #     for a_sour in a_pass.sources:
+        #         sources.add(f"{a_sour.name} ({type_sour[a_sour.type]})")
+        self.cal_sources = self.add(nps.TitleMultiSelect, name='Cals. to plot',
+            values=[s.name for s in self.exp.sources])
+            # value=arange(len(self.exp.sources))[True if s.type == metadata.SourceType.fringefinder else False for s in self.exp.sources], max_width=x//2))
+        self.passes = self.add(nps.TitleMultiSelect, name='Passes to pipeline', values=[p.lisfile.replace(self.exp.expname.lower(), '').replace('.lis', '') for p in self.exp.passes], value=arange(len(self.exp.passes))[p.pipeline for p in self.exp.passes])
+
+        # self.add(nps.BoxTitle, name="Output", relx=x//2, max_width=x//2, values="Text...", editable=False)
+        # self.add()
+        # self.nextrely += 1  # To get more space between widgets
+        # self.add()
+
+    def afterEditing(self):
+        self.parentApp.setNextForm(None)
+
+
+class FirstDialog(nps.NPSAppManaged):
+    def __init__(self, exp, *args, **kwargs):
+        self.exp = exp
+        super().__init__(*args, **kwargs)
+
+    def onStart(self):
+        self.addForm('MAIN', FirstForm, self.exp,
+             name=f"Process of {self.exp.expname.upper()} --- {self.exp.obsdate} --- "
+                  f"{self.exp.obsdatetime.strftime('%d %b %Y (%j)')}")
+
+
+
 def first_dialog(exp):
     """Loads the FirstDialogForm
     """
     # Needs to run checklis
     # Also check that there are enough lis files.
     # And if onebit antenna
-    pass
+    first_form = FirstDialog(exp).run()
+
+
 
 
 def warning_dialog(exp, textbody):

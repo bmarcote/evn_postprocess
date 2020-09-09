@@ -516,25 +516,26 @@ class Experiment(object):
                     # Line with src = NAME, type = TYPE (something), use = PROTECTED (something)
                     srcname, srctype, srcprot = a_line.split(',')
                     srcname = srcname.split('=')[1].strip()
-                    srctype = srctype.split('=')[1].split('(')[0].strip()
-                    srcprot = srcprot.split('=')[1].split('(')[0].strip()
-                    if srctype == 'target':
-                        srctype = SourceType.target
-                    elif srctype == 'reference':
-                        srctype = SourceType.calibrator
-                    elif srctype == 'fringefinder':
-                        srctype = SourceType.fringefinder
-                    else:
-                        srctype = SourceType.other
+                    if srcname not in [s.name for s in sources]:
+                        srctype = srctype.split('=')[1].split('(')[0].strip()
+                        srcprot = srcprot.split('=')[1].split('(')[0].strip()
+                        if srctype == 'target':
+                            srctype = SourceType.target
+                        elif srctype == 'reference':
+                            srctype = SourceType.calibrator
+                        elif srctype == 'fringefinder':
+                            srctype = SourceType.fringefinder
+                        else:
+                            srctype = SourceType.other
 
-                    if srcprot == 'YES':
-                        srcprot = False
-                    elif srcprot == 'NO':
-                        srcprot = True
-                    else:
-                        raise ValueError(f"Unknown 'use' value ({srcprot}) found in the expsum.")
+                        if srcprot == 'YES':
+                            srcprot = False
+                        elif srcprot == 'NO':
+                            srcprot = True
+                        else:
+                            raise ValueError(f"Unknown 'use' value ({srcprot}) found in the expsum.")
 
-                    sources.append(Source(srcname, srctype, srcprot))
+                        sources.append(Source(srcname, srctype, srcprot))
 
         self.sources = sources
 
