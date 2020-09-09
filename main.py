@@ -66,7 +66,7 @@ all_steps = {'eee_folders': [ccs.parse_masterprojects, eee.folders],
              'pi_expsum': [ccs.parse_expsumfile, eee.get_passes_from_lisfiles],
              'checklis' : [dialog.first_dialog], # It also checks checklis, no passes/lis files
              'j2ms2': [eee.getdata, eee.j2ms2, eee.onebit],
-             # 'MSmetadata': [actions.append_freq_setup_from_ms_to_exp],  # REQUIRED?
+             'MSmetadata': [actions.append_freq_setup_from_ms_to_exp],  # REQUIRED?
              # for each corrpass run pass.freqsetup(channels, frequencies, bandwidths)
              'standardplots': [eee.standardplots, eee.open_standardplot_files],
              'MSoperations': [eee.ms_operations],
