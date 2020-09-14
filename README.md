@@ -41,31 +41,19 @@ To summarize them, this pipeline will (for a given EVN experiment):
 
 ## Feature requests
 
-- [ ] When multiple values are requested, do it in a CLI form approach:
-      ----------------------
-      |____________________|
-      |                    |
-      | Introduce...:      |
-      | [ ] Swap pols      |
-      | [ ] Pol convert    |
-      | ___ Weight cut     |
-      | ...                |
-      |                    |
-      |                    |
-      |                    |
-      |                    |
-      ----------------------
-- [ ] Get flag_weight.py output and store it in the metadata.
-- [ ] Modify PI letter to include flag_weight.py output and cut experiment name.
+- [ ] When aborting, raise an Exception and then in main store the {exp} obj.
+- [X] Get flag_weight.py output and store it in the metadata.
+- [X] Modify PI letter to include flag_weight.py output and cut experiment name.
+- [ ] Modify PI letter with non-observing stations comment (e.g. "OUT")
 - [ ] Parallelize when multiple MS available (for j2ms2, tConvert).
 - [ ] Make standardplots smarter (both in processing & jplotter).
-- [ ] tConvert: if IDI exists, remove them.
-- [ ] Include IDI output names in the .lis file.
+- [X] tConvert: if IDI exists, remove them.
+- [X] Include IDI output names in the .lis file.
 - [ ] "-h" formatting.
-- [ ] No credentials for NME.
+- [X] No credentials for NME.
 - [ ] If different FREQ IDs. Does it work properly?
 - [ ] Create checklist.
-- [ ] Retrieve calibrators/targets from .expsum.
+- [X] Retrieve calibrators/targets from .expsum.
 - [ ] (Maybe independent program): check stations with empty .uvflgfs files and append the flags from SCHED.
 - [ ] Add spectral line EVN Pipeline support (under `$IN/immer/script/EVN_line.py`).
 - [ ] --nogui Option in the command line to not show e.g. standardplots or other visual tasks if any.

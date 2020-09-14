@@ -74,14 +74,17 @@ Experiment
     - antennas : list of str
     - ref_antennas : list of str
     - onebit_antennas : list of str
+    - polswap_antennas : list of str
     - polconvert_antennas : list of str
+    - flagged_weights : FlagWeights or None
     - sources : list of Source   (taken from the expsum file)
-    - ref_sources : list of Source   (for standardplots)
+    - ref_sources : list of str
     - correlator_passes : int
     - passes : list of CorrelatorPass
     - credentials : Credentials
     - existing_piletter : bool  (from before postprocessing)
     - existing_lisfile  : bool  (from before postprocessing)
+    - stored_outputs : dict    # key with the name of functions (checklis, flag_weights,..)
     + __init__(expname)
     + add_pass(a_new_pass : CorrelatorPass)
     + set_credentials(username, password)
@@ -89,9 +92,17 @@ Experiment
     + parse_expsum()
 
 
+FlagWeight
+    - threshold : float
+    - percentage : float  [-1 is not set]
+
 ## actions.py
 
 ~~several functions for IO that will be overwritten~~
++ ask_user(text, valtype=str, accepted_values=None)
++ yes_or_no_question(text)
++ can_continue(text)
+~~  ~~
 
 + scp(originpath, destpath)  --> exec_command, outputcode
 + ssh(computer, commands)  --> exec_command, output
@@ -101,6 +112,8 @@ Experiment
 + split_lis_cont_line(fulllisfile)
 + update_pipelinable_passes(exp, pipelinable : lis[bool] or dict{lisfile:bool})
 + station_1bit_in_vix(vexfile) --> bool
++ extract_tail_standardplots_output(stdplt_output) --> str
++ archive(flag, experiment, rest_parameters)
 
 
 + end_program(exp)
