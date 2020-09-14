@@ -240,7 +240,7 @@ class AfterPlotsForm(nps.ActionFormV2):
         # TODO: add a widget with no data from the following antennas:
         self.add(nps.BoxTitle, name="MS operations", max_height=5, editable=False,
                  values=wrap("Select in case of changes are required to apply to the dataset.", x - 8))
-        self.flagweights = self.add(nps.Slider, name="Flag weights",
+        self.flagweights = self.add(nps.TitleSlider, name="Flag weights",
                                out_of=1.0, step=0.05, lowest=0.0, value=0.9)
         self.polswap = self.add(nps.TitleMultiSelect, name="Swapping pols:", max_height=5,
                                max_width=(x // 2), values=self.exp.antennas, value=[], scroll_exit=True)
