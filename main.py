@@ -16,17 +16,18 @@ import logging
 import subprocess
 from inspect import signature
 from datetime import datetime
-from .src import metadata
-from .src import actions
-from .src import process_ccs as ccs
-from .src import process_eee as eee
-from .src import process_pipe as pipe
+from evn_postprocess.src import metadata
+from evn_postprocess.src import actions
+from evn_postprocess.src import dialog
+from evn_postprocess.src import process_ccs as ccs
+from evn_postprocess.src import process_eee as eee
+from evn_postprocess.src import process_pipe as pipe
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
 __version__ = 0.5
 __prog__ = 'evn_postprocess.py'
-usage = "%(prog)s [-h]  <experiment_name>  <support_scientist>  <refant>\n"
+usage = "%(prog)s [-h]  <experiment_name>  <support_scientist>\n"
 description = """Post-processing of EVN experiments.
 The program runs the full post-process for a correlated EVN experiment, from retrieving the correlated products to run the EVN pipeline following the steps described in the EVN Post-Processing Guide (see the JIVE Wiki: http://www.jive.nl/jivewiki/doku.php?id=evn:supportscientists).
 
@@ -61,17 +62,17 @@ If multiple provided, only runs the specified steps.
 #                     'prepipeline', 'pipeline', 'postpipeline', 'letters']
 
 
-all_steps = {'eee_folders': [ccs.parse_masterprojects, eee.folders],
-             'showlog': [ccs.get_files],
+all_steps = {'eee_folders': [ccs.parse_masterprojects, eee.folders, eee.set_credentials_pipelet],
+             'showlog': [ccs.get_files, ccs.check_lisfiles],
              'pi_expsum': [ccs.parse_expsumfile, eee.get_passes_from_lisfiles],
-             'checklis' : [dialog.first_dialog], # It also checks checklis, no passes/lis files
+             'checklis' : [dialog.first_dialog],
              'j2ms2': [eee.getdata, eee.j2ms2, eee.onebit],
-             # 'MSmetadata': [actions.append_freq_setup_from_ms_to_exp],  # REQUIRED?
+             'MSmetadata': [eee.get_setup_from_ms],
              # for each corrpass run pass.freqsetup(channels, frequencies, bandwidths)
-             'standardplots': [eee.standardplots, eee.open_standardplot_files],
+             'standardplots': [eee.standardplots, eee.open_standardplot_files, dialog.standardplots_dialog],
              'MSoperations': [eee.ms_operations],
              'tConvert': [eee.tConvert, eee.polConvert],
-             'archive': [eee.letters, eee.archive],
+             'archive': [eee.archive],
              'pipe_folders': [None], # [pipe.folders],
              'prepipeline': [None], # pipe.pre_pipeline
              'pipeline': [None], # pipe.pipeline
@@ -89,7 +90,7 @@ if __name__ == '__main__':
                                     formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('expname', type=str, help='Name of the EVN experiment.')
     parser.add_argument('supsci', type=str, help='Surname of EVN Support Scientist.')
-    parser.add_argument('refant', type=str, help='Reference antenna.')
+    parser.add_argument('-r', '--refant', type=str, default=None, help='Reference antenna.')
     parser.add_argument('-s', '--calsources', type=str, default=None, help=help_calsources)
     parser.add_argument('--onebit', type=str, default=None,
                          help='Antennas recording at 1 bit (comma-separated)')
@@ -120,16 +121,20 @@ if __name__ == '__main__':
 
     # It creates the experiment object
     exp = metadata.Experiment(args.expname, args.supsci)
+    if args.refant is not None:
+        exp.ref_antennas = args.refant.split(',')
+
     if args.calsources is not None:
         exp.ref_sources = args.calsources.split(',')
 
     if args.onebit is not None:
         exp.onebit_antennas = args.onebit.split(',')
 
-    actions.write_to_log("\n" + "#"*82 + "\n")
-    actions.write_to_log(f"Processing experiment {exp.expname}.\n")
-    actions.write_to_log(f"Observation Date: {exp.obsdatetime.strftime('%d %b %Y')} -- {exp.obsdatetime.strftime('%y%m%d')}.")
-    actions.write_to_log(f"Current Date: {datetime.today().strftime('%d %b %Y %H:%M')}.\n")
+    actions.write_to_log("\n" + f"{'#'*82}\n"*3)
+    actions.write_to_log(f"Processing experiment {exp.expname} on {datetime.today().strftime('%d %b %Y %H:%M')}.\n")
+    # TODO: Add this line somewhere in the processing. Here it doesn't work because exp properties are
+    # not set yet!
+    # actions.write_to_log(f"Observation Date: {exp.obsdatetime.strftime('%d %b %Y')} -- {exp.obsdatetime.strftime('%y%m%d')}.")
 
     # TODO: Should make a check that all required computers are accessible!
     # actions.check_systems_up()

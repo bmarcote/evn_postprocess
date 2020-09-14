@@ -59,7 +59,9 @@ def parse_masterprojects(exp):
         raise ValueError(f"{exp.expname} not found in (ccs) MASTER_PROJECTS.LIS" \
                          + "or connection problem.")
 
+    actions.write_to_log(f"Observation Date: {exp.obsdatetime.strftime('%d %b %Y')} -- {exp.obsdatetime.strftime('%y%m%d')}.")
     if exp.eEVNname is not None:
+        actions.write_to_log(f"Experiment performed within the e-EVN run {exp.eEVNname}.")
         return cmd, ' '.join([exp.obsdate, exp.expname, exp.eEVNname])
     else:
         return cmd, ' '.join([exp.obsdate, exp.expname])
@@ -188,10 +190,15 @@ def get_files(exp):
 def check_lisfiles(exp):
     """Check the existing .lis files to spot possible issues.
     """
-    cmds, outputs = [], []
+    outputs = []
     for a_lis in glob.glob("*.lis"):
         cmd, output = actions.shell_command("checklis.py", a_lis)
-        cmds.append(cmd)
-        outputs.append(output)
+        # cmds.append(cmd)
+        outputs.append(f"{a_lis}\n{output[0]}")
 
-    return cmds, outputs
+    exp.stored_outputs = {'checklis': '\n'.join(outputs)}
+
+
+
+
+

@@ -33,6 +33,43 @@ class Credentials(object):
         self._password = password
 
 
+class FlagWeight(object):
+    """Store the results of flagweight.py. Contains two properties:
+    - threshold : float
+        Threshold value set to flag visibilities with a weight below that value.
+    - percentage : float
+        Percentage of (non-zero) visibilities that were flagged.
+        -1 value if not known.
+    """
+    @property
+    def threshold(self):
+        """Threshold value set to flag visibilities with a weight below such value
+        when using flag_weight.py.
+        """
+        return self._th
+
+    @threshold.setter
+    def threshold(self, value):
+        self._th = value
+
+    @property
+    def percentage(self):
+        """Percentage of (non-zero) visibilities that have been flagged when running
+        flag_weights.py. A value of -1 means that the amount is not known (e.g. the
+        script has not been executed yet).
+        """
+        return self._pc
+
+    @percentage.setter
+    def percentage(self, value):
+        self._pc = value
+
+
+    def __init__(self, threshold, percentage=-1):
+        self.threshold = threshold
+        self.percentage = percentage
+
+
 class SourceType(Enum):
     target = 0
     calibrator = 1
@@ -302,6 +339,17 @@ class Experiment(object):
     def ref_antennas(self, new_ref_antennas):
         self._ref_antennas = tuple(new_ref_antennas)
 
+
+    @property
+    def polswap_antennas(self):
+        """List of antennas that require running polswap.
+        """
+        return self._polswap_antennas
+
+    @polswap_antennas.setter
+    def polswap_antennas(self, new_list_antennas):
+        self._polswap_antennas = tuple(new_list_antennas)
+
     @property
     def polconvert_antennas(self):
         """List of antennas that require running PolConvert.
@@ -311,6 +359,15 @@ class Experiment(object):
     @polconvert_antennas.setter
     def polconvert_antennas(self, new_list_antennas):
         self._polconvert_antennas = tuple(new_list_antennas)
+
+    @property
+    def flagged_weights(self):
+        return self._flagged_weights
+
+    @flagged_weights.setter
+    def flagged_weights(self, flagweight):
+        assert isinstance(flagweight, FlagWeight)
+        self._flagged_weights = flagweight
 
     @property
     def sources(self):
@@ -334,7 +391,9 @@ class Experiment(object):
     def ref_sources(self, new_ref_sources):
         """List of sources to be used for standardplots.
         """
-        self._ref_sources = list(new_ref_sources)
+        if isinstance(new_ref_sources, str):
+            self._ref_sources = (new_ref_sources, )
+        self._ref_sources = tuple(new_ref_sources)
 
     @property
     def correlator_passes(self):
@@ -423,6 +482,18 @@ class Experiment(object):
     #     for a_new_key in new_dict:
     #         self._operations[a_new_key] = new_dict[a_new_key]
 
+    @property
+    def stored_outputs(self):
+        """Dictionary with the output messages from some useful tasks.
+        """
+        return self._outputs
+
+    @stored_outputs.setter
+    def stored_outputs(self, new_output):
+        assert isinstance(new_output, dict)
+        for a_key in new_output:
+            self._outputs[a_key] = new_output[a_key]
+
 
     def __init__(self, expname, support_scientist):
         """Initializes an EVN experiment with the given name.
@@ -444,12 +515,15 @@ class Experiment(object):
         self._antennas = ()
         self._ref_antennas = ()
         self._onebit_antennas = ()
+        self._polswap_antennas = ()
         self._polconvert_antennas = ()
+        self._flagged_weight = None
         self._sources = None
         self._ref_sources = None
         self._credentials = Credentials(None, None)
         self._number_passes = None
         self._passes = []
+        self._outputs = dict()
 
 
     def get_setup_from_ms(self):
@@ -460,7 +534,7 @@ class Experiment(object):
             try:
                 with pt.table(a_pass.msfile, readonly=True, ack=False) as ms:
                     with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
-                        self.antennas = [ant.upper() for ant in ms_ant.getcol('NAME')]
+                        self.antennas = (ant for ant in ms_ant.getcol('NAME'))
 
                     with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
                         a_pass.sources = ms_field.getcol('NAME')
@@ -510,31 +584,34 @@ class Experiment(object):
                         self.piname = [self.piname, name]
                         self.email = [self.email, email]
 
+                elif 'scheduled telescopes' in a_line:
+                    self.antennas = a_line.split(':')[1].split()
                 elif 'correlator passes' in a_line:
                     self.correlator_passes = int(a_line.split()[0])
                 elif 'src = ' in a_line:
                     # Line with src = NAME, type = TYPE (something), use = PROTECTED (something)
                     srcname, srctype, srcprot = a_line.split(',')
                     srcname = srcname.split('=')[1].strip()
-                    srctype = srctype.split('=')[1].split('(')[0].strip()
-                    srcprot = srcprot.split('=')[1].split('(')[0].strip()
-                    if srctype == 'target':
-                        srctype = SourceType.target
-                    elif srctype == 'reference':
-                        srctype = SourceType.calibrator
-                    elif srctype == 'fringefinder':
-                        srctype = SourceType.fringefinder
-                    else:
-                        srctype = SourceType.other
+                    if srcname not in [s.name for s in sources]:
+                        srctype = srctype.split('=')[1].split('(')[0].strip()
+                        srcprot = srcprot.split('=')[1].split('(')[0].strip()
+                        if srctype == 'target':
+                            srctype = SourceType.target
+                        elif srctype == 'reference':
+                            srctype = SourceType.calibrator
+                        elif srctype == 'fringefinder':
+                            srctype = SourceType.fringefinder
+                        else:
+                            srctype = SourceType.other
 
-                    if srcprot == 'YES':
-                        srcprot = False
-                    elif srcprot == 'NO':
-                        srcprot = True
-                    else:
-                        raise ValueError(f"Unknown 'use' value ({srcprot}) found in the expsum.")
+                        if srcprot == 'YES':
+                            srcprot = False
+                        elif srcprot == 'NO':
+                            srcprot = True
+                        else:
+                            raise ValueError(f"Unknown 'use' value ({srcprot}) found in the expsum.")
 
-                    sources.append(Source(srcname, srctype, srcprot))
+                        sources.append(Source(srcname, srctype, srcprot))
 
         self.sources = sources
 
