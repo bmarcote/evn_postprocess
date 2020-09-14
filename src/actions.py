@@ -12,7 +12,12 @@ from . import metadata
 # All command functions return the terminal command that was executed and the output.
 
 header_comment_log = lambda command : "\n{0}\n{0}\n>>>>> {1}\n".format('#'*82, command)
+
+
 commands_output_to_show = ["checklis.py", "flag_weights.py", "standardplots", "archive"]
+commands_output_to_show = []
+
+
 # TODO: Add pipeline output and cat the last rows only.
 
 
@@ -61,8 +66,8 @@ def decorator_log(func):
                         output_func = [[output_func[0],], [output_func[1],]]
 
                     for a_cmd, an_output in zip(*output_func):
-                        logger1.info(f"\n{a_cmd}")
-                        file1.write(f"\n{a_cmd}")
+                        logger1.info(f"\n> {a_cmd}")
+                        file1.write(f"\n> {a_cmd}\n")
                         # If this is one of the wild commands where the output should be shown, show it!
                         for a_wild_command in commands_output_to_show:
                             if a_wild_command in a_cmd:
@@ -81,7 +86,7 @@ def decorator_log(func):
                         logger2.info(an_output)
                         file2.write(header_comment_log(a_cmd))
                         if isinstance(an_output, list):
-                            file2.write(' '.join(an_output)+ '\n')
+                            file2.write(' '.join(an_output)) # I JUST REMOVE A +'\n'... it should be fine now
                         else:
                             file2.write(str(an_output))
             else:
@@ -408,7 +413,7 @@ def extract_tail_standardplots_output(stdplt_output):
             last_lines.append(a_line)
         else:
             # We are already done
-            return '\n'.join(last_lines[::-1])
+            return ''.join(last_lines[::-1])
 
     # Just in case something went unexpected...
     return '\n'.join(last_lines[::-1])
