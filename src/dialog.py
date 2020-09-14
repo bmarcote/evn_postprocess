@@ -33,9 +33,9 @@ class Choice(Enum):
 
 class PopUp(nps.utilNotify.ConfirmCancelPopup):
     def __init__(self, ok_label, cancel_label, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.OK_BUTTON_TEXT = ok_label
         self.CANCEL_BUTTON_TEXT = cancel_label
+        super().__init__(*args, **kwargs)
 
 
 def notify_popup(message, title="Message", form_color='STANDOUT', wrap=True, editw=0, ok_label='OK',
@@ -61,8 +61,8 @@ class FirstForm(nps.ActionFormV2):
     CANCEL_BUTTON_BR_OFFSET = (2, 17)
 
     def __init__(self, exp, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.exp = exp
+        super().__init__(*args, **kwargs)
 
     def create(self):
         y, x = self.useable_space()
