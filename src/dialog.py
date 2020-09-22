@@ -46,7 +46,7 @@ def notify_popup(message, title="Message", form_color='STANDOUT', wrap=True, edi
     message = nps.utilNotify._prepare_message(message)
     curses.initscr()
     F = PopUp(ok_label=ok_label, cancel_label=cancel_label, name=title, color=form_color)
-    F.preserve_selected_widget = True
+    F.preserve_selected_widget = False # True
     mlw = F.add(nps.wgmultiline.Pager,)
     mlw_width = mlw.width - 1
     if wrap:
@@ -55,6 +55,8 @@ def notify_popup(message, title="Message", form_color='STANDOUT', wrap=True, edi
     mlw.values = message
     F.editw = editw
     F.edit()
+    curses.initscr()
+    curses.flushinp()
     return F.value
 
 
@@ -307,13 +309,13 @@ def standardplots_dialog(exp):
     Otherwise it allows to re-run standardplots with an updated list
     of ref-antennas and cal. sources.
     """
-    message = "Take a look at the standardplots (open the iles manually if they did not open). "
+    message = "Take a look at the standardplots (open the iles manually if they did not open). " \
               "Do you want to repeat standardplots or continue with the post-processing?"
     while not notify_popup(message, title=f"{exp.expname} -- Question", form_color='STANDOUT', wrap=True,
                                                    editw=0, ok_label='Continue', cancel_label='Repeat'):
-        redoplots_diaog(exp)
+        redoplots_dialog(exp)
         eee.standardplots(exp)
-        open_standardplot_files(exp)
+        eee.open_standardplot_files(exp)
 
 
 
