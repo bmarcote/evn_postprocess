@@ -37,6 +37,7 @@ The user can also specify to run only some of the steps or to start the process 
 The available steps are:
 
     - showlog : produces a .lis file in @ccs and copies them to @eee.
+    - checklis : checks the existing lis files and asks the user some parameters to continue.
     - j2ms2 : gets the data for all available .lis files and runs j2ms2 to produce MS files.
               Runs scale 1 bit if necessary.
     - standardplots : runs standardplots.
@@ -63,9 +64,9 @@ If multiple provided, only runs the specified steps.
 
 
 all_steps = {'eee_folders': [ccs.parse_masterprojects, eee.folders, eee.set_credentials_pipelet],
-             'showlog': [ccs.get_files, ccs.check_lisfiles],
+             'showlog': [ccs.get_files],
              'pi_expsum': [ccs.parse_expsumfile, eee.get_passes_from_lisfiles],
-             'checklis' : [dialog.first_dialog],
+             'checklis' : [ccs.check_lisfiles, dialog.first_dialog],
              'j2ms2': [eee.getdata, eee.j2ms2, eee.onebit],
              'MSmetadata': [eee.get_setup_from_ms],
              # for each corrpass run pass.freqsetup(channels, frequencies, bandwidths)

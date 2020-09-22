@@ -145,7 +145,7 @@ def standardplots(exp):
         input("After checking this issue in another terminal, press any key.")
     # cmd, output = shell_command("standardplots",
     # # Get all plots done and show them in the best order:
-    exp.stored_outputs = {'standardplots': actions.extract_tail_standardplots(output[0])}
+    exp.stored_outputs = {'standardplots': actions.extract_tail_standardplots_output(output[0])}
 
 
 def standardplots_nostore(exp, do_weights=False):
