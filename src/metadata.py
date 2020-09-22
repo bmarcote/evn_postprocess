@@ -519,7 +519,7 @@ class Experiment(object):
         self._polconvert_antennas = ()
         self._flagged_weight = None
         self._sources = None
-        self._ref_sources = None
+        self._ref_sources = ()
         self._credentials = Credentials(None, None)
         self._number_passes = None
         self._passes = []

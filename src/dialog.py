@@ -33,9 +33,12 @@ class Choice(Enum):
 
 class PopUp(nps.utilNotify.ConfirmCancelPopup):
     def __init__(self, ok_label, cancel_label, *args, **kwargs):
+        # TODO: I had the first lines but it did not work. Check if with later it works
         self.OK_BUTTON_TEXT = ok_label
         self.CANCEL_BUTTON_TEXT = cancel_label
         super().__init__(*args, **kwargs)
+        self.OK_BUTTON_TEXT = ok_label
+        self.CANCEL_BUTTON_TEXT = cancel_label
 
 
 def notify_popup(message, title="Message", form_color='STANDOUT', wrap=True, editw=0, ok_label='OK',
@@ -74,9 +77,15 @@ class FirstForm(nps.ActionFormV2):
                                 if self.exp.antennas[i] in self.exp.ref_antennas], scroll_exit=True)
         self.onebit = self.add(nps.TitleMultiSelect, name="1-bit antenna(s)?:", max_width=x // 2, max_height=4,
                                values=self.exp.antennas, value=[], scroll_exit=True)
-        self.cal_sources = self.add(nps.TitleMultiSelect, name='Sources for Plotting:',
-            values=[s.name for s in self.exp.sources], scroll_exit=True, max_height=6, max_width=x // 2,
-            value=np.arange(len(self.exp.sources))[[True if s.type == metadata.SourceType.fringefinder else False for s in self.exp.sources]])
+        if len(self.exp.ref_sources) > 0:
+            self.cal_sources = self.add(nps.TitleMultiSelect, name='Sources for Plotting:',
+                values=[s.name for s in self.exp.sources], scroll_exit=True, max_height=6, max_width=x // 2,
+                value=[[s.name for s in self.exp.sources].index(r) for r in self.exp.ref_sources])
+        else:
+            self.cal_sources = self.add(nps.TitleMultiSelect, name='Sources for Plotting:',
+                values=[s.name for s in self.exp.sources], scroll_exit=True, max_height=6, max_width=x // 2,
+                value=list(np.arange(len(self.exp.sources))[[True if (s.type == metadata.SourceType.fringefinder) else False for s in self.exp.sources]]))
+            # value=np.arange(len(self.exp.sources))[[True if ((s.type == metadata.SourceType.fringefinder) or (s.name in self.exp.ref_sources)) else False for s in self.exp.sources]])
         # self.nextrely += 1  # To get more space between widgets
         self.passes = self.add(nps.TitleMultiSelect, name='Passes to pipeline', max_width=x // 2, max_height=4,
             values=[p.lisfile.replace(self.exp.expname.lower(), '').replace('.lis', '') if p.lisfile != f"{self.exp.expname.lower()}.lis" else p.lisfile for p in self.exp.passes],
@@ -89,7 +98,7 @@ class FirstForm(nps.ActionFormV2):
         if 'checklis' in self.exp.stored_outputs:
             msg += ['> checklis', *self.exp.stored_outputs['checklis'].split('\n')]
             if len(self.exp.stored_outputs['checklis'].split('\n')) > 2:
-                msg += ['CORRECT LIS FILE BEFORE CONTINUE IF NEEDED.']
+                msg += ['\n\n**CORRECT LIS FILE BEFORE CONTINUE IF NEEDED.**\n\n']
 
         if actions.station_1bit_in_vix(f"{self.exp.expname.upper()}.vix"):
             msg += ['WARNING: There may be a 1-bit station.']
@@ -120,7 +129,7 @@ class FirstForm(nps.ActionFormV2):
         self.parentApp.setNextForm(None)
         self.parentApp.switchForm(None)
         self.exp.ref_antennas = (self.exp.antennas[i] for i in self.ref_ant.value)
-        self.exp.ref_sources = (self.exp.sources[int(i)].name for i in self.cal_sources.value)
+        self.exp.ref_sources = [self.exp.sources[i].name for i in self.cal_sources.value]
         self.exp.onebit_antennas = (self.exp.antennas[i] for i in self.onebit.value)
 
 
@@ -298,7 +307,8 @@ def standardplots_dialog(exp):
     Otherwise it allows to re-run standardplots with an updated list
     of ref-antennas and cal. sources.
     """
-    message = "Do you want to repeat standardplots or continue with the post-processing?"
+    message = "Take a look at the standardplots (open the iles manually if they did not open). "
+              "Do you want to repeat standardplots or continue with the post-processing?"
     while not notify_popup(message, title=f"{exp.expname} -- Question", form_color='STANDOUT', wrap=True,
                                                    editw=0, ok_label='Continue', cancel_label='Repeat'):
         redoplots_diaog(exp)
