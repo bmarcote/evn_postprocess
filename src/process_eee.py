@@ -79,7 +79,7 @@ def get_passes_from_lisfiles(exp):
                     # file name to generate in this pass.
                     if '.UVF' in a_lisline:
                         actions.shell_command('sed', ['-i',
-                            f"'s/{exp.expname.lower()}.ms.UVF/{fitsidiname}/g'", a_lisfile])
+                            f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile])
 
     exp.passes = passes
 
