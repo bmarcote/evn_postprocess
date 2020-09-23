@@ -100,7 +100,7 @@ class FirstForm(nps.ActionFormV2):
         if 'checklis' in self.exp.stored_outputs:
             msg += ['> checklis', *self.exp.stored_outputs['checklis'].split('\n')]
             if len(self.exp.stored_outputs['checklis'].split('\n')) > 2:
-                msg += ['\n\n**CORRECT LIS FILE BEFORE CONTINUE IF NEEDED.**\n\n']
+                msg += ['', '', '\n\n**CORRECT LIS FILE BEFORE CONTINUE IF NEEDED.**\n\n', '']
 
         if actions.station_1bit_in_vix(f"{self.exp.expname.upper()}.vix"):
             msg += ['WARNING: There may be a 1-bit station.']
@@ -266,7 +266,7 @@ class AfterPlotsForm(nps.ActionFormV2):
     def on_ok(self):
         self.parentApp.setNextForm(None)
         self.parentApp.switchForm(None)
-        self.exp.flagged_weights = metadata.FlagWeight(self.flagweights.value)
+        self.exp.flagged_weights = metadata.FlagWeight(threshold=self.flagweights.value)
         self.exp.polswap_antennas = (self.exp.antennas[i] for i in self.polswap.value)
         self.exp.polconv_antennas = (self.exp.antennas[i] for i in self.polconv.value)
 
@@ -309,7 +309,7 @@ def standardplots_dialog(exp):
     Otherwise it allows to re-run standardplots with an updated list
     of ref-antennas and cal. sources.
     """
-    message = "Take a look at the standardplots (open the iles manually if they did not open). " \
+    message = "Take a look at the standardplots (open the files manually if they did not open).\n " \
               "Do you want to repeat standardplots or continue with the post-processing?"
     while not notify_popup(message, title=f"{exp.expname} -- Question", form_color='STANDOUT', wrap=True,
                                                    editw=0, ok_label='Continue', cancel_label='Repeat'):
@@ -327,12 +327,15 @@ def warning_dialog(message, title):
     Returns a bool with the choice.
     """
     nps.notify_confirm(message, title=title)
+    nps.blank_terminal()
 
 
 def continue_dialog(message, title):
     if not notify_popup(message, title=title, form_color='STANDOUT', wrap=True,
                     editw=0, ok_label='Continue', cancel_label='Abort'):
         sys.exit(0)
+
+    nps.blank_terminal()
 
 
 
