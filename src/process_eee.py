@@ -62,19 +62,23 @@ def get_passes_from_lisfiles(exp):
                 if '.ms' in a_lisline: # The header line
                     # there is only one .ms input there
                     msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
-                    if thereis_line:
-                        if '_line' in a_lisfile:
-                            fitsidiname = f"{exp.expname.lower()}_2_1.IDI"
-                        else:
-                            fitsidiname = f"{exp.expname.lower()}_1_1.IDI"
-
-                        passes.append(metadata.CorrelatorPass(a_lisfile, msname, fitsidiname,
-                                                              True))
+                    # In case the outut FITS IDI name has already been set
+                    if '.IDI' in a_lisline:
+                        fitsidiname = [elem.strip() for elem in a_lisline.split() if '.IDI' in elem][0]
+                        to_pipeline = True if ((fitsidiname.split('_')[-2] == '1') or thereis_line) else False
                     else:
-                        fitsidiname = f"{exp.expname.lower()}_{i+1}_1.IDI"
-                        passes.append(metadata.CorrelatorPass(a_lisfile, msname, fitsidiname,
-                                                              False if i > 0 else True))
+                        if thereis_line:
+                            if '_line' in a_lisfile:
+                                fitsidiname = f"{exp.expname.lower()}_2_1.IDI"
+                            else:
+                                fitsidiname = f"{exp.expname.lower()}_1_1.IDI"
 
+                            to_pipeline = True
+                        else:
+                            fitsidiname = f"{exp.expname.lower()}_{i+1}_1.IDI"
+                            to_pipeline = True if (i == 0) else False
+
+                    passes.append(metadata.CorrelatorPass(a_lisfile, msname, fitsidiname, to_pipeline))
                     # Replaces the old *.UVF string in the .lis file with the FITS IDI
                     # file name to generate in this pass.
                     if '.UVF' in a_lisline:

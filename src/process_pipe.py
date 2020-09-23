@@ -14,53 +14,168 @@ import argparse
 import configparser
 import logging
 import subprocess
+import paramiko
 from datetime import datetime
 from . import metadata
 from . import actions
 
+_user = 'pipe'
+_server = 'jop83'
+_login = f"{_user}@{_server}"
 
 # TODO: Make a decorator function to run all functions remotely in pipe (but launched in eee)
 # Is it possible to also add a screen instance?
 
-def move2dir(path, warning_no_move=False):
-    """If path is not the current directory, it moves to it and notifies it in the stdout.
-    If warning_no_move is True, then it would also write a message that path is already the current
-    directory
+
+
+class Pipe(paramiko.SSHClient):
+    def __init__(self, user='pipe', host='jop83'):
+        self._user = pipe
+        self._host = host
+        super().__init__()
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self.client.connect(self._host, username=self._user)
+
+    def execute_commands(self, commands):
+        """Execute multiple commands in succession.
+
+        - commands : list of UNIX coomands as strings.
+        """
+        full_response = []
+        for cmd in commands:
+            stdin, stdout, stderr = self.client.exec_command(cmd, get_pty=True)
+            stdout.channel.recv_exit_status()
+            response = stdout.readlines()
+            for line in response:
+                print(line, end='')
+
+            full_response.append(response)
+
+        return full_response
+
+
+def disconnect(exp):
+    """Closes the connection to Pipe. Throws an exception if it was already closed.
     """
-    if path is not os.getcwd():
-        os.chdir(path)
-        print(f"Moved to {path}.")
-    elif warning_no_move:
-        print(f"Already running at {path}.")
-
-    return True
+    exp.connections['pipe'].close()
+    del exp.connections['pipe']
 
 
-def folders(exp, args):
+def create_folders(exp):
     """Moves to the support-scientist-associated folder for the given experiment.
     If it does not exist, it creates it. It also creates the folders in the $IN and $OUT dirs.
     """
-    # If required, move to the required directory (create it if needed).
-    expdir = '/jop83_0/pipe/in/{}/{}'.format(args.supsci, exp.expname.lower())
-    indir = '/jop83_0/pipe/in/{}'.format(args.supsci, exp.expname.lower())
-    outdir = '/jop83_0/pipe/out/{}'.format(args.supsci, exp.expname.lower())
-    for adir in (expdir, indir, outdir):
-        if not os.path.isdir(adir):
-            os.makedirs(adir)
-            print(f"Directory {adir} has been created.")
+    # Checks if the connection to pipe has already been made.
+    if 'pipe' not in exp.connections:
+        exp.connections['pipe'] = Pipe(user='pipe')
 
-    move2dir(expdir, True)
+    tmpdir = '/jop83_0/pipe/in/{}/{}'.format(exp.supsci, exp.expname.lower())
+    indir = '/jop83_0/pipe/in/{}'.format(exp.supsci, exp.expname.lower())
+    outdir = '/jop83_0/pipe/out/{}'.format(exp.supsci, exp.expname.lower())
+    exp.connections['pipe'].execute_commands([f"mkdir -p {adir}" for adir in (tmpdir, indir, outdir)])
 
 
 def get_files_from_vlbeer(exp):
-    """Retrieves the antabfs and log files that should be in vlbeer for the given experiment.
+    """Retrieves the antabfs, log, and flag files that should be in vlbeer for the given experiment.
     """
-    for ext in ('log', 'antabfs'):
-        actions.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}*.{ext}", ".")
+    if 'pipe' not in exp.connections:
+        exp.connections['pipe'] = Pipe(user='pipe')
+
+    out = exp.connections['pipe'].execute_commands([f"cd $IN/{exp.supsci}/{exp.expname.lower()} && " \
+        "scp evn@vlbeer.ira.inaf.it:vlbi_arch/{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}\*.{ext} ." \
+        for ext in ('log', 'antabfs', 'flag')])
 
     # TODO: check if there are ANTAB files in the previous/following month...
-    print(actions.shell_command("ls", ["-l", "*antab*", "*log"], shell=True)[1])
+    # Check if there is the same number of files than antennas
+    n_log = set([i.strip().replace(exp.expname.lower(), '').replace('.log', '').capitalize() for i in out[0]])
+    n_ant = set([i.strip().replace(exp.expname.lower(), '').replace('.antabfs', '').capitalize() for i in out[1]])
+    n_total = set(exp.antennas).difference(['Cm', 'Da', 'De', 'Pi', 'Kn'])
+    if (n_log < n_total) or (n_ant < n_total):
+        print('There are missing files from vlbeer:')
+        print(f"Missing log files from: {', '.join(n_total.difference(n_log))}")
+        print(f"Missing ANTAB files from: {', '.join(n_total.difference(n_ant))}")
 
+
+
+def create_uvflg(exp):
+    """Produces the combined uvflg file containing the full flagging from all telescopes.
+    """
+    if 'pipe' not in exp.connections:
+        exp.connections['pipe'] = Pipe(user='pipe')
+
+    out = exp.connections['pipe'].execute_commands([f"cd $IN/{exp.supsci}/{exp.expname.lower()} && uvflgall.csh"])
+    # There may be empty uvflg files (not completely empty but without flagging info.
+    out = exp.connections['pipe'].execute_commands([f"cd $IN/{exp.supsci}/{exp.expname.lower()} && ls -sa *.uvflgfs"])
+    # TODO: from here get who is empty, remove it, and then get that flaggin from the .flag file.
+    # The previous line returns the size (in kb) and filename. Empty ones should be ~0 (1 max if rounding)
+    exp.connections['pipe'].execute_commands(["cat $IN/{0}/{1}/{1}.uvflgfs > $IN/{1}/{1}.uvflg".format(exp.supsci,
+                                                                                            exp.expname.lower())])
+
+
+def run_antab_editor(exp):
+    if 'pipe' not in exp.connections:
+        exp.connections['pipe'] = Pipe(user='pipe')
+
+    input('Now run manually antab_editor.py and press continue after you have produced the required ANTAB file.')
+    exp.connections['pipe'].execute_commands(["cat $IN/{0}/{1}/{1}.antab > $IN/{1}/{1}.antab".format(exp.supsci,
+                                                                                            exp.expname.lower())])
+
+
+
+
+def create_input_file(exp):
+    """Copies the template of an input file for the EVN Pipeline and modifies the standard parameters.
+    """
+    if 'pipe' not in exp.connections:
+        exp.connections['pipe'] = Pipe(user='pipe')
+
+    # Parameters to modify inside the input file
+    if exp.supsci == 'marcote':
+        userno = exp.connections['pipe'].execute_commands(['give_me_'])
+    else:
+        userno = 'XXXXX'
+
+    if len(exp.ref_sources) == 0:
+        bpass = ', '.join([s.name for s in exp.sources if s.type is metadata.SourceType.fringefinder])
+    else:
+        bpass = ', '.join(exp.ref_sources)
+
+    to_change = "'version=31DEC13' 'version = 31DEC19' " \
+                f"'experiment = n05c3' 'experiment = {exp.expname.lower()}' " \
+                f"'userno = 3602' 'userno = {userno}' " \
+                f"'refant = Ef, Mc, Nt' 'refant = {', '.join(exp.ref_antennas)}' " \
+                f"'plotref = Ef' 'plotref = {', '.join(exp.ref_antennas)}' " \
+                f"'bpass = 3C345, 3C454.3' 'bpass = {', '.join([])}' " \
+                f"'phaseref = ' '# SOURCES THAT MAY BE INCLUDED: {', '.join([s.name for s in exp.sources])}\nphaseref = ' "
+    # TODO: Multi-phase centers? then modify the input file too
+    out = exp.connections['pipe'].execute_commands(["cp $IN/template.inp $IN/{1}/{1}.inp.txt".format(exp.expname.lower()),
+                     f"replace {to_change} -- {$IN/template.inp $IN/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt"])
+
+
+
+
+# def create_folders_ssh(exp):
+#     """Moves to the support-scientist-associated folder for the given experiment.
+#     If it does not exist, it creates it. It also creates the folders in the $IN and $OUT dirs.
+#     """
+#     # If required, move to the required directory (create it if needed).
+#     tmpdir = '/jop83_0/pipe/in/{}/{}'.format(exp.supsci, exp.expname.lower())
+#     indir = '/jop83_0/pipe/in/{}'.format(exp.supsci, exp.expname.lower())
+#     outdir = '/jop83_0/pipe/out/{}'.format(exp.supsci, exp.expname.lower())
+#     for adir in (tmpdir, indir, outdir):
+#         if not actions.remote_file_exists(_login, adir):
+#             actions.ssh(_login, f"mkdir {adir}")
+#             os.makedirs(adir)
+#             print(f"Directory {adir} has been created.")
+
+##################################################################################################
+#     if not os.path.isfile(f"{exp.expname.lower()}.piletter"):
+#         cmd, output = actions.scp(f"jops@jop83:piletters/{exp.expname.lower()}.piletter", '.')
+#     return actions.remote_file_exists('jops@ccs',
+#                                       f"/ccs/expr/{eEVNname}/{eEVNname.lower()}*.lis")
+#     cmd = f"cd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}"
+#     output = actions.ssh('jops@ccs', cmd)
+# ##################################################################################################
 
 def get_vlba_antab(exp):
     """If the experiment containts VLBA antennas, it retrieves the *cal.vlba file from @ccs.
