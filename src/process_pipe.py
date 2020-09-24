@@ -153,6 +153,59 @@ def create_input_file(exp):
 
 
 
+## Something else?
+
+# Authentification for the credentials
+
+## Run pipeline
+
+
+def comment_tasav_files(exp):
+    """Creates the comment and tasav files after the EVN Pipeline has run.
+    """
+    if 'pipe' not in exp.connections:
+        exp.connections['pipe'] = Pipe(user='pipe')
+
+    out = exp.connections['pipe'].execute_commands(["cd $OUT/{0} && comment_tasav_file.py {0}".format(
+                                                                                exp.expname.lower())])
+
+
+def pipeline_feedback(exp):
+    """Runs the feedback.pl script after the EVN Pipeline has run.
+    """
+    if 'pipe' not in exp.connections:
+        exp.connections['pipe'] = Pipe(user='pipe')
+
+    out = exp.connections['pipe'].execute_commands(
+        ["cd $OUT/{0} && feedback.pl -exp '{0}' -jsss '{1}' -source '{2}'".format(exp.expname.lower(),
+                                                exp.supsci, ' '.join([s.name for s in exp.sources]))])
+
+
+def archive(exp):
+    """Archives the EVN Pipeline results.
+    """
+    pipe = Pipe(user='jops')
+    out = pipe.execute_commands([f"cd ${0}/{1} && archive -pipe -e {1}_{2}".format(f,
+                            exp.expname.lower(), exp.obsdate) for f in ('IN', 'OUT')])
+    pipe.close()
+
+
+
+## Here there should be a dialog about checking pipeline results, do them manually...
+
+
+def ampcal(exp):
+    """Runs the ampcal.sh script to incorporate the gain corrections into the Grafana database.
+    """
+    if 'pipe' not in exp.connections:
+        exp.connections['pipe'] = Pipe(user='pipe')
+
+    out = exp.connections['pipe'].execute_commands([f"cd $OUT/{exp.expname.lower()} && ampcal.sh"])
+
+
+
+# One should ask for editing the PI letter again, and then archive it and send the emails.
+
 
 # def create_folders_ssh(exp):
 #     """Moves to the support-scientist-associated folder for the given experiment.
