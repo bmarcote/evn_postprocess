@@ -67,6 +67,7 @@ Experiment
     - eEVNname : str or None  (if case of associated to a different e-EVN job name)
     - piname : str or list
     - email : str or list
+    - supsci : str
     - obsdate : str (YYMMDD format)
     - obsdatetime : datetime
     - processdate : datetime
@@ -85,7 +86,7 @@ Experiment
     - existing_piletter : bool  (from before postprocessing)
     - existing_lisfile  : bool  (from before postprocessing)
     - stored_outputs : dict    # key with the name of functions (checklis, flag_weights,..)
-    + __init__(expname)
+    + __init__(expname, support_scientist)
     + add_pass(a_new_pass : CorrelatorPass)
     + set_credentials(username, password)
     + get_setup_from_ms()
@@ -154,6 +155,17 @@ FlagWeight
 
 
 ## process_pipe.py
+
+Pipe(user, host='jop83')
+    + execute_commands(commands : list of str)
+
+
++ create_folders(exp)
++ get_files_from_vlbber(exp)
++ create_uvflg(exp)
++ run_antab_editor(exp)
+
+
 
 
 

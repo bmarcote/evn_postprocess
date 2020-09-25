@@ -28,16 +28,22 @@ To summarize them, this pipeline will (for a given EVN experiment):
 ## Bug List
 
 
-
+- [ ] If plots cannot be open, it must be said in the next "Question" dialog.
 - [ ] Log all command outputs into the log files.
 - [ ] Check if for e-EVN experiments it changes the experiment name.
-- [ ] Standard plot breaks in the script: ('list has no split').
+- [X] Standard plot breaks in the script: ('list has no split').
 - [X] Say no to create new lis files but still retrieving the vex file if n/a.
 - [ ] If error produced in archive.pl due to Proposal Tool it breaks...
 - [X] Output message for archiving too.
 - [X] 'Create again the lis file in ccs?' Asks even if it doesn't exist.
+- [X] If sources provided in the command line, then update that information for the Source for Plotting in the first dialog.
+- [ ] Printing stdout is slow (doesn't show the sifting values like in j2ms2..). Refresh rate?
+- [ ] getdata doesn't print stdout while running.
+- [ ] dialog about updating pi letter. Overplots on top of previous one. Then it does not disappear and new messages are written on top of it, breaking newlines.
+- [ ] Check that I don't pass an empty list as default value in an attribute. Remember that it is by reference so gives problems. I ALWAYS FORGET.
 
-
+- [ ] In multiphase centers... If I pick to pipeline one that is not the first one, rename the expected IDI files to make that one the \_1\_1.
+- [ ] If going directly to standardplots, then it doesn't have the plotsource/refant info..
 
 ## Feature requests
 
@@ -57,6 +63,7 @@ To summarize them, this pipeline will (for a given EVN experiment):
 - [ ] (Maybe independent program): check stations with empty .uvflgfs files and append the flags from SCHED.
 - [ ] Add spectral line EVN Pipeline support (under `$IN/immer/script/EVN_line.py`).
 - [ ] --nogui Option in the command line to not show e.g. standardplots or other visual tasks if any.
+- [ ] Write into the log all the metadata (number of correlation passes, etc).
 
 
 
