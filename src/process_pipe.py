@@ -15,8 +15,37 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
+import paramiko
 from . import metadata
 from . import actions
+
+
+
+
+# With Paramiko:
+#
+# stdin,stdout,stderr=ssh_client.exec_command(“ls”)
+#
+# print(stdout.readlines())
+# or do stdin.write('somethin\n')  if needed
+#
+# download_file(remotepath, localpath) -> stablishes the sftp connection and downloads the file
+
+class Pipe(paramiko.SSHClient):
+    def __init__(self, username='pipe', password=None):
+        """Makes a ssh (with Paramiko) connection to the jop83 machine logged as pipe.
+        """
+        super().__init__()
+        self.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self.connect(hostname='jop83', username=username, password=password)
+
+
+
+
+
+
+
+
 
 
 # TODO: Make a decorator function to run all functions remotely in pipe (but launched in eee)
@@ -55,7 +84,7 @@ def folders(exp, args):
 def get_files_from_vlbeer(exp):
     """Retrieves the antabfs and log files that should be in vlbeer for the given experiment.
     """
-    for ext in ('log', 'antabfs'):
+    for ext in ('log', 'antabfs', 'flag'):
         actions.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}*.{ext}", ".")
 
     # TODO: check if there are ANTAB files in the previous/following month...
