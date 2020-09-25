@@ -33,6 +33,9 @@ class Choice(Enum):
 
 class PopUp(nps.utilNotify.ConfirmCancelPopup):
     def __init__(self, ok_label, cancel_label, *args, **kwargs):
+        # TODO: I had the first lines but it did not work. Check if with later it works
+        self.OK_BUTTON_TEXT = ok_label
+        self.CANCEL_BUTTON_TEXT = cancel_label
         super().__init__(*args, **kwargs)
         self.OK_BUTTON_TEXT = ok_label
         self.CANCEL_BUTTON_TEXT = cancel_label
@@ -43,7 +46,7 @@ def notify_popup(message, title="Message", form_color='STANDOUT', wrap=True, edi
     message = nps.utilNotify._prepare_message(message)
     curses.initscr()
     F = PopUp(ok_label=ok_label, cancel_label=cancel_label, name=title, color=form_color)
-    F.preserve_selected_widget = True
+    F.preserve_selected_widget = False # True
     mlw = F.add(nps.wgmultiline.Pager,)
     mlw_width = mlw.width - 1
     if wrap:
@@ -52,6 +55,8 @@ def notify_popup(message, title="Message", form_color='STANDOUT', wrap=True, edi
     mlw.values = message
     F.editw = editw
     F.edit()
+    curses.initscr()
+    curses.flushinp()
     return F.value
 
 
@@ -61,8 +66,8 @@ class FirstForm(nps.ActionFormV2):
     CANCEL_BUTTON_BR_OFFSET = (2, 17)
 
     def __init__(self, exp, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.exp = exp
+        super().__init__(*args, **kwargs)
 
     def create(self):
         y, x = self.useable_space()
@@ -74,9 +79,15 @@ class FirstForm(nps.ActionFormV2):
                                 if self.exp.antennas[i] in self.exp.ref_antennas], scroll_exit=True)
         self.onebit = self.add(nps.TitleMultiSelect, name="1-bit antenna(s)?:", max_width=x // 2, max_height=4,
                                values=self.exp.antennas, value=[], scroll_exit=True)
-        self.cal_sources = self.add(nps.TitleMultiSelect, name='Sources for Plotting:',
-            values=[s.name for s in self.exp.sources], scroll_exit=True, max_height=6, max_width=x // 2,
-            value=np.arange(len(self.exp.sources))[[True if s.type == metadata.SourceType.fringefinder else False for s in self.exp.sources]])
+        if len(self.exp.ref_sources) > 0:
+            self.cal_sources = self.add(nps.TitleMultiSelect, name='Sources for Plotting:',
+                values=[s.name for s in self.exp.sources], scroll_exit=True, max_height=6, max_width=x // 2,
+                value=[[s.name for s in self.exp.sources].index(r) for r in self.exp.ref_sources])
+        else:
+            self.cal_sources = self.add(nps.TitleMultiSelect, name='Sources for Plotting:',
+                values=[s.name for s in self.exp.sources], scroll_exit=True, max_height=6, max_width=x // 2,
+                value=list(np.arange(len(self.exp.sources))[[True if (s.type == metadata.SourceType.fringefinder) else False for s in self.exp.sources]]))
+            # value=np.arange(len(self.exp.sources))[[True if ((s.type == metadata.SourceType.fringefinder) or (s.name in self.exp.ref_sources)) else False for s in self.exp.sources]])
         # self.nextrely += 1  # To get more space between widgets
         self.passes = self.add(nps.TitleMultiSelect, name='Passes to pipeline', max_width=x // 2, max_height=4,
             values=[p.lisfile.replace(self.exp.expname.lower(), '').replace('.lis', '') if p.lisfile != f"{self.exp.expname.lower()}.lis" else p.lisfile for p in self.exp.passes],
@@ -89,7 +100,7 @@ class FirstForm(nps.ActionFormV2):
         if 'checklis' in self.exp.stored_outputs:
             msg += ['> checklis', *self.exp.stored_outputs['checklis'].split('\n')]
             if len(self.exp.stored_outputs['checklis'].split('\n')) > 2:
-                msg += ['CORRECT LIS FILE BEFORE CONTINUE IF NEEDED.']
+                msg += ['', '', '\n\n**CORRECT LIS FILE BEFORE CONTINUE IF NEEDED.**\n\n', '']
 
         if actions.station_1bit_in_vix(f"{self.exp.expname.upper()}.vix"):
             msg += ['WARNING: There may be a 1-bit station.']
@@ -120,7 +131,7 @@ class FirstForm(nps.ActionFormV2):
         self.parentApp.setNextForm(None)
         self.parentApp.switchForm(None)
         self.exp.ref_antennas = (self.exp.antennas[i] for i in self.ref_ant.value)
-        self.exp.ref_sources = (self.exp.sources[int(i)].name for i in self.cal_sources.value)
+        self.exp.ref_sources = [self.exp.sources[i].name for i in self.cal_sources.value]
         self.exp.onebit_antennas = (self.exp.antennas[i] for i in self.onebit.value)
 
 
@@ -240,7 +251,7 @@ class AfterPlotsForm(nps.ActionFormV2):
         # TODO: add a widget with no data from the following antennas:
         self.add(nps.BoxTitle, name="MS operations", max_height=5, editable=False,
                  values=wrap("Select in case of changes are required to apply to the dataset.", x - 8))
-        self.flagweights = self.add(nps.Slider, name="Flag weights",
+        self.flagweights = self.add(nps.TitleSlider, name="Flag weights",
                                out_of=1.0, step=0.05, lowest=0.0, value=0.9)
         self.polswap = self.add(nps.TitleMultiSelect, name="Swapping pols:", max_height=5,
                                max_width=(x // 2), values=self.exp.antennas, value=[], scroll_exit=True)
@@ -255,7 +266,7 @@ class AfterPlotsForm(nps.ActionFormV2):
     def on_ok(self):
         self.parentApp.setNextForm(None)
         self.parentApp.switchForm(None)
-        self.exp.flagged_weights = metadata.FlagWeight(self.flagweights.value)
+        self.exp.flagged_weights = metadata.FlagWeight(threshold=self.flagweights.value)
         self.exp.polswap_antennas = (self.exp.antennas[i] for i in self.polswap.value)
         self.exp.polconv_antennas = (self.exp.antennas[i] for i in self.polconv.value)
 
@@ -298,12 +309,13 @@ def standardplots_dialog(exp):
     Otherwise it allows to re-run standardplots with an updated list
     of ref-antennas and cal. sources.
     """
-    message = "Do you want to repeat standardplots or continue with the post-processing?"
+    message = "Take a look at the standardplots (open the files manually if they did not open).\n " \
+              "Do you want to repeat standardplots or continue with the post-processing?"
     while not notify_popup(message, title=f"{exp.expname} -- Question", form_color='STANDOUT', wrap=True,
                                                    editw=0, ok_label='Continue', cancel_label='Repeat'):
-        redoplots_diaog(exp)
+        redoplots_dialog(exp)
         eee.standardplots(exp)
-        open_standardplot_files(exp)
+        eee.open_standardplot_files(exp)
 
 
 
@@ -315,12 +327,15 @@ def warning_dialog(message, title):
     Returns a bool with the choice.
     """
     nps.notify_confirm(message, title=title)
+    nps.blank_terminal()
 
 
 def continue_dialog(message, title):
     if not notify_popup(message, title=title, form_color='STANDOUT', wrap=True,
                     editw=0, ok_label='Continue', cancel_label='Abort'):
         sys.exit(0)
+
+    nps.blank_terminal()
 
 
 
