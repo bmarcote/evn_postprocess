@@ -19,9 +19,6 @@ from datetime import datetime
 from . import metadata
 from . import actions
 
-_user = 'pipe'
-_server = 'jop83'
-_login = f"{_user}@{_server}"
 
 # TODO: Make a decorator function to run all functions remotely in pipe (but launched in eee)
 # Is it possible to also add a screen instance?
