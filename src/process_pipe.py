@@ -131,7 +131,7 @@ def create_input_file(exp):
 
     # Parameters to modify inside the input file
     if exp.supsci == 'marcote':
-        userno = exp.connections['pipe'].execute_commands(['give_me_'])
+        userno = exp.connections['pipe'].execute_commands(['give_me_next_userno.sh'])
     else:
         userno = 'XXXXX'
 
@@ -148,9 +148,9 @@ def create_input_file(exp):
                 f"'bpass = 3C345, 3C454.3' 'bpass = {', '.join([])}' " \
                 f"'phaseref = ' '# SOURCES THAT MAY BE INCLUDED: {', '.join([s.name for s in exp.sources])}\nphaseref = ' "
     # TODO: Multi-phase centers? then modify the input file too
-    out = exp.connections['pipe'].execute_commands(["cp $IN/template.inp $IN/{1}/{1}.inp.txt".format(exp.expname.lower()),
-                     f"replace {to_change} -- {$IN/template.inp $IN/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt"])
-
+    out = exp.connections['pipe'].execute_commands([
+                 "cp $IN/template.inp $IN/{1}/{1}.inp.txt".format(exp.expname.lower()),
+                 f"replace {to_change} -- $IN/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt"])
 
 
 ## Something else?
