@@ -122,6 +122,15 @@ def get_setup_from_ms(exp):
     exp.get_setup_from_ms()
 
 
+def update_ms_expname(exp):
+    """For e-EVN experiments, where the .vex-file experiment name does not match the actual
+    experiment name, this one must be updated in the created MS file(s).
+    """
+    if (exp.eEVNname is not None) and (exp.eEVNname != exp.expname):
+        for a_pass in exp.passes:
+            actions.shell_command("expname.py", [a_pass.msfile, exp.expname])
+
+
 def standardplots(exp):
     """Runs the standardplots on the specified experiment using a reference antenna
     and sources to be picked for the auto- and cross-correlations.
