@@ -27,10 +27,11 @@ To summarize them, this pipeline will (for a given EVN experiment):
 
 ## Bug List
 
-
+- [ ] If '--steps archive' and plots have been already compressed, it crashes. Check if they do exist.
+- [ ] Second standardplots had no stored the sources to plot.
 - [ ] If plots cannot be open, it must be said in the next "Question" dialog.
 - [ ] Log all command outputs into the log files.
-- [ ] Check if for e-EVN experiments it changes the experiment name.
+- [X] Check if for e-EVN experiments it changes the experiment name.
 - [X] Standard plot breaks in the script: ('list has no split').
 - [X] Say no to create new lis files but still retrieving the vex file if n/a.
 - [ ] If error produced in archive.pl due to Proposal Tool it breaks...
@@ -44,6 +45,7 @@ To summarize them, this pipeline will (for a given EVN experiment):
 
 - [ ] In multiphase centers... If I pick to pipeline one that is not the first one, rename the expected IDI files to make that one the \_1\_1.
 - [ ] If going directly to standardplots, then it doesn't have the plotsource/refant info..
+
 
 ## Feature requests
 
