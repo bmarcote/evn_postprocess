@@ -322,7 +322,7 @@ def set_credentials_pipelet(exp):
     Otherwise, it will take the credentials from a .auth file if already exists,
     or creates such file iwth a new password.
     """
-    if (exp.expname.lower()[0] is 'N') or (exp.expname.lower()[0] is 'F'):
+    if (exp.expname.upper()[0] is 'N') or (exp.expname.upper()[0] is 'F'):
         print(f"NOTE: {exp.expname} is an NME or test experiment.\nNo authentification will be set.")
     if len(glob.glob("*_*.auth")) == 1:
         # Some credentials are already in place.
