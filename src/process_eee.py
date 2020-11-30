@@ -324,7 +324,7 @@ def set_credentials_pipelet(exp):
     """
     if (exp.expname.upper()[0] is 'N') or (exp.expname.upper()[0] is 'F'):
         print(f"NOTE: {exp.expname} is an NME or test experiment.\nNo authentification will be set.")
-    if len(glob.glob("*_*.auth")) == 1:
+    elif len(glob.glob("*_*.auth")) == 1:
         # Some credentials are already in place.
         exp.set_credentials( *glob.glob("*_*.auth")[0].split('.')[0].split('_')  )
         if not os.path.isfile(f"{exp.expname.lower()}.pipelet"):
