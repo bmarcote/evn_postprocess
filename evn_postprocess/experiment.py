@@ -17,8 +17,7 @@ from dataclasses import dataclass
 from pyrap import tables as pt
 from enum import Enum
 from astropy import units as u
-import environment as env
-
+from evn_postprocess import environment as env
 
 class Credentials(object):
     """Authentification for a given experiment. This class specifies two attributes:
@@ -133,7 +132,7 @@ class Antenna:
 
 
 
-class Antennas(objects):
+class Antennas(object):
     """List of antennas (Antenna class)
     """
     def __init__(self, antennas=None):

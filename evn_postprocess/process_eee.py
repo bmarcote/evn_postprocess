@@ -18,10 +18,12 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-from . import metadata
-from . import environment
-from . import dialog
-
+from evn_postprocess import dialog
+from evn_postprocess import experiment
+from evn_postprocess import environment #as env
+# from evn_postprocess import process_css as css
+# from evn_postprocess import process_eee as eee
+# from evn_postprocess import process_pipe as pipe
 
 def create_folders(expname: str, supsci: str):
     """Creates the folder required for the post-processing of the experiment
@@ -99,7 +101,7 @@ def get_passes_from_lisfiles(exp):
                             fitsidiname = f"{exp.expname.lower()}_{i+1}_1.IDI"
                             to_pipeline = True if (i == 0) else False
 
-                    passes.append(metadata.CorrelatorPass(a_lisfile, msname, fitsidiname, to_pipeline))
+                    passes.append(experiment.CorrelatorPass(a_lisfile, msname, fitsidiname, to_pipeline))
                     # Replaces the old *.UVF string in the .lis file with the FITS IDI
                     # file name to generate in this pass.
                     if '.UVF' in a_lisline:
@@ -111,7 +113,7 @@ def get_passes_from_lisfiles(exp):
 
 def getdata(exp):
     """Gets the data into eee from all existing .lis files from the given experiment.
-    inputs: exp : metadata.Experiment
+    inputs: exp : experiment.Experiment
     """
     for a_pass in exp.passes:
         cmd,output = environment.shell_command("getdata.pl",
@@ -125,7 +127,7 @@ def getdata(exp):
 def j2ms2(exp):
     """Runs j2ms2 on all existing .lis files from the given experiment.
     If the MS to produce already exists, then it will be removed.
-    inputs: exp : metadata.Experiment
+    inputs: exp : experiment.Experiment
     """
     for a_pass in exp.passes:
         with open(a_pass.lisfile) as f:

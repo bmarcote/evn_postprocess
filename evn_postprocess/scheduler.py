@@ -1,9 +1,9 @@
 
-import experiment
-import environment as env
-import process_css as css
-import process_eee as eee
-import process_pipe as pipe
+from evn_postprocess import experiment
+from evn_postprocess import environment as env
+from evn_postprocess import process_css as css
+from evn_postprocess import process_eee as eee
+from evn_postprocess import process_pipe as pipe
 
 
 # Create processing_log?  log dir.
@@ -55,7 +55,7 @@ def preparing_lis_files(exp: experiment.Experiment):
     return True
 
 
-def fist_manual_check(exp: experiment.Experiment):
+def first_manual_check(exp: experiment.Experiment):
     """It is only executed for complex experiments: those with
     """
     if not env.check_lisfiles(exp):

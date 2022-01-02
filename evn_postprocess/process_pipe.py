@@ -14,10 +14,9 @@ import argparse
 import configparser
 import logging
 import subprocess
-import paramiko
 from datetime import datetime
-from . import metadata
-from . import environment as env
+from evn_postprocess import experiment
+from evn_postprocess import environment as env
 
 
 def create_folders(expname: str, supsci: str):
@@ -41,30 +40,30 @@ def create_folders(expname: str, supsci: str):
 
 
 
-class Pipe(paramiko.SSHClient):
-    def __init__(self, user='pipe', host='jop83'):
-        self._user = pipe
-        self._host = host
-        super().__init__()
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.client.connect(self._host, username=self._user)
-
-    def execute_commands(self, commands):
-        """Execute multiple commands in succession.
-
-        - commands : list of UNIX coomands as strings.
-        """
-        full_response = []
-        for cmd in commands:
-            stdin, stdout, stderr = self.client.exec_command(cmd, get_pty=True)
-            stdout.channel.recv_exit_status()
-            response = stdout.readlines()
-            for line in response:
-                print(line, end='')
-
-            full_response.append(response)
-
-        return full_response
+# class Pipe(paramiko.SSHClient):
+#     def __init__(self, user='pipe', host='jop83'):
+#         self._user = pipe
+#         self._host = host
+#         super().__init__()
+#         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+#         self.client.connect(self._host, username=self._user)
+#
+#     def execute_commands(self, commands):
+#         """Execute multiple commands in succession.
+#
+#         - commands : list of UNIX coomands as strings.
+#         """
+#         full_response = []
+#         for cmd in commands:
+#             stdin, stdout, stderr = self.client.exec_command(cmd, get_pty=True)
+#             stdout.channel.recv_exit_status()
+#             response = stdout.readlines()
+#             for line in response:
+#                 print(line, end='')
+#
+#             full_response.append(response)
+#
+#         return full_response
 
 
 def disconnect(exp):
