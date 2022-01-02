@@ -17,11 +17,27 @@ import subprocess
 import paramiko
 from datetime import datetime
 from . import metadata
-from . import actions
+from . import environment as env
 
 
-# TODO: Make a decorator function to run all functions remotely in pipe (but launched in eee)
-# Is it possible to also add a screen instance?
+def create_folders(expname: str, supsci: str):
+    """Creates the folder required for the post-processing of the experiment
+    - @eee: /data0/{supportsci}/{exp.upper()}
+
+    Inputs
+        - expname: str
+            Experiment name (case insensitive).
+        - supsci: str
+            Surname of the assigned support scientist.
+    """
+    tmpdir = f"/jop83_0/pipe/in/{supsci.lower()}/{expname.lower()}"
+    indir = f"/jop83_0/pipe/in/{expname.lower()}"
+    outdir = f"/jop83_0/pipe/out/{expname.lower()}"
+    for a_dir in (tmpdir, indir, outdir):
+        output = env.ssh('pipe@jop83', f"mkdir -p {a_dir}")
+
+
+
 
 
 
@@ -58,19 +74,6 @@ def disconnect(exp):
     del exp.connections['pipe']
 
 
-def create_folders(exp):
-    """Moves to the support-scientist-associated folder for the given experiment.
-    If it does not exist, it creates it. It also creates the folders in the $IN and $OUT dirs.
-    """
-    # Checks if the connection to pipe has already been made.
-    if 'pipe' not in exp.connections:
-        exp.connections['pipe'] = Pipe(user='pipe')
-
-    tmpdir = '/jop83_0/pipe/in/{}/{}'.format(exp.supsci, exp.expname.lower())
-    indir = '/jop83_0/pipe/in/{}'.format(exp.supsci, exp.expname.lower())
-    outdir = '/jop83_0/pipe/out/{}'.format(exp.supsci, exp.expname.lower())
-    exp.connections['pipe'].execute_commands([f"mkdir -p {adir}" for adir in (tmpdir, indir, outdir)])
-
 
 def get_files_from_vlbeer(exp):
     """Retrieves the antabfs, log, and flag files that should be in vlbeer for the given experiment.
@@ -83,6 +86,7 @@ def get_files_from_vlbeer(exp):
         for ext in ('log', 'antabfs', 'flag')])
 
     # TODO: check if there are ANTAB files in the previous/following month...
+    # WHAT THE HELL I AM DOING BELOW? WHY?
     # Check if there is the same number of files than antennas
     n_log = set([i.strip().replace(exp.expname.lower(), '').replace('.log', '').capitalize() for i in out[0]])
     n_ant = set([i.strip().replace(exp.expname.lower(), '').replace('.antabfs', '').capitalize() for i in out[1]])
@@ -137,8 +141,7 @@ def create_input_file(exp):
     else:
         bpass = ', '.join(exp.ref_sources)
 
-    to_change = "'version=31DEC13' 'version = 31DEC19' " \
-                f"'experiment = n05c3' 'experiment = {exp.expname.lower()}' " \
+    to_change = f"'experiment = n05c3' 'experiment = {exp.expname.lower()}' " \
                 f"'userno = 3602' 'userno = {userno}' " \
                 f"'refant = Ef, Mc, Nt' 'refant = {', '.join(exp.ref_antennas)}' " \
                 f"'plotref = Ef' 'plotref = {', '.join(exp.ref_antennas)}' " \

@@ -2,6 +2,11 @@
 
 *NOTE*: This code is still under heavy development.
 
+The original (still not finished) is located under the `src` directory.
+Now I am doing a port of it to be used with `CWL`, so I am porting all the tools as external scripts behind a common environment where they can do IO of the current state.
+This new implementation lies under the `postprocess` directory.
+
+
 
 Pipeline to run all post-processing of EVN data in a semi-interactive and semi-smart way. This code will operate all steps required from post-correlation at JIVE to user delivering of the data. That is, it runs the steps defined in the _SFXC Post-Correlation Checklist_.
 

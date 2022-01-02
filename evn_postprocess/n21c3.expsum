@@ -1,0 +1,73 @@
+project summary on 10/12/2021
+
+                           N21C3
+
+entry last modified on:    10/12/2021
+
+Type and status of exper:  NME    DONE, evaluation not yet complete
+             date release: --/--/----
+        date distribution: --/--/----
+          date completion: 10/12/2021
+        archive is public: --/--/----
+
+             observe date: 21/10/2021
+
+Project information:       Network Monitoring Experiment
+   Principal Investigator: Marcote  (marcote@jive.eu)
+    observation resources: 21x3hr@1Disk   6cm
+     scheduled telescopes: Jb Wb Ef Mc Nt O8 Sh Ur Tr Ys Hh Sv Zc Bd Ir Km Cm Da De Kn Pi 
+    sub-netting detection: Number networks: 13, max 21 min 21 telescopes
+
+
+2 observe modes:
+
+          recorded format: 2 bands with 64MHz,
+                           using Usb, and DPOL
+                           and 2 bit sampling
+                 tapeform: 1:1@128MbpstoDisk
+        UT range observed: 294d12h00m00s - 294d13h57m00s
+
+          recorded format: 16 bands with 32MHz,
+                           using Lsb, and DPOL
+                           and 2 bit sampling
+                 tapeform: 1:1@64MbpstoDisk
+        UT range observed: 294d14h07m00s - 294d15h00m00s
+
+
+2 correlator passes:
+
+Correlator configuration:  21 Tels, 8 band X 4 pols,
+                           each with 64 frequency points,
+                           1 sec dump correlator time.
+      status and capacity: DONE NOT OK
+           hours and date: 3hr, complete on 10/12/2021
+                     note: regular pass
+
+Correlator configuration:  21 Tels, 8 band X 4 pols,
+                           each with 64 frequency points,
+                           1 sec dump correlator time.
+      status and capacity: DONE NOT OK
+           hours and date: 3hr, complete on 10/12/2021
+                     note: no-normalization pass
+
+configuration in skd:      (21 Tels, 1 band X 4 pols,)
+                           (each with 64 frequency points,)
+                           (1 sec dump correlator time.)
+
+Handling at JIVE:          Marcote   (marcote@jive.eu)
+            tapes at JIVE:  
+        release procedure: automatic by JIVE, after 2 weeks
+        net network hours: 3hr
+
+Source list:
+  src =   J1751+0939, type =    reference (confd), use = YES (confd) 
+  src =   J2031+1219, type =    reference (confd), use = YES (confd) 
+
+
+Status pipelining:         no information
+
+
+Inquired publ. status:     not set
+        status processing: no information
+
+
