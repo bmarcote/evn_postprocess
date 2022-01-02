@@ -1,6 +1,6 @@
 #! /usr/bin/env python3
-
-import experiment
+import subprocess
+from evn_postprocess import experiment
 
 
 def scp(originpath, destpath):
@@ -77,7 +77,7 @@ def remote_file_exists(host, path):
 
 
 
-def create_all_dirs(exp: experiment.Experiment):
+def create_all_dirs(exp):
     """Creates all folders (in eee and jop83) for the associated post-processing.
     Input:
         - exp : experiment.Experiment
@@ -91,7 +91,7 @@ def create_all_dirs(exp: experiment.Experiment):
     return True
 
 
-def copy_files(exp: experiment.Experiment):
+def copy_files(exp):
     """Copy all files related to the experiment that already exist when the post-processing
     starts. This includes:
     - vix file
@@ -178,7 +178,7 @@ def check_lisfiles(exp):
     all_good = True
     for a_pass in exp.correlator_passes:
         cmd, output = shell_command("checklis.py", a_pass.lisfile)
-        exp.log(f"{cmd}\n{output.replace('\n', '\n#')}", False)
+        exp.log(f"{cmd}"+"\n"+output.replace('\n', '\n#'), False)
         # The output has the form:
         #      First scan = X
         #       {errors if any otherwise no extra lines}
