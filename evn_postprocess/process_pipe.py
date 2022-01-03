@@ -19,7 +19,7 @@ from . import experiment
 from . import environment as env
 
 
-def create_folders(expname: str, supsci: str):
+def create_folders(exp):
     """Creates the folder required for the post-processing of the experiment
     - @eee: /data0/{supportsci}/{exp.upper()}
 
@@ -29,13 +29,13 @@ def create_folders(expname: str, supsci: str):
         - supsci: str
             Surname of the assigned support scientist.
     """
-    tmpdir = f"/jop83_0/pipe/in/{supsci.lower()}/{expname.lower()}"
-    indir = f"/jop83_0/pipe/in/{expname.lower()}"
-    outdir = f"/jop83_0/pipe/out/{expname.lower()}"
+    tmpdir = f"/jop83_0/pipe/in/{exp.supsci.lower()}/{exp.expname.lower()}"
+    indir = f"/jop83_0/pipe/in/{exp.expname.lower()}"
+    outdir = f"/jop83_0/pipe/out/{exp.expname.lower()}"
     for a_dir in (tmpdir, indir, outdir):
-        output = env.ssh('pipe@jop83', f"mkdir -p {a_dir}")
-
-
+        if not env.remote_file_exists('pipe@jop83', a_dir):
+            output = env.ssh('pipe@jop83', f"mkdir -p {a_dir}")
+            exp.log(f"mkdir -p {a_dir}", False)
 
 
 

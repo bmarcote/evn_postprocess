@@ -25,7 +25,7 @@ from . import environment #as env
 # from evn_postprocess import process_eee as eee
 # from evn_postprocess import process_pipe as pipe
 
-def create_folders(expname: str, supsci: str):
+def create_folders(exp):
     """Creates the folder required for the post-processing of the experiment
     - @eee: /data0/{supportsci}/{exp.upper()}
 
@@ -35,10 +35,11 @@ def create_folders(expname: str, supsci: str):
         - supsci: str
             Surname of the assigned support scientist.
     """
-    expdir = Path(f"/data0/{supsci.lower()}/{expname.upper()}")
+    expdir = Path(f"/data0/{exp.supsci.lower()}/{exp.expname.upper()}")
     if not expdir.exists():
         expdir.mkdir(parents=True)
-        print(f"Directory '/data0/{supsci.lower()}/{expname}' has been created.")
+        exp.log(f"mkdir /data0/{exp.supsci.lower()}/{exp.expname.upper()}", False)
+        print(f"Directory '/data0/{exp.supsci.lower()}/{exp.expname.upper()}' has been created.")
 
 
 
