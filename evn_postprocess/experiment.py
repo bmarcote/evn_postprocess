@@ -583,7 +583,7 @@ class Experiment(object):
         """Obtains the time range, antennas, sources, and frequencies of the observation
         from all existing passes with MS files and incorporate them into the current object.
         """
-        for i,a_pass in enumerate(self.passes):
+        for i,a_pass in enumerate(self.correlator_passes):
             try:
                 with pt.table(a_pass.msfile, readonly=True, ack=False) as ms:
                     with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:

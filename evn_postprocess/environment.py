@@ -202,13 +202,13 @@ def update_pipelinable_passes(exp, pipelinable):
             the bool as value.
     """
     if isinstance(pipelinable, list):
-        assert len(pipelinable) == len(exp.passes)
+        assert len(pipelinable) == len(exp.correlator_passes)
         for i,is_pipelinable in enumerate(pipelinable):
             assert isinstance(is_pipelinable, bool)
-            exp.passes[i].pipeline = is_pipelinable
+            exp.correlator_passes[i].pipeline = is_pipelinable
     elif isinstance(pipelinable, dict):
         for a_lisfile in pipelinable:
-            for a_exppass in exp.passes:
+            for a_exppass in exp.correlator_passes:
                 if a_exppass.lisfile == a_lisfile:
                     a_exppass.pipeline = pipelinable[a_lisfile]
                     break

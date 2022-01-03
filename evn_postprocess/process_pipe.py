@@ -240,7 +240,7 @@ def prepare_input_file(exp, args):
     """Retrieves a template for the EVN Pipeline input file and do really minor changes. A final touch
     is required from the user.
     """
-    passes2pipeline = [p for p in exp.passes if p.pipeline]
+    passes2pipeline = [p for p in exp.correlator_passes if p.pipeline]
     if len(passes2pipeline) == 1:
         extensions = ['']
         # inpfiles = [f"./{exp.expname.lower()}.inp.txt"]
@@ -333,7 +333,7 @@ def post_pipeline(exp, args):
     # TODO: Check if files already exist.
     actions.shell_command("comment_tasav_file.py", exp.expname.lower())
 
-    passes2pipeline = [p for p in exp.passes if p.pipeline]
+    passes2pipeline = [p for p in exp.correlator_passes if p.pipeline]
     if len(passes2pipeline) == 1:
         extensions = ['']
         # inpfiles = [f"./{exp.expname.lower()}.inp.txt"]
