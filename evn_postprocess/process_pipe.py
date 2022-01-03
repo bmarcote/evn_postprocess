@@ -15,8 +15,8 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-from evn_postprocess import experiment
-from evn_postprocess import environment as env
+from . import experiment
+from . import environment as env
 
 
 def create_folders(expname: str, supsci: str):
@@ -254,7 +254,7 @@ def prepare_input_file(exp, args):
         with open(inpfile, 'r') as f:
             filecontent = f.read()
 
-        if args.supsci is 'marcote':
+        if args.supsci == 'marcote':
             # only works for the cool and lazy programmer :)
             # TODO: Check that the output is indeed the output from the sh script...
             get_next_userno = actions.shell_command("give_me_next_userno.sh")
