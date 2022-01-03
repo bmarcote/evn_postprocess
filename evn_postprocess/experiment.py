@@ -771,12 +771,12 @@ class Experiment(object):
         """Writes into the processing.log file a new entry.
         """
         if timestamp:
-            cmd = f"echo '# {dt.today().strftime('%d-%m-%Y %H:%M')}\n{entry}\n'"
+            cmd = f"# {dt.today().strftime('%d-%m-%Y %H:%M')}\n{entry}\n"
         else:
-            cmd = f"echo '{entry}\n'"
+            cmd = f"{entry}\n"
 
         with open(self.logfile['file'], 'a') as logfile:
-            logfile.write(cmd + '\n')
+            logfile.write(cmd)
 
 
     @property

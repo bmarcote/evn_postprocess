@@ -1,7 +1,7 @@
 
 from . import experiment
 from . import environment as env
-from . import process_css as css
+from . import process_ccs as ccs
 from . import process_eee as eee
 from . import process_pipe as pipe
 
@@ -44,12 +44,14 @@ def preparing_lis_files(exp: experiment.Experiment):
     """Checks that the .lis file(s) already exists.
     Otherwise it creates it in ccs and copy it to the experiment folder.
     """
-    for a_pass in exp.correlator_passes:
-        if not a_pass.lisfile.exists():
-            if not ccs.lis_files_in_ccs(exp):
-                ccs.create_lis_files(exp)
-            ccs.get_lis_files(exp)
-
+    ccs.lis_files_in_ccs(exp):
+    ccs.create_lis_files(exp)
+    ccs.get_lis_files(exp)
+    # for a_pass in exp.correlator_passes:
+    #     if not a_pass.lisfile.exists():
+    #         if not ccs.lis_files_in_ccs(exp):
+    #             ccs.create_lis_files(exp)
+    #         ccs.get_lis_files(exp)
     eee.get_passes_from_lisfiles(exp)
     exp.store()
     return True

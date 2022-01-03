@@ -84,12 +84,8 @@ def create_all_dirs(exp):
     Input:
         - exp : experiment.Experiment
     """
-    eee.create_folders(exp.expname, exp.supsci)
-    exp.log(f"mkdir /data0/{exp.supsci.lower()}/{exp.expname.upper()}", False)
-    pipe.create_folders(exp.expname, exp.supsci)
-    exp.log(f"mkdir /jop83_0/pipe/in/{exp.supsci.lower()}/{exp.expname.lower()}", False)
-    exp.log(f"mkdir /jop83_0/pipe/in/{exp.expname.lower()}", False)
-    exp.log(f"mkdir /jop83_0/pipe/out/{exp.expname.lower()}", False)
+    eee.create_folders(exp)
+    pipe.create_folders(exp)
     return True
 
 
