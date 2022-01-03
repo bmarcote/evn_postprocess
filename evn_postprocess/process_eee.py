@@ -92,7 +92,8 @@ def getdata(exp):
     for a_pass in exp.correlator_passes:
         cmd,output = environment.shell_command("getdata.pl",
                     ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
-                     "-lis", a_pass.lisfile], stdout=subprocess.STDOUT)
+                     "-lis", a_pass.lisfile.name], shell=True, stdout=None,
+                     stderr=subprocess.STDOUT, bufsize=0)
         exp.log(cmd)
 
     return True
@@ -108,16 +109,17 @@ def j2ms2(exp):
             outms = [a for a in f.readline().replace('\n','').split(' ') \
                                  if (('.ms' in a) and ('.UVF' not in a))][0]
         if os.path.isdir(outms):
-            # if environment.yes_or_no_question(f"{outms} exists. Delete and run j2ms2 again?"):
             print('Removing the pre-existing MS file {outms}')
-            cmd,output = environment.shell_command("rm", ["-rf", outms])
+            cmd,output = environment.shell_command("rm", ["-rf", outms.name], shell=True)
             exp.log(cmd)
-        # else:
+
         if (exp.special_params is not None and 'j2ms2' in exp.special_params):
-            cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile, *exp.special_params['j2ms2']],
-                                                   stdout=subprocess.STDOUT)
+            cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
+                *exp.special_params['j2ms2']], shell=True, stdout=None,
+                stderr=subprocess.STDOUT, bufsize=0)
         else:
-            cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile], stdout=subprocess.STDOUT)
+            cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
+                shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
 
         exp.log(cmd)
 
@@ -131,7 +133,7 @@ def update_ms_expname(exp):
     if (exp.eEVNname is not None) and (exp.eEVNname != exp.expname):
         for a_pass in exp.correlator_passes:
             environment.shell_command("expname.py", [a_pass.msfile, exp.expname],
-                                      stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             exp.log(f"expname.py {a_pass.msfile} {exp.expname}")
 
     return True
@@ -167,11 +169,12 @@ def standardplots(exp, do_weights=False):
                 counter += 1
                 if counter == 1 and do_weights:
                     cmd, output = environment.shell_command("standardplots",
-                                  ["-weight", a_pass.msfile, refant, calsources],
-                                  stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+                                      ["-weight", a_pass.msfile, refant, calsources],
+                                      stdout=None, stderr=subprocess.STDOUT)
                 else:
-                    cmd, output = environment.shell_command("standardplots", [a_pass.msfile, refant, calsources],
-                                      stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+                    cmd, output = environment.shell_command("standardplots",
+                                    [a_pass.msfile, refant, calsources],
+                                    stdout=None, stderr=subprocess.STDOUT)
 
     except Exception as e:
         print("WARNING: Standardplots reported an error ({e}). Check if plots were created or run it manually.")
@@ -194,7 +197,8 @@ def open_standardplot_files(exp):
 
     try:
         for a_plot in standardplots:
-            environment.shell_command("gv", a_plot, stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+            environment.shell_command("gv", a_plot, stdout=None,
+                stderr=subprocess.STDOUT)
             return True
     except Exception as e:
         print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")

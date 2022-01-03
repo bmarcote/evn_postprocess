@@ -32,7 +32,8 @@ def ssh(computer, commands):
     return f"ssh {computer}:{commands}", process.communicate()[0].decode('utf-8')
 
 
-def shell_command(command, parameters=None, shell=False, bufsize=1, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
+def shell_command(command, parameters=None, shell=True, bufsize=-1,
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE):
     """Runs the provided command in the shell with some arguments if necessary.
     Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError
     if fails. Parameters must be either a single string or a list, if provided.
@@ -51,10 +52,11 @@ def shell_command(command, parameters=None, shell=False, bufsize=1, stdout=subpr
     #     print(line.decode('utf-8').replace('\n', ''))
     output_lines = []
     while process.poll() is None:
-        out = process.stdout.readline().decode('utf-8')
-        output_lines.append(out)
-        sys.stdout.write(out)
-        sys.stdout.flush()
+        if process.stdout is not None:
+            out = process.stdout.readline().decode('utf-8')
+            output_lines.append(out)
+            sys.stdout.write(out)
+            sys.stdout.flush()
 
     if (process.returncode != 0) and (process.returncode is not None):
         raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
@@ -176,7 +178,7 @@ def check_lisfiles(exp):
     """
     all_good = True
     for a_pass in exp.correlator_passes:
-        cmd, output = shell_command("checklis.py", a_pass.lisfile)
+        cmd, output = shell_command("checklis.py", a_pass.lisfile.name, shell=True)
         exp.log(f"{cmd}"+"\n"+output.replace('\n', '\n#'), False)
         # The output has the form:
         #      First scan = X
