@@ -215,18 +215,18 @@ def ampcal(exp):
 #     indir = '/jop83_0/pipe/in/{}'.format(exp.supsci, exp.expname.lower())
 #     outdir = '/jop83_0/pipe/out/{}'.format(exp.supsci, exp.expname.lower())
 #     for adir in (tmpdir, indir, outdir):
-#         if not actions.remote_file_exists(_login, adir):
-#             actions.ssh(_login, f"mkdir {adir}")
+#         if not env.remote_file_exists(_login, adir):
+#             env.ssh(_login, f"mkdir {adir}")
 #             os.makedirs(adir)
 #             print(f"Directory {adir} has been created.")
 
 ##################################################################################################
 #     if not os.path.isfile(f"{exp.expname.lower()}.piletter"):
-#         cmd, output = actions.scp(f"jops@jop83:piletters/{exp.expname.lower()}.piletter", '.')
-#     return actions.remote_file_exists('jops@ccs',
+#         cmd, output = env.scp(f"jops@jop83:piletters/{exp.expname.lower()}.piletter", '.')
+#     return env.remote_file_exists('jops@ccs',
 #                                       f"/ccs/expr/{eEVNname}/{eEVNname.lower()}*.lis")
 #     cmd = f"cd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}"
-#     output = actions.ssh('jops@ccs', cmd)
+#     output = env.ssh('jops@ccs', cmd)
 # ##################################################################################################
 
 def get_vlba_antab(exp):
@@ -250,14 +250,14 @@ def prepare_input_file(exp, args):
 
     for i,ext in enumerate(extensions):
         inpfile = f"{exp.expname.lower()}{ext}.inp.txt"
-        actions.shell_command("cp", ["/jop83_0/pipe/in/template.inp", inpfile])
+        env.shell_command("cp", ["/jop83_0/pipe/in/template.inp", inpfile])
         with open(inpfile, 'r') as f:
             filecontent = f.read()
 
         if args.supsci == 'marcote':
             # only works for the cool and lazy programmer :)
             # TODO: Check that the output is indeed the output from the sh script...
-            get_next_userno = actions.shell_command("give_me_next_userno.sh")
+            get_next_userno = env.shell_command("give_me_next_userno.sh")
             filecontent.replace('3602', get_next_userno)
             print(f"{inpfile} to be executed under AIPS userno. {get_next_userno}.")
 
@@ -265,7 +265,7 @@ def prepare_input_file(exp, args):
         with open(inpfile, 'w') as f:
             f.write(filecontent)
 
-    actions.can_continue("Update the input file(s) before running the EVN Pipeline")
+    env.can_continue("Update the input file(s) before running the EVN Pipeline")
 
 
 
@@ -277,18 +277,18 @@ def pre_pipeline(exp, args):
 
     get_files_from_vlbeer(exp)
     # TODO: VLBA ANTAB files
-    actions.shell_command("uvflgall.csh")
+    env.shell_command("uvflgall.csh")
     # TODO: run the program (to be written) to get uvflg entries for all telescopes without/empty .uvflg files.
-    actions.shell_command("antab_check.py")
-    actions.can_continue('Check the ANTAB files and fix them now. Continue aftwards')
+    env.shell_command("antab_check.py")
+    env.can_continue('Check the ANTAB files and fix them now. Continue aftwards')
     # Unify all antabfs/uvflgfs files into one and copy them to the $IN/{expname} directory.
-    actions.shell_command("cat", [f"{exp.expname.lower()}*antabfs", ">", f"{exp.expname.lower()}.antab"],
+    env.shell_command("cat", [f"{exp.expname.lower()}*antabfs", ">", f"{exp.expname.lower()}.antab"],
                           shell=True)
-    actions.shell_command("cat", [f"{exp.expname.lower()}*uvflgfs", ">", f"{exp.expname.lower()}.uvflg"],
+    env.shell_command("cat", [f"{exp.expname.lower()}*uvflgfs", ">", f"{exp.expname.lower()}.uvflg"],
                           shell=True)
-    actions.shell_command("cp", [f"{exp.expname.lower()}.antab", f"/jop83_0/pipe/in/{exp.expname.lower()}/"],
+    env.shell_command("cp", [f"{exp.expname.lower()}.antab", f"/jop83_0/pipe/in/{exp.expname.lower()}/"],
                           shell=True)
-    actions.shell_command("cp", [f"{exp.expname.lower()}.uvflg", f"/jop83_0/pipe/in/{exp.expname.lower()}/"],
+    env.shell_command("cp", [f"{exp.expname.lower()}.uvflg", f"/jop83_0/pipe/in/{exp.expname.lower()}/"],
                           shell=True)
 
     move2dir(f"/jop83_0/pipe/in/{exp.expname.lower()}")
@@ -303,23 +303,23 @@ def pipeline(exp):
     move2dir(f"/jop83_0/pipe/in/{exp.expname.lower()}")
 
     while True:
-        outputs = map(lambda inpfile : actions.shell_command("EVN.py", inpfile),
+        outputs = map(lambda inpfile : env.shell_command("EVN.py", inpfile),
                      [glob.glob(f"{exp.expname.lower()}*inp.txt")])
         # TODO: Check the output, if all the instances say OK.
         if False:
-            # actions.can_continue("The Pipeline has finished. Do you want to continue with the post-pipeline operations?")
-            answer = actions.yes_or_no_question("Do you want to continue with the post-pipeline operations? No to run the pipeline again (modify files before answering)")
+            # env.can_continue("The Pipeline has finished. Do you want to continue with the post-pipeline operations?")
+            answer = env.yes_or_no_question("Do you want to continue with the post-pipeline operations? No to run the pipeline again (modify files before answering)")
             if answer:
                 return True
         else:
-            actions.can_continue("It seems like a problem happened in the pipeline. Fix it and then I will rerun it.")
+            env.can_continue("It seems like a problem happened in the pipeline. Fix it and then I will rerun it.")
 
 
 def archive(exp):
     """Archive the output of the EVN Pipeline for the given experiment.
     """
     for folder in ('in', 'out'):
-        actions.ssh('jops@jop83',
+        env.ssh('jops@jop83',
             f"cd /jop83_0/pipe/{folder}/{exp.expname.lower()};archive -pipe -e {exp.expname}_{exp.obsdate}")
 
     print("Pipeline results have been archived.")
@@ -331,7 +331,7 @@ def post_pipeline(exp, args):
     move2dir(f"/jop83_0/pipe/out/{exp.expname.lower()}/")
 
     # TODO: Check if files already exist.
-    actions.shell_command("comment_tasav_file.py", exp.expname.lower())
+    env.shell_command("comment_tasav_file.py", exp.expname.lower())
 
     passes2pipeline = [p for p in exp.correlator_passes if p.pipeline]
     if len(passes2pipeline) == 1:
@@ -343,12 +343,12 @@ def post_pipeline(exp, args):
 
     for ext in extensions:
         # TODO: Add the sour flag to avoid the manual input. Check which format properly works.
-        actions.shell_command("feedback.pl", ["-exp", f"{exp.expname.lower()}{ext}", "-jss", args.supsci])
+        env.shell_command("feedback.pl", ["-exp", f"{exp.expname.lower()}{ext}", "-jss", args.supsci])
 
     print('You should protect the private sources at http://archive.jive.nl/scripts/pipe/admin.php.')
-    actions.print_sourcelist_from_expsum(exp)
+    env.print_sourcelist_from_expsum(exp)
     archive(exp)
-    actions.can_continue("\nCheck the Pipeline results at:\n" +\
+    env.can_continue("\nCheck the Pipeline results at:\n" +\
             f"http://old.jive.nl/archive-info?experiment={exp.expname}_{exp.obsdate}" +\
             "\n\nCan continue?")
 
@@ -357,7 +357,7 @@ def ampcal(exp):
     """Runs ampcal.sh script on the $OUT/EXPNAME directory
     """
     move2dir(f"/jop83_0/pipe/out/{exp.expname.lower()}/")
-    actions.shell_command("ampcal.sh")
+    env.shell_command("ampcal.sh")
 
 
 
