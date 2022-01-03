@@ -44,34 +44,6 @@ def create_folders(exp):
 
 
 
-##################################################### THE OLD CODE
-
-def folders(exp):
-    """Moves to the folder associated to the given experiment.
-    If it does not exist, it creates it.
-    """
-    # If required, move to the required directory (create it if needed).
-    expdir = '/data0/{}/{}'.format(exp.supsci.lower(), exp.expname.upper())
-    if expdir is not os.getcwd():
-        if not os.path.isdir(expdir):
-            os.makedirs(expdir)
-            print(f"Directory {expdir} has been created.")
-
-        os.chdir(expdir)
-        print(f"Moved to {expdir}.\n")
-
-    # TODO: this is a temporary command until the pipeline fully works
-    if exp.eEVNname is not None:
-        environment.shell_command("create_processing_log.py", \
-            [exp.expname, "-e", exp.eEVNname, "-o", "processing_manual.log"])
-    else:
-        environment.shell_command("create_processing_log.py", \
-            [exp.expname, "-o", "processing_manual.log"])
-
-    if not os.path.isdir('log'):
-        os.makedirs('log')
-
-
 def get_passes_from_lisfiles(exp):
     """Gets all .lis files in the directory, which imply different correlator passes.
     Append this information to the current experiment (exp object),
@@ -110,6 +82,7 @@ def get_passes_from_lisfiles(exp):
                             f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile], shell=True, bufsize=None)
 
     exp.passes = passes
+    return True
 
 
 def getdata(exp):
