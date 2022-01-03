@@ -1,4 +1,5 @@
 #! /usr/bin/env python3
+import sys
 import subprocess
 from . import experiment
 from . import process_eee as eee
@@ -144,7 +145,7 @@ def split_lis_cont_line(fulllisfile):
         for a_fileline in f_full.readlines():
             temp = a_fileline.split()
             if 'PROD' in temp:
-                n_prods.add(temp[temp.index('PROD')+1])
+                n_prods.add(temp[temp.index('PROD') + 1])
 
     # TODO: possible problems if > 2 ?
     if ('prod_line' in n_prods) and (len(n_prods) > 1):

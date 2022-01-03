@@ -37,7 +37,8 @@ def create_lis_files(exp):
         cmd = f"cd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}"
         output = environment.ssh('jops@ccs', cmd)
         exp.log(f"# In ccs:\ncd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}", False)
-        return output
+
+    return True
 
 
 def get_lis_files(exp):
@@ -63,7 +64,7 @@ def get_lis_files(exp):
             cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), exp.expname.lower())}")
             exp.log(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), exp.expname.lower())}")
 
-    return cmds, outputs
+    return True
 
 
 
