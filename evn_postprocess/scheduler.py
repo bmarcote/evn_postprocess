@@ -91,7 +91,7 @@ def ms_operations(exp: experiment.Experiment):
 def tconvert(exp: experiment.Experiment):
     output = dispatcher(exp, (eee.tconvert, eee.polConvert))
     did_polConvert_run = False
-    for a_pass in exp.passes:
+    for a_pass in exp.correlator_passes:
         if len(a_pass.antennas.polconvert) > 0:
             did_polConvert_run = True
     if did_polConvert_run:

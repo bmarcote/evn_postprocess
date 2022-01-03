@@ -81,7 +81,7 @@ def get_passes_from_lisfiles(exp):
                         environment.shell_command('sed', ['-i',
                             f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile], shell=True, bufsize=None)
 
-    exp.passes = passes
+    exp.correlator_passes = passes
     return True
 
 
@@ -89,7 +89,7 @@ def getdata(exp):
     """Gets the data into eee from all existing .lis files from the given experiment.
     inputs: exp : experiment.Experiment
     """
-    for a_pass in exp.passes:
+    for a_pass in exp.correlator_passes:
         cmd,output = environment.shell_command("getdata.pl",
                     ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
                      "-lis", a_pass.lisfile], stdout=subprocess.STDOUT)
@@ -103,7 +103,7 @@ def j2ms2(exp):
     If the MS to produce already exists, then it will be removed.
     inputs: exp : experiment.Experiment
     """
-    for a_pass in exp.passes:
+    for a_pass in exp.correlator_passes:
         with open(a_pass.lisfile) as f:
             outms = [a for a in f.readline().replace('\n','').split(' ') \
                                  if (('.ms' in a) and ('.UVF' not in a))][0]
@@ -129,7 +129,7 @@ def update_ms_expname(exp):
     experiment name, this one must be updated in the created MS file(s).
     """
     if (exp.eEVNname is not None) and (exp.eEVNname != exp.expname):
-        for a_pass in exp.passes:
+        for a_pass in exp.correlator_passes:
             environment.shell_command("expname.py", [a_pass.msfile, exp.expname],
                                       stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
             exp.log(f"expname.py {a_pass.msfile} {exp.expname}")
@@ -153,7 +153,7 @@ def standardplots(exp, do_weights=False):
     counter = 0
     output = None
     try:
-        for a_pass in exp.passes:
+        for a_pass in exp.correlator_passes:
             if a_pass.pipeline:
                 if exp.refant is not None:
                     refant = exp.refant[0] if len(exp.refant) == 1 else f"({'|'.join(exp.refant)})"
@@ -207,7 +207,7 @@ def onebit(exp):
     """
     # Sanity check
 
-    for a_pass in exp.passes:
+    for a_pass in exp.correlator_passes:
         if len(a_pass.antennas.onebit) > 0:
             cmd, output = environment.shell_command("scale1bit.py",
                           [a_pass.msfile, ' '.join(a_pass.antennas.onebit)],
@@ -220,7 +220,7 @@ def onebit(exp):
 
 
 def ysfocus(exp):
-    for a_pass in exp.passes:
+    for a_pass in exp.correlator_passes:
         environment.shell_command("ysfocus.py", a_pass.msfile, stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
     return True
 
@@ -229,7 +229,7 @@ def polswap(exp):
     """Swaps the polarization of the given antennas for all associated MS files
     to the given experiment.
     """
-    for a_pass in exp.passes:
+    for a_pass in exp.correlator_passes:
             if len(a_pass.antennas.polswap) > 0:
                 environment.shell_command("polswap.py", [a_pass.msfile, ','.join(a_pass.antennas.polswap)],
                                           stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
@@ -238,7 +238,7 @@ def polswap(exp):
 
 def flag_weights(exp):
     outputs = []
-    for a_pass in exp.passes:
+    for a_pass in exp.correlator_passes:
         cmd, output = environment.shell_command("flag_weights.py", [a_pass.msfile, a_pass.flagged_weights.threshold],
                                                 stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
         exp.log(cmd+'\n# '.join(output))
@@ -257,8 +257,8 @@ def update_piletter(exp):
     - Removing the trailing epoch-related character in the experiment name.
     - Adding the weightthreshold that was used and how much data were flagged.
     """
-    weightthreshold = float(exp.passes[0].flagged_weights.threshold)
-    flaggeddata = float(exp.passes[0].flagged_weights.percentage)
+    weightthreshold = float(exp.correlator_passes[0].flagged_weights.threshold)
+    flaggeddata = float(exp.correlator_passes[0].flagged_weights.percentage)
     with open(f"{exp.expname.lower()}.piletter", 'r') as orifile:
         with open(f"{exp.expname.lower()}.piletter~", 'w') as destfile:
             for a_line in orifile.readlines():
@@ -282,7 +282,7 @@ def update_piletter(exp):
 def tConvert(exp):
     """Runs tConvert in all MS files available in the directory
     """
-    for a_pass in exp.passes:
+    for a_pass in exp.correlator_passes:
         existing_files = glob.glob(f"{a_pass.fitsidifile}*")
         if len(existing_files) > 0:
             for a_existing_file in existing_files:
@@ -298,7 +298,7 @@ def polConvert(exp):
     In that case, prepares the templates for running it and (potentially in the future?)
     will run it. For now it just requests the user to run it manually.
     """
-    for a_pass in exp.passes:
+    for a_pass in exp.correlator_passes:
         if len(a_pass.antennas.polconvert) > 0:
             print("PolConvert has not been implemented yet.\nRun it manually.")
             return False
