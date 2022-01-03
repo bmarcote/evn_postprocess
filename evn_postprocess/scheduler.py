@@ -53,13 +53,14 @@ def preparing_lis_files(exp: experiment.Experiment):
 def first_manual_check(exp: experiment.Experiment):
     """It is only executed for complex experiments: those with
     """
-    if not env.check_lisfiles(exp):
+    output = env.check_lisfiles(exp)
+    if not output:
         temp = 'file','seems' if len(exp.correlator_passes) == 1 else 'files','seem'
-        print(f"{'#'*10}\n# Stopping here...")
-        print(f"The list {temp[0]} for {exp.expname} {temp[1]} to have issues to solve manually.\n{'#'*10}\n")
+        print(f"\n\n{'#'*10}\n# Stopping here...")
+        print(f"The list {temp[0]} for {exp.expname} {temp[1]} to have issues to be solved manually.\n{'#'*10}\n")
     exp.store()
 
-    return env.check_lisfiles(exp)
+    return output
 
 
 def creating_ms(exp: experiment.Experiment):

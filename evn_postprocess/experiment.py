@@ -146,30 +146,38 @@ class Antennas(object):
         assert isinstance(new_antenna, Antenna)
         self._antennas.append(new_antenna)
 
+    @property
     def names(self):
         return [a.name for a in self._antennas]
 
+    @property
     def scheduled(self):
         return [a.name for a in self._antennas if a.scheduled]
 
+    @property
     def observed(self):
         return [a.name for a in self._antennas if a.observed]
 
     # def reference(self):
     #     return [a.name for a in self._antennas if a.reference]
 
+    @property
     def polswap(self):
         return [a.name for a in self._antennas if a.polswap]
 
+    @property
     def polconvert(self):
         return [a.name for a in self._antennas if a.polconvert]
 
+    @property
     def onebit(self):
         return [a.name for a in self._antennas if a.onebit]
 
+    @property
     def logfsfile(self):
         return [a.logfsfile for a in self._antennas if a.logfsfile]
 
+    @property
     def antabfsfile(self):
         return [a.antabfsfile for a in self._antennas if a.antabfsfile]
 
@@ -637,7 +645,7 @@ class Experiment(object):
                 elif 'scheduled telescopes' in a_line:
                     sched_antennas = a_line.split(':')[1].split()
                     # The antennas will likely not be defined at this point, it checks it and adds it
-                    saved_ants = self.antennas.scheduled()
+                    saved_ants = self.antennas.scheduled
                     for ant in sched_antennas:
                         if ant in saved_ants:
                             self.antennas[ant].scheduled = True
