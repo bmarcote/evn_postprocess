@@ -18,9 +18,9 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-from evn_postprocess import dialog
-from evn_postprocess import experiment
-from evn_postprocess import environment #as env
+from . import dialog
+from . import experiment
+from . import environment #as env
 # from evn_postprocess import process_css as css
 # from evn_postprocess import process_eee as eee
 # from evn_postprocess import process_pipe as pipe
@@ -175,7 +175,7 @@ def standardplots(exp, do_weights=False):
     # TODO: to be fully rewritten
     # To run for all correlator passes that will be pipelined.
     # Then once all of them finish, open the plots and ask user.
-    calsources = ','.join(exp.calsources)
+    calsources = ','.join(exp.sources_stdplot)
     counter = 0
     output = None
     try:
@@ -346,7 +346,7 @@ def set_credentials_pipelet(exp):
     Otherwise, it will take the credentials from a .auth file if already exists,
     or creates such file iwth a new password.
     """
-    if (exp.expname.upper()[0] is 'N') or (exp.expname.upper()[0] is 'F'):
+    if (exp.expname.upper()[0] == 'N') or (exp.expname.upper()[0] == 'F'):
         print(f"NOTE: {exp.expname} is an NME or test experiment.\nNo authentification will be set.")
     elif len(glob.glob("*_*.auth")) == 1:
         # Some credentials are already in place.

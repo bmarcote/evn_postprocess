@@ -15,8 +15,8 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-from evn_postprocess import experiment
-from evn_postprocess import environment
+from . import experiment
+from . import environment
 
 
 
@@ -64,5 +64,7 @@ def get_lis_files(exp):
             exp.log(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), exp.expname.lower())}")
 
     return cmds, outputs
+
+
 
 
