@@ -44,17 +44,10 @@ def preparing_lis_files(exp: experiment.Experiment):
     """Checks that the .lis file(s) already exists.
     Otherwise it creates it in ccs and copy it to the experiment folder.
     """
-    ccs.lis_files_in_ccs(exp):
-    ccs.create_lis_files(exp)
-    ccs.get_lis_files(exp)
-    # for a_pass in exp.correlator_passes:
-    #     if not a_pass.lisfile.exists():
-    #         if not ccs.lis_files_in_ccs(exp):
-    #             ccs.create_lis_files(exp)
-    #         ccs.get_lis_files(exp)
-    eee.get_passes_from_lisfiles(exp)
+    output = dispatcher(exp, (ccs.lis_files_in_ccs, ccs.create_lis_files, ccs.get_lis_files, \
+                              eee.get_passes_from_lisfiles))
     exp.store()
-    return True
+    return output
 
 
 def first_manual_check(exp: experiment.Experiment):
