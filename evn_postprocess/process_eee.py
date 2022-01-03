@@ -107,7 +107,7 @@ def get_passes_from_lisfiles(exp):
                     # file name to generate in this pass.
                     if '.UVF' in a_lisline:
                         environment.shell_command('sed', ['-i',
-                            f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile])
+                            f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile], shell=True, bufsize=None)
 
     exp.passes = passes
 
