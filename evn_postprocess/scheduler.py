@@ -1,9 +1,9 @@
 
-from evn_postprocess import experiment
-from evn_postprocess import environment as env
-from evn_postprocess import process_css as css
-from evn_postprocess import process_eee as eee
-from evn_postprocess import process_pipe as pipe
+from . import experiment
+from . import environment as env
+from . import process_css as css
+from . import process_eee as eee
+from . import process_pipe as pipe
 
 
 # Create processing_log?  log dir.
@@ -47,8 +47,8 @@ def preparing_lis_files(exp: experiment.Experiment):
     for a_pass in exp.correlator_passes:
         if not a_pass.lisfile.exists():
             if not ccs.lis_files_in_ccs(exp):
-                create_lis_files(exp)
-            get_lis_files(exp)
+                ccs.create_lis_files(exp)
+            ccs.get_lis_files(exp)
 
     eee.get_passes_from_lisfiles(exp)
     exp.store()

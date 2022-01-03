@@ -8,18 +8,19 @@ import time
 import string
 import random
 import argparse
+from pathlib import Path
 import configparser
 import logging
 import subprocess
 from datetime import datetime as dt
 # from inspect import signature  # WHAT?  to know how many parameters has each function
 from datetime import datetime
-from evn_postprocess import experiment
-from evn_postprocess import scheduler as sch
-from evn_postprocess import dialog
-from evn_postprocess import process_ccs as ccs
-from evn_postprocess import process_eee as eee
-from evn_postprocess import process_pipe as pipe
+from evn_postprocess.evn_postprocess import experiment
+from evn_postprocess.evn_postprocess import scheduler as sch
+from evn_postprocess.evn_postprocess import dialog
+from evn_postprocess.evn_postprocess import process_ccs as ccs
+from evn_postprocess.evn_postprocess import process_eee as eee
+from evn_postprocess.evn_postprocess import process_pipe as pipe
 
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
@@ -127,14 +128,14 @@ def main():
 
 
     exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} (exp.obsdate).\n" \
-            f"# Current date: {dt.strftime('%d-%m-%Y %H:%M')}\n")
+            f"# Current date: {dt.today().strftime('%d %b %Y %H:%M')}\n")
 
     if exp.cwd != Path.cwd():
         os.chdir(exp.cwd)
         exp.log(f"# Moved to the experiment folder\ncd{exp.cwd}", timestamp=False)
 
     # -n  parameter so it can ignore all the previous steps
-    if exp.is_local_copy():
+    if exp.exists_local_copy():
         exp.load()
         if args.steps is not None:
             print("Note that the steps will be ignored as a previous running is present." \
@@ -152,8 +153,9 @@ def main():
     # - In the case of e-EVN, it should be run until the ANTAB steps in all the other experiments.
 
     for a_step in the_steps:
-        if not a_step(exp):
-            raise RuntimeError(f"An error was found in {exp.expname} at the step {a_step.__name__}")
+        print(f'It would run: {a_step}')
+        # if not all_steps[a_step](exp):
+        #     raise RuntimeError(f"An error was found in {exp.expname} at the step {a_step.__name__}")
 
     print('\nThe post-processing has finished properly.')
 

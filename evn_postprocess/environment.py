@@ -1,6 +1,8 @@
 #! /usr/bin/env python3
 import subprocess
-from evn_postprocess import experiment
+from . import experiment
+from . import process_eee as eee
+from . import process_pipe as pipe
 
 
 def scp(originpath, destpath):
@@ -39,7 +41,7 @@ def shell_command(command, parameters=None, shell=False, bufsize=1, stdout=subpr
     else:
         full_shell_command = [command] if parameters is None else [command, parameters]
 
-    print(f"\n\033[1m> {' '.join(full_shell_command)}\033[0m")
+    print("\n\033[1m> " + f"{' '.join(full_shell_command)}" + "\033[0m")
 
     process = subprocess.Popen(' '.join(full_shell_command), shell=shell,
                                stdout=stdout, stderr=stderr, bufsize=bufsize)
@@ -85,9 +87,9 @@ def create_all_dirs(exp):
     eee.create_folders(exp.expname, exp.supsci)
     exp.log(f"mkdir /data0/{exp.supsci.lower()}/{exp.expname.upper()}", False)
     pipe.create_folders(exp.expname, exp.supsci)
-    exp.log(f"mkdir /jop83_0/pipe/in/{supsci.lower()}/{expname.lower()}", False)
-    exp.log(f"mkdir /jop83_0/pipe/in/{expname.lower()}", False)
-    exp.log(f"mkdir /jop83_0/pipe/out/{expname.lower()}", False)
+    exp.log(f"mkdir /jop83_0/pipe/in/{exp.supsci.lower()}/{exp.expname.lower()}", False)
+    exp.log(f"mkdir /jop83_0/pipe/in/{exp.expname.lower()}", False)
+    exp.log(f"mkdir /jop83_0/pipe/out/{exp.expname.lower()}", False)
     return True
 
 
@@ -240,7 +242,7 @@ def extract_tail_standardplots_output(stdplt_output):
     for a_line in stdplt_output.split('\n')[::-1]:
         # All "r" output lines always start with those messages
         # (listTimeRage: , listSources: , listAntennas: , listFreqs: ):
-        if ('list' in a_line) or (a_line.strip() is ''):
+        if ('list' in a_line) or (a_line.strip() == ''):
             last_lines.append(a_line)
         else:
             # We are already done

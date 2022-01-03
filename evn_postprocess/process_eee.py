@@ -18,9 +18,9 @@ import configparser
 import logging
 import subprocess
 from datetime import datetime
-from evn_postprocess import dialog
-from evn_postprocess import experiment
-from evn_postprocess import environment #as env
+from . import dialog
+from . import experiment
+from . import environment #as env
 # from evn_postprocess import process_css as css
 # from evn_postprocess import process_eee as eee
 # from evn_postprocess import process_pipe as pipe
@@ -175,7 +175,7 @@ def standardplots(exp, do_weights=False):
     # TODO: to be fully rewritten
     # To run for all correlator passes that will be pipelined.
     # Then once all of them finish, open the plots and ask user.
-    calsources = ','.join(exp.calsources)
+    calsources = ','.join(exp.sources_stdplot)
     counter = 0
     output = None
     try:
