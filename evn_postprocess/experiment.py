@@ -12,12 +12,13 @@ import pickle
 import subprocess
 import datetime as dt
 import subprocess
+from pathlib import Path
 from datetime import datetime as dt
 from dataclasses import dataclass
 from pyrap import tables as pt
 from enum import Enum
 from astropy import units as u
-from evn_postprocess import environment as env
+from . import environment as env
 
 class Credentials(object):
     """Authentification for a given experiment. This class specifies two attributes:
@@ -143,7 +144,7 @@ class Antennas(object):
 
     def add(self, new_antenna):
         assert isinstance(new_antenna, Antenna)
-        self._antenna.append(new_antenna)
+        self._antennas.append(new_antenna)
 
     def names(self):
         return [a.name for a in self._antennas]
@@ -439,6 +440,17 @@ class Experiment(object):
         self._sources = list(new_sources)
 
     @property
+    def antennas(self):
+        """List of antennas that were scheduled during the experiment.
+        """
+        return self._antennas
+
+    @antennas.setter
+    def antennas(self, new_antennas):
+        isinstance(new_antennas, Antennas)
+        self._antennas = new_antennas
+
+    @property
     def sources_stdplot(self):
         """Returns the source names to be used to create the standardplots.
         If not specified manually, it will take all fringe-finders that are included in the
@@ -554,10 +566,11 @@ class Experiment(object):
         self._startime = None
         self._endtime = None
         self._sources = None
+        self._antennas = Antennas()
         self._credentials = Credentials(None, None)
         self._passes = []
         logpath = self.cwd / "logs"
-        logpath.mkdir(exists_ok=True)
+        logpath.mkdir(exist_ok=True)
         self._logs = {'dir': logpath, 'file': self.cwd / "processing.log"}
         self._checklist = {} # TODO: add here by default all steps in the check list, with False value
         self._local_copy = None
@@ -624,14 +637,15 @@ class Experiment(object):
                 elif 'scheduled telescopes' in a_line:
                     sched_antennas = a_line.split(':')[1].split()
                     # The antennas will likely not be defined at this point, it checks it and adds it
-                    saved_ants = self.correlator_passes.antennas.scheduled
+                    saved_ants = self.antennas.scheduled()
                     for ant in sched_antennas:
                         if ant in saved_ants:
-                            self.correlator_passes.antennas[ant].scheduled = True
+                            self.antennas[ant].scheduled = True
                         else:
-                            self.correlator_passes.antennas.add(Antenna(name=ant, scheduled=True))
+                            self.antennas.add(Antenna(name=ant, scheduled=True))
                 elif 'correlator passes' in a_line:
-                    self.correlator_passes = int(a_line.split()[0])
+                    # self.correlator_passes = [None]*int(a_line.split()[0])
+                    pass
                 elif 'src = ' in a_line:
                     # Line with src = NAME, type = TYPE (something), use = PROTECTED (something)
                     srcname, srctype, srcprot = a_line.split(',')
@@ -708,7 +722,7 @@ class Experiment(object):
         ename = self.expname if self.eEVNname is None else self.eEVNname
         vixfilepath = self.cwd / f"{ename.lower()}.vix"
         if not vixfilepath.exists():
-            cmd, output = actions.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
+            cmd, output = env.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
             self.log(f"scp jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix .", False)
         if not (self.cwd / f"{self.expname}.vix").exists():
             os.symlink(f"{ename.lower()}.vix", f"{self.expname}.vix")
@@ -724,7 +738,7 @@ class Experiment(object):
         """
         expsumfilepath = self.cwd / f"{self.expname.lower()}.expsum"
         if not expsumfilepath.exists():
-            cmd, output = actions.scp(f"jops@jop83:piletters/{self.expname.lower()}.expsum", '.')
+            cmd, output = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.expsum", '.')
             self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.expsum .", False)
 
         return expsumfilepath
@@ -737,7 +751,7 @@ class Experiment(object):
         """
         piletterpath = self.cwd / f"{self.expname.lower()}.piletter"
         if not piletterpath.exists():
-            cmd, output = actions.scp(f"jops@jop83:piletters/{self.expname.lower()}.piletter", '.')
+            cmd, output = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.piletter", '.')
             self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.piletter .", False)
 
         return piletterpath
@@ -757,11 +771,12 @@ class Experiment(object):
         """Writes into the processing.log file a new entry.
         """
         if timestamp:
-            cmd = f"echo '# {dt.strftime('%d-%m-%Y %H:%M')}\n{entry}\n'"
+            cmd = f"echo '# {dt.today().strftime('%d-%m-%Y %H:%M')}\n{entry}\n'"
         else:
             cmd = f"echo '{entry}\n'"
 
-        env.shell_command(cmd, parameters=['>>', self.logfile['file']], shell=False)
+        with open(self.logfile['file'], 'a') as logfile:
+            logfile.write(cmd + '\n')
 
 
     @property
@@ -809,6 +824,7 @@ class Experiment(object):
 
         return obj
 
+    #TODO: add representation of the Experiment object
 
 
 
