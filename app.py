@@ -33,21 +33,24 @@ description = """Post-processing of EVN experiments.
 The program runs the full post-process for a correlated EVN experiment, from retrieving the correlated products to run the EVN pipeline following the steps described in the EVN Post-Processing Guide.
 
 The user can also specify to run only some of the steps or to start the process from a given step
-(for those cases when the process has partially run previously).
+(for those cases when the process has partially run previously). If the post-processing already run in teh past,
+it will automatically continue from the last successful step that run.
 
-The available steps are: TODO: UPDATE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+The available steps are:
 
-    - showlog : produces a .lis file in @ccs and copies them to @eee.
-    - checklis : checks the existing lis files and asks the user some parameters to continue.
-    - j2ms2 : gets the data for all available .lis files and runs j2ms2 to produce MS files.
-              Runs scale 1 bit if necessary.
-    - standardplots : runs standardplots.
-    - MSoperations : runs the full MS operations like ysfocus, polswap, flag_weights, etc.
-    - tConvert : runs tConvert on all available MS files, and asks if polConvert is required.
-    - archive : sets the credentials for the experiment, create the pipe letter and archive all the data.
-    - prepipeline : retrieves all ANTAB, uvflg files, and prepares a draft input file for the pipeline.
+    - setting_up : Sets up the experiment, creates the required folders in @eee and @pipe, and copy the
+                   already-existing files (.expsum, .vix, etc).
+    - lisfile : Produces a .lis file in @ccs and copies them to @eee.
+    - checklis : Checks the existing .lis files and asks the user some parameters to continue.
+    - ms : Gets the data for all available .lis files and runs j2ms2 to produce MS files.
+           Runs scale 1 bit if necessary.
+    - standardplots : Runs standardplots.
+    - MSoperations : Runs the full MS operations like ysfocus, polswap, flag_weights, etc.
+    - tConvert : Runs tConvert on all available MS files, and asks if polConvert is required.
+    - archive : Sets the credentials for the experiment, create the pipe letter and archive all the data.
+    - prepipeline : Retrieves all ANTAB, uvflg files, and prepares a draft input file for the pipeline.
     - pipeline : Runs the EVN Pipeline for all correlated passes.
-    - postpipeline : runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
+    - postpipeline : Runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
     - letters : Asks to update the PI letter, and sends it and pipeletter. Also runs parsePIletter.py.
 
 """
@@ -63,7 +66,7 @@ help_steps = 'Specify the step to start the post-processing (if you want to star
 def main():
     all_steps = {'setting_up': sch.setting_up_environment,
                  'lisfile': sch.preparing_lis_files,
-                 'first_check': sch.first_manual_check,
+                 'checklis': sch.first_manual_check,
                  'ms': sch.creating_ms,
                  'plots': sch.standardplots,
                  'MSoperations': sch.ms_operations,
