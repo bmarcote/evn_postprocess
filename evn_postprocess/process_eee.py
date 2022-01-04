@@ -110,7 +110,7 @@ def j2ms2(exp):
                                  if (('.ms' in a) and ('.UVF' not in a))][0]
         if os.path.isdir(outms):
             print('Removing the pre-existing MS file {outms}')
-            cmd,output = environment.shell_command("rm", ["-rf", outms.name], shell=True)
+            cmd,output = environment.shell_command("rm", ["-rf", outms], shell=True)
             exp.log(cmd)
 
         if 'j2ms2' in exp.special_params:

@@ -8,6 +8,7 @@ import time
 import string
 import random
 import argparse
+import traceback
 import configparser
 import logging
 import subprocess
@@ -25,7 +26,7 @@ from evn_postprocess.evn_postprocess import process_pipe as pipe
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
-__version__ = 0.0
+__version__ = 0.5
 __prog__ = 'evn_postprocess.py'
 usage = "%(prog)s  [-h]  <experiment_name>  <support_scientist>\n"
 description = """Post-processing of EVN experiments.
@@ -77,10 +78,12 @@ def main():
     parser.add_argument('supsci', type=str, help='Surname of the EVN Support Scientist.')
     parser.add_argument('-r', '--refant', type=str, default=None, help='Reference antenna.')
     parser.add_argument('-s', '--calsources', type=str, default=None, help=help_calsources)
-    parser.add_argument('--onebit', type=str, default=None, help='Antennas recording at 1 bit (comma-separated)')
+    parser.add_argument('--onebit', type=str, default=None,
+                        help='Antennas recording at 1 bit (comma-separated)')
     parser.add_argument('--steps', type=str, default=None, help=help_steps)
-    parser.add_argument('--j2ms2par', type=str, default=None, help='Additional attributes for j2ms2 (like the fo:).')
-    # parser.add_argument('--gui', type=str, default=None, help='Additional attributes for j2ms2 (like the fo:).')
+    parser.add_argument('--j2ms2par', type=str, default=None,
+                        help='Additional attributes for j2ms2 (like the fo:).')
+    # parser.add_argument('--gui', type=str, default=None, help='Type of GUI to use')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
 
     args = parser.parse_args()
@@ -118,14 +121,16 @@ def main():
             else:
                 if args.steps not in all_steps:
                     raise KeyError
-                the_steps = step_keys[step_keys.index(args.steps[0]):]
-    except ValueError:
+                the_steps = step_keys[step_keys.index(args.steps):]
+    except ValueError as e:
         print("ERROR: more than two steps have been introduced.\n" \
               "Only one or two options are expected.")
+        traceback.print_exc()
         sys.exit(1)
-    except KeyError:
+    except KeyError as e:
         print("ERROR: the introduced step ({args.steps}) is not recognized.\n" \
               "Run the program with '-h' to see the expected options")
+        traceback.print_exc()
         sys.exit(1)
 
 
