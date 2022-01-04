@@ -113,7 +113,7 @@ def j2ms2(exp):
             cmd,output = environment.shell_command("rm", ["-rf", outms.name], shell=True)
             exp.log(cmd)
 
-        if (exp.special_params is not None and 'j2ms2' in exp.special_params):
+        if 'j2ms2' in exp.special_params:
             cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
                 *exp.special_params['j2ms2']], shell=True, stdout=None,
                 stderr=subprocess.STDOUT, bufsize=0)
@@ -210,16 +210,15 @@ def onebit(exp):
     quantization losses in all MS associated with the given experiment name.
     """
     # Sanity check
-
-    for a_pass in exp.correlator_passes:
-        if len(a_pass.antennas.onebit) > 0:
-            cmd, output = environment.shell_command("scale1bit.py",
-                          [a_pass.msfile, ' '.join(a_pass.antennas.onebit)],
-                          stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
-        elif environment.station_1bit_in_vix(exp.vix):
-            print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} " \
-                  f"but no station specified to be corrected.\n\n")
-            return False
+    if len(exp.antennas.onebit) > 0:
+        for a_pass in exp.correlator_passes:
+                cmd, output = environment.shell_command("scale1bit.py",
+                              [a_pass.msfile, ' '.join(exp.antennas.onebit)], shell=True,
+                              stdout=None, stderr=subprocess.STDOUT)
+            elif environment.station_1bit_in_vix(exp.vix):
+                print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} " \
+                      f"but no station specified to be corrected.\n\n")
+                return False
     return True
 
 

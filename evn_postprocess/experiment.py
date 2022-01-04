@@ -555,6 +555,17 @@ class Experiment(object):
         isinstance(new_param, dict)
         self._special_pars.update(new_params)
 
+    @property
+    def last_step(self):
+        """Returns the last post-processing step that did run properly in a tentative previous run.
+        """
+        return self._last_step
+
+    @last_step.setter
+    def last_step(self, last_step):
+        self._last_step = last_step
+
+
     def __init__(self, expname, support_scientist):
         """Initializes an EVN experiment with the given name.
 
@@ -583,7 +594,8 @@ class Experiment(object):
         self._checklist = {} # TODO: add here by default all steps in the check list, with False value
         self._local_copy = None
         self.parse_masterprojects()
-        self._special_pars = None
+        self._special_pars = {}
+        self._last_step = None
 
 
 
@@ -602,6 +614,12 @@ class Experiment(object):
                                 ant = Antenna(name=ant_name, observed=True)
                                 self._passes[i].antennas.add(ant)
 
+                            if ant_name.capitalize() in self.antennas.names:
+                                self.antennas[ant_name.capitalize()].observed = True
+                            else:
+                                ant = Antenna(name=ant_name, observed=True)
+                                self.antennas.add(ant)
+
                     with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
                         a_pass.sources = ms_field.getcol('NAME')
 
@@ -613,6 +631,10 @@ class Experiment(object):
                                          ms_spw.getcol('TOTAL_BANDWIDTH')[0,0])
             except RuntimeError:
                 print(f"WARNING: {a_pass.msfile} not found.")
+
+            if 'onebit' in self._special_pars:
+
+
 
 
     def parse_expsum(self):
@@ -651,6 +673,10 @@ class Experiment(object):
                             self.antennas[ant].scheduled = True
                         else:
                             self.antennas.add(Antenna(name=ant, scheduled=True))
+
+                        if 'onebit' in self.special_params:
+                            for onebit_ant in self.special_params['onebit']:
+                                self.antennas[onebit_ant.capitalize()].onebit = True
                 elif 'correlator passes' in a_line:
                     # self.correlator_passes = [None]*int(a_line.split()[0])
                     pass
@@ -804,10 +830,10 @@ class Experiment(object):
 
     def store(self, path=None):
         """Stores the current Experiment into a file in the indicated path. If not provided,
-        it will be '.{exp}.obj' where exp is the name of the experiment.
+        it will be '.{expname.lower()}.obj' where exp is the name of the experiment.
         """
         if path is None:
-            path = self.cwd / f"{self.expname}.obj"
+            path = self.cwd / f"{self.expname.lower()}.obj"
         self._local_copy = path
         with open(path, 'wb') as file:
             pickle.dump(self, file)
@@ -824,7 +850,7 @@ class Experiment(object):
         it assumes the standard path of '.{exp}.obj' where exp is the name of the experiment.
         """
         if path is None:
-            path = self.cwd / f"{self.expname}.obj"
+            path = self.cwd / f"{self.expname.lower()}.obj"
 
         self._local_copy = path
         with open(path, 'wb') as file:
@@ -832,8 +858,15 @@ class Experiment(object):
 
         return obj
 
-    #TODO: add representation of the Experiment object
+    def __repr__(self, *args, **kwargs):
+        rep = super().__repr__(*args, **kwargs)
+        rep.replace("object", f"object ({self.expname})")
+        return rep
 
+    def __str__(self):
+        return f"<Experiment {self.expname}>"
+
+    #TODO: method to do a summary of the whole experiment
 
 
 
