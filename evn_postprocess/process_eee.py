@@ -212,13 +212,13 @@ def onebit(exp):
     # Sanity check
     if len(exp.antennas.onebit) > 0:
         for a_pass in exp.correlator_passes:
-                cmd, output = environment.shell_command("scale1bit.py",
-                              [a_pass.msfile, ' '.join(exp.antennas.onebit)], shell=True,
-                              stdout=None, stderr=subprocess.STDOUT)
-            elif environment.station_1bit_in_vix(exp.vix):
-                print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} " \
-                      f"but no station specified to be corrected.\n\n")
-                return False
+            cmd, output = environment.shell_command("scale1bit.py",
+                          [a_pass.msfile, ' '.join(exp.antennas.onebit)], shell=True,
+                          stdout=None, stderr=subprocess.STDOUT)
+    elif environment.station_1bit_in_vix(exp.vix):
+        print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} " \
+              f"but no station specified to be corrected.\n\n")
+        return False
     return True
 
 
