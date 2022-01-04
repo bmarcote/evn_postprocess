@@ -15,12 +15,12 @@ from pathlib import Path
 from datetime import datetime as dt
 # from inspect import signature  # WHAT?  to know how many parameters has each function
 from datetime import datetime
-from evn_postprocess.evn_postprocess import experiment
-from evn_postprocess.evn_postprocess import scheduler as sch
-from evn_postprocess.evn_postprocess import dialog
-from evn_postprocess.evn_postprocess import process_ccs as ccs
-from evn_postprocess.evn_postprocess import process_eee as eee
-from evn_postprocess.evn_postprocess import process_pipe as pipe
+from evn_postprocess import experiment
+from evn_postprocess import scheduler as sch
+from evn_postprocess import dialog
+from evn_postprocess import process_ccs as ccs
+from evn_postprocess import process_eee as eee
+from evn_postprocess import process_pipe as pipe
 
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
@@ -85,10 +85,27 @@ def main():
 
     args = parser.parse_args()
 
+
+    exp = experiment.Experiment(args.expname, args.supsci)
+    exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} (exp.obsdate).\n" \
+            f"# Current date: {dt.today().strftime('%d-%m-%Y %H:%M')}\n")
+
+    if exp.cwd != Path.cwd():
+        os.chdir(exp.cwd)
+        exp.log(f"# Moved to the experiment folder\ncd{exp.cwd}", timestamp=False)
+
+    # -n  parameter so it can ignore all the previous steps
+    if exp.exists_local_copy():
+        exp = exp.load()
+
     try:
         step_keys = list(all_steps.keys())
         if args.steps is None:
-            the_steps = list(all_steps.keys())
+            the_steps = step_keys
+        elif (exp.last_step is not None) and (args.steps is None):
+            the_steps = step_keys[ste_keys.index(exp.last_step)+1:]
+            exp.log(f"Starting after the last sucessful step run in a previous iteration ({exp.last_step}).", False)
+            print(f"Starting after the last sucessful step run in a previous iteration ({exp.last_step}).")
         else:
             if ',' in args.steps:
                 if args.steps.count(',') > 1:
@@ -112,8 +129,6 @@ def main():
         sys.exit(1)
 
 
-    exp = experiment.Experiment(args.expname, args.supsci)
-
     if args.refant is not None:
         exp.refant = args.refant
 
@@ -127,20 +142,6 @@ def main():
         exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par(',')]}
 
 
-    exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} (exp.obsdate).\n" \
-            f"# Current date: {dt.today().strftime('%d-%m-%Y %H:%M')}\n")
-
-    if exp.cwd != Path.cwd():
-        os.chdir(exp.cwd)
-        exp.log(f"# Moved to the experiment folder\ncd{exp.cwd}", timestamp=False)
-
-    # -n  parameter so it can ignore all the previous steps
-    if exp.exists_local_copy():
-        exp.load()
-        if args.steps is not None:
-            print("Note that the steps will be ignored as a previous running is present." \
-                  "Cancel and use '-n' if you want to overwrite all steps.")
-            time.sleep(5)
 
     # And move to the cwd dir if needed
     # Create processing_log?  log dir.
@@ -155,6 +156,8 @@ def main():
     for a_step in the_steps:
         if not all_steps[a_step](exp):
             raise RuntimeError(f"An error was found in {exp.expname} at the step {a_step.__name__}")
+        exp.last_step = a_step
+        exp.store()
 
     print('\nThe post-processing has finished properly.')
 
