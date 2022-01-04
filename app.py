@@ -15,12 +15,12 @@ from pathlib import Path
 from datetime import datetime as dt
 # from inspect import signature  # WHAT?  to know how many parameters has each function
 from datetime import datetime
-from evn_postprocess import experiment
-from evn_postprocess import scheduler as sch
-from evn_postprocess import dialog
-from evn_postprocess import process_ccs as ccs
-from evn_postprocess import process_eee as eee
-from evn_postprocess import process_pipe as pipe
+from evn_postprocess.evn_postprocess import experiment
+from evn_postprocess.evn_postprocess import scheduler as sch
+from evn_postprocess.evn_postprocess import dialog
+from evn_postprocess.evn_postprocess import process_ccs as ccs
+from evn_postprocess.evn_postprocess import process_eee as eee
+from evn_postprocess.evn_postprocess import process_pipe as pipe
 
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
