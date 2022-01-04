@@ -632,8 +632,6 @@ class Experiment(object):
             except RuntimeError:
                 print(f"WARNING: {a_pass.msfile} not found.")
 
-            if 'onebit' in self._special_pars:
-
 
 
 
