@@ -289,6 +289,7 @@ class CorrelatorPass(object):
 
     @pipeline.setter
     def pipeline(self, pipeline):
+        isinstance(pipeline, bool)
         self._pipeline = pipeline
 
     @property

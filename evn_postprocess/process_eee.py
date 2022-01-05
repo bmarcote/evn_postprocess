@@ -101,27 +101,26 @@ def getdata(exp):
 
 def j2ms2(exp):
     """Runs j2ms2 on all existing .lis files from the given experiment.
-    If the MS to produce already exists, then it will be removed.
+    If the MS to produce already exists, then it will not generate it again.
     inputs: exp : experiment.Experiment
     """
     for a_pass in exp.correlator_passes:
         with open(a_pass.lisfile) as f:
             outms = [a for a in f.readline().replace('\n','').split(' ') \
                                  if (('.ms' in a) and ('.UVF' not in a))][0]
-        if os.path.isdir(outms):
-            print('Removing the pre-existing MS file {outms}')
-            cmd,output = environment.shell_command("rm", ["-rf", outms], shell=True)
+        if not os.path.isdir(outms):
+            # print('Removing the pre-existing MS file {outms}')
+            # cmd,output = environment.shell_command("rm", ["-rf", outms], shell=True)
+            # exp.log(cmd)
+            if 'j2ms2' in exp.special_params:
+                cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
+                    *exp.special_params['j2ms2']], shell=True, stdout=None,
+                    stderr=subprocess.STDOUT, bufsize=0)
+            else:
+                cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
+                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+
             exp.log(cmd)
-
-        if 'j2ms2' in exp.special_params:
-            cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
-                *exp.special_params['j2ms2']], shell=True, stdout=None,
-                stderr=subprocess.STDOUT, bufsize=0)
-        else:
-            cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
-                shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
-
-        exp.log(cmd)
 
     return True
 
@@ -313,9 +312,6 @@ def polConvert(exp):
         # dialog.warning_dialog(dialog_text)
     return True
 
-# Preparations for archive
-
-# If the auth file exists, take the username and password from it. Otherwise create a new one.
 
 def set_credentials_pipelet(exp):
     """Sets the credentials for the given experiment and creates the .pipelet file.

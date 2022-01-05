@@ -38,8 +38,6 @@ def setting_up_environment(exp: experiment.Experiment):
     exp.store()
     return output
 
-# MODIFY THE FOLLOWING FUNCTIONS WITH THE SAME STRUCTURE AS IN THE PREVIOUS ONE
-
 
 def preparing_lis_files(exp: experiment.Experiment):
     """Checks that the .lis file(s) already exists.
@@ -83,7 +81,8 @@ def ms_operations(exp: experiment.Experiment):
     # - onebit if there is a mention on it
     # - tConvert
     # - polconvert
-    output = dispatcher(exp, (eee.ysfocus, eee.polswap, eee.flag_weights, eee.onebit, eee.update_piletter))
+    output = dispatcher(exp, (eee.ysfocus, eee.polswap, eee.flag_weights, eee.onebit,
+                              eee.update_piletter))
     exp.store()
     # To get plots on, specially, ampphase without the drops that have been flagged here:
     eee.standardplots(exp, do_weights=False)
@@ -107,11 +106,17 @@ def archive(exp: experiment.Experiment):
     return eee.archive(exp)
 
 
+def antab_editor(exp: experiment.Experiment):
+    output = dispatcher(exp, (pipe.run_antab_editor,))
+    exp.store()
+    return output
+
+
 def getting_pipeline_files(exp: experiment.Experiment):
     """Retrieves the files that are required to run the EVN Pipeline in the associated experiment
     """
     # THIS MAY ONLY RUN FOR SOME OF THE EXPERIMENTS IN AN E-EVN EXPERIMENT
-    output = dispatcher(exp, pipe.create_uvflg, pipe.run_antab_editor)
+    output = dispatcher(exp, (pipe.create_uvflg, pipe.create_input_file))
     # Here there may be a waiting task for e-EVN experiments until all the others are in.
     # Copy antab file and uvflg to input
     exp.store()
@@ -120,11 +125,13 @@ def getting_pipeline_files(exp: experiment.Experiment):
 
 def pipeline(exp: experiment.Experiment):
     # TODO: authentification for pipeline results
-    output = dispatcher(exp, pipe.create_input_file)
-    # TODO: Run pipeline
-    output = dispatcher(exp, pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive)
+    output = dispatcher(exp, (pipe.run_pipeline,))
     exp.store()
-    return output
+    output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
+    exp.store()
+    exp.last_step = 'pipeline'
+    # This is to force the manual check of the pipeline results
+    return False # output
 
 
 
