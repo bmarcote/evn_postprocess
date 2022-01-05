@@ -553,7 +553,7 @@ class Experiment(object):
     @special_params.setter
     def special_params(self, new_param):
         isinstance(new_param, dict)
-        self._special_pars.update(new_params)
+        self._special_pars.update(new_param)
 
     @property
     def last_step(self):

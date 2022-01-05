@@ -109,7 +109,7 @@ def main():
         if args.steps is None:
             the_steps = step_keys
         elif (exp.last_step is not None) and (args.steps is None):
-            the_steps = step_keys[ste_keys.index(exp.last_step)+1:]
+            the_steps = step_keys[step_keys.index(exp.last_step)+1:]
             exp.log(f"Starting after the last sucessful step run in a previous iteration ({exp.last_step}).", False)
             print(f"Starting after the last sucessful step run in a previous iteration ({exp.last_step}).")
         else:

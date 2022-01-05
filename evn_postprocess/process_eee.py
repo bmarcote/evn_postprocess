@@ -301,7 +301,7 @@ def polConvert(exp):
     In that case, prepares the templates for running it and (potentially in the future?)
     will run it. For now it just requests the user to run it manually.
     """
-    if len(a_pass.antennas.polconvert) > 0:
+    if len(exp.antennas.polconvert) > 0:
         for a_pass in exp.correlator_passes:
             print("PolConvert has not been implemented yet.\nRun it manually.")
             return False
