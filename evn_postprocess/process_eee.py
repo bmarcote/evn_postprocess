@@ -224,7 +224,7 @@ def onebit(exp):
 
 def ysfocus(exp):
     for a_pass in exp.correlator_passes:
-        environment.shell_command("ysfocus.py", a_pass.msfile, stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+        environment.shell_command("ysfocus.py", a_pass.msfile, stdout=None, shell=True, stderr=subprocess.STDOUT)
     return True
 
 
@@ -232,10 +232,10 @@ def polswap(exp):
     """Swaps the polarization of the given antennas for all associated MS files
     to the given experiment.
     """
-    for a_pass in exp.correlator_passes:
-            if len(a_pass.antennas.polswap) > 0:
-                environment.shell_command("polswap.py", [a_pass.msfile, ','.join(a_pass.antennas.polswap)],
-                                          stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+    if len(exp.antennas.polswap) > 0:
+        for a_pass in exp.correlator_passes:
+                environment.shell_command("polswap.py", [a_pass.msfile.name, ','.join(exp.antennas.polswap)],
+                                          shell=True, stdout=None, stderr=subprocess.STDOUT)
     return True
 
 
@@ -243,7 +243,7 @@ def flag_weights(exp):
     outputs = []
     for a_pass in exp.correlator_passes:
         cmd, output = environment.shell_command("flag_weights.py", [a_pass.msfile, a_pass.flagged_weights.threshold],
-                                                stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+                                                shell=True, stdout=None, stderr=subprocess.STDOUT)
         exp.log(cmd+'\n# '.join(output))
         outputs.append(output[0])
         # Find the percentage of flagged data and stores it in exp
@@ -301,12 +301,12 @@ def polConvert(exp):
     In that case, prepares the templates for running it and (potentially in the future?)
     will run it. For now it just requests the user to run it manually.
     """
-    for a_pass in exp.correlator_passes:
-        if len(a_pass.antennas.polconvert) > 0:
+    if len(a_pass.antennas.polconvert) > 0:
+        for a_pass in exp.correlator_passes:
             print("PolConvert has not been implemented yet.\nRun it manually.")
             return False
-        else:
-            exp.log(f"# PolConvert is not required.")
+    else:
+        exp.log(f"# PolConvert is not required.")
         # dialog_text = "PolConvert is required.\n"
         # dialog_text += f"Please run it manually for {','.join(exp.polconvert_antennas)}."
         # dialog_text += "Once you are done (all FITS properly corrected), press Continue."
