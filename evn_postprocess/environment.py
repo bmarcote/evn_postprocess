@@ -1,4 +1,5 @@
 #! /usr/bin/env python3
+import os
 import sys
 import subprocess
 from . import experiment
@@ -110,7 +111,8 @@ def copy_files(exp):
         exists.append(a_file.exists())
 
     if False in exists:
-        raise FileNotFound(f"The following files could not be found: {','.join([f for f,b in zip(files, exists) if b])}")
+        raise FileNotFoundError(f"The following files could not be found: " \
+                                f"{','.join([f for f,b in zip(files, exists) if b])}")
 
     return True
 

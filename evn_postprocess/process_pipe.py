@@ -57,7 +57,7 @@ def get_files_from_vlbeer(exp):
 
     exp.log(f"# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}", False)
     exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.filefsfile)}", False)
-    exp.log(f"# Missing ANTAB files for:\n# {', '.join(set(exp.antennas.names)-set(exp.antennas.filefsfile)])}", False)
+    exp.log(f"# Missing ANTAB files for:\n# {', '.join(set(exp.antennas.names)-set(exp.antennas.filefsfile))}", False)
     return True
 
 
