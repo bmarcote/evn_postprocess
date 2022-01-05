@@ -72,7 +72,8 @@ def main():
                  'MSoperations': sch.ms_operations,
                  'tconvert': sch.tconvert,
                  'archive': sch.archive,
-                 'vlbeer': sch.getting_pipeline_files,
+                 'antab': sch.antab_editor,
+                 'pipeinputs': sch.getting_pipeline_files,
                  'pipeline': sch.pipeline,
                  'post_pipeline': sch.after_pipeline}
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
