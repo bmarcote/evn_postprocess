@@ -32,7 +32,8 @@ def setting_up_environment(exp: experiment.Experiment):
     """Sets up the environment for the post-processing of the experiment.
     This implies to create the
     """
-    output = dispatcher(exp, (env.create_all_dirs, env.copy_files, eee.set_credentials_pipelet))
+    output = dispatcher(exp, (env.create_all_dirs, env.copy_files, eee.set_credentials_pipelet,
+                              pipe.get_files_from_vlbeer))
     exp.parse_expsum()
     exp.store()
     return output
@@ -110,7 +111,7 @@ def getting_pipeline_files(exp: experiment.Experiment):
     """Retrieves the files that are required to run the EVN Pipeline in the associated experiment
     """
     # THIS MAY ONLY RUN FOR SOME OF THE EXPERIMENTS IN AN E-EVN EXPERIMENT
-    output = dispatcher(exp, pipe.get_files_from_vlbeer, pipe.create_uvflg, pipe.run_antab_editor)
+    output = dispatcher(exp, pipe.create_uvflg, pipe.run_antab_editor)
     # Here there may be a waiting task for e-EVN experiments until all the others are in.
     # Copy antab file and uvflg to input
     exp.store()

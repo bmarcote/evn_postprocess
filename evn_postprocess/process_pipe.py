@@ -38,78 +38,37 @@ def create_folders(exp):
             exp.log(f"mkdir -p {a_dir}", False)
 
 
-
-
-# class Pipe(paramiko.SSHClient):
-#     def __init__(self, user='pipe', host='jop83'):
-#         self._user = pipe
-#         self._host = host
-#         super().__init__()
-#         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-#         self.client.connect(self._host, username=self._user)
-#
-#     def execute_commands(self, commands):
-#         """Execute multiple commands in succession.
-#
-#         - commands : list of UNIX coomands as strings.
-#         """
-#         full_response = []
-#         for cmd in commands:
-#             stdin, stdout, stderr = self.client.exec_command(cmd, get_pty=True)
-#             stdout.channel.recv_exit_status()
-#             response = stdout.readlines()
-#             for line in response:
-#                 print(line, end='')
-#
-#             full_response.append(response)
-#
-#         return full_response
-
-
-def disconnect(exp):
-    """Closes the connection to Pipe. Throws an exception if it was already closed.
-    """
-    exp.connections['pipe'].close()
-    del exp.connections['pipe']
-
-
-
 def get_files_from_vlbeer(exp):
     """Retrieves the antabfs, log, and flag files that should be in vlbeer for the given experiment.
     """
-    if 'pipe' not in exp.connections:
-        exp.connections['pipe'] = Pipe(user='pipe')
+    cd = f"cd $IN/{exp.supsci}/{exp.expname.lower()}"
+    scp = lambda ext : "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+                       f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}\*.{ext} ."
+    for ext in ('log', 'antabfs', 'flag'):
+        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp(ext)]))
+        exp.log(cmd, False)
+        the_files = [o for o in output.split('\n') if o != ''] # just to avoid trailing \n
+        for a_file in the_files:
+            ant = a_file.split('.')[0].replace(exp.expname.lower(), '').capitalize()
+            if ext is 'log':
+                exp.antennas[ant].logfsfile = True
+            elif ext is 'antabfs':
+                exp.antennas[ant].antabfsfile = True
 
-    out = exp.connections['pipe'].execute_commands([f"cd $IN/{exp.supsci}/{exp.expname.lower()} && " \
-        "scp evn@vlbeer.ira.inaf.it:vlbi_arch/{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}\*.{ext} ." \
-        for ext in ('log', 'antabfs', 'flag')])
-
-    # TODO: check if there are ANTAB files in the previous/following month...
-    # WHAT THE HELL I AM DOING BELOW? WHY?
-    # Check if there is the same number of files than antennas
-    n_log = set([i.strip().replace(exp.expname.lower(), '').replace('.log', '').capitalize() for i in out[0]])
-    n_ant = set([i.strip().replace(exp.expname.lower(), '').replace('.antabfs', '').capitalize() for i in out[1]])
-    n_total = set(exp.antennas).difference(['Cm', 'Da', 'De', 'Pi', 'Kn'])
-    if (n_log < n_total) or (n_ant < n_total):
-        print('There are missing files from vlbeer:')
-        print(f"Missing log files from: {', '.join(n_total.difference(n_log))}")
-        print(f"Missing ANTAB files from: {', '.join(n_total.difference(n_ant))}")
-
+    exp.log(f"# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}", False)
+    exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.filefsfile)}", False)
+    exp.log(f"# Missing ANTAB files for:\n# {', '.join(set(exp.antennas.names)-set(exp.antennas.filefsfile)])}", False)
+    return True
 
 
 def create_uvflg(exp):
     """Produces the combined uvflg file containing the full flagging from all telescopes.
     """
-    if 'pipe' not in exp.connections:
-        exp.connections['pipe'] = Pipe(user='pipe')
-
-    out = exp.connections['pipe'].execute_commands([f"cd $IN/{exp.supsci}/{exp.expname.lower()} && uvflgall.csh"])
-    # There may be empty uvflg files (not completely empty but without flagging info.
-    out = exp.connections['pipe'].execute_commands([f"cd $IN/{exp.supsci}/{exp.expname.lower()} && ls -sa *.uvflgfs"])
-    # TODO: from here get who is empty, remove it, and then get that flaggin from the .flag file.
-    # The previous line returns the size (in kb) and filename. Empty ones should be ~0 (1 max if rounding)
-    exp.connections['pipe'].execute_commands(["cat $IN/{0}/{1}/{1}.uvflgfs > $IN/{1}/{1}.uvflg".format(exp.supsci,
-                                                                                            exp.expname.lower())])
+    cd = f"cd $IN/{exp.supsci}/{exp.expname.lower()}"
+    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, 'uvflgfs.sh']))
+    exp.log(cmd + output.replace('\n', '\n# '), False)
+    print(output)
+    return True
 
 
 def run_antab_editor(exp):
