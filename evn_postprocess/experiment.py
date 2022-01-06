@@ -19,6 +19,7 @@ from pyrap import tables as pt
 from enum import Enum
 from astropy import units as u
 from . import environment as env
+from . import dialog
 
 class Credentials(object):
     """Authentification for a given experiment. This class specifies two attributes:

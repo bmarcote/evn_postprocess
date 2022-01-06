@@ -50,9 +50,9 @@ def get_files_from_vlbeer(exp):
         the_files = [o for o in output.split('\n') if o != ''] # just to avoid trailing \n
         for a_file in the_files:
             ant = a_file.split('.')[0].replace(exp.expname.lower(), '').capitalize()
-            if ext is 'log':
+            if ext == 'log':
                 exp.antennas[ant].logfsfile = True
-            elif ext is 'antabfs':
+            elif ext == 'antabfs':
                 exp.antennas[ant].antabfsfile = True
 
     exp.log(f"# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}", False)
@@ -121,10 +121,10 @@ def create_input_file(exp):
     else:
         userno = 'XXXXX'
 
-    bpass = ', '.join([s.name for s in exp.sources if s.type is metadata.SourceType.fringefinder])
-    pcal = ', '.join([s.name for s in exp.sources if s.type is metadata.SourceType.calibrator])
-    targets = ', '.join([s.name for s in exp.sources if (s.type is metadata.SourceType.target) or \
-                                                            (s.type is metadata.SourceType.other)])
+    bpass = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.fringefinder])
+    pcal = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.calibrator])
+    targets = ', '.join([s.name for s in exp.sources if (s.type is experiment.SourceType.target) or \
+                                                            (s.type is experiment.SourceType.other)])
     to_change = f"'experiment = n05c3' 'experiment = {exp.expname.lower()}' " \
                 f"'userno = 3602' 'userno = {userno}' " \
                 f"'refant = Ef, Mc, Nt' 'refant = {', '.join(exp.refant)}' " \
@@ -206,10 +206,10 @@ def archive(exp):
 def ampcal(exp):
     """Runs the ampcal.sh script to incorporate the gain corrections into the Grafana database.
     """
-    if 'pipe' not in exp.connections:
-        exp.connections['pipe'] = Pipe(user='pipe')
-
-    out = exp.connections['pipe'].execute_commands([f"cd $OUT/{exp.expname.lower()} && ampcal.sh"])
+    cd= f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
+    cmd, output = env.ssh('pipe@jop83', f"{cd} && ampcal.sh")
+    exp.log(cmd)
+    return True
 
 
 
