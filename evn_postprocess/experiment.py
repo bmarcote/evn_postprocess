@@ -566,6 +566,16 @@ class Experiment(object):
     def last_step(self, last_step):
         self._last_step = last_step
 
+    @property
+    def gui(self):
+        """Returns the GUI object that allows to exchange dialogs with the user
+        """
+        return self._gui
+
+    @gui.setter
+    def gui(self, gui_object):
+        isinstance(gui_object, dialog.Dialog)
+        self._gui = gui_object
 
     def __init__(self, expname, support_scientist):
         """Initializes an EVN experiment with the given name.
@@ -597,6 +607,7 @@ class Experiment(object):
         self.parse_masterprojects()
         self._special_pars = {}
         self._last_step = None
+        self._gui = None
 
 
 

@@ -70,7 +70,7 @@ def create_uvflg(exp):
         exp.log(cmd + output.replace('\n', '\n# '), False)
         print(output)
         cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"cat *uvflgfs {exp.expname.lower()}.uvflg"]))
-        exp.log(cmd + output), False)
+        exp.log(cmd + output, False)
         print(output)
 
     return True
