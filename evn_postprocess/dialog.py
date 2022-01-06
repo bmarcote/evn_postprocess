@@ -1,4 +1,5 @@
 import abc
+from . import experiment
 
 
 
@@ -85,7 +86,7 @@ class Terminal(Dialog):
         polconvert = self.ask_for_antenna('Antennas that requires PolConvert')
 
         for a_pass in exp.correlator_passes:
-            exp.correlator_passes[a_pass].flagged_weights = FlagWeight(threshold)
+            exp.correlator_passes[a_pass].flagged_weights = experiment.FlagWeight(threshold)
 
         for antenna in polswap:
             exp.antennas[antenna].polswap = True
