@@ -58,9 +58,13 @@ The available steps are:
 help_calsources = 'Calibrator sources to use in standardplots (comma-separated, no spaces). ' \
                   'If not provided, it will pick the fringefinders found in the .expsum file.'
 help_steps = 'Specify the step to start the post-processing (if you want to start it mid-way), ' \
-             'check with -h the available steps. If two steps are provided (comma-separated without spaces), ' \
-             'then it will run the steps from the first to the second one.'
+             'check with -h the available steps. If two steps are provided (comma-separated ' \
+             'without spaces), then it will run the steps from the first to the second one.'
 
+help_gui = 'Type of GUI to use for interactions with the user:\n' \
+           '- "terminal" (default): it uses the basic prompt in the terminal.\n' \
+           '- "tui": uses the Terminal-based User Interface.\n' \
+           '- "gui": uses the Graphical User Interface.'
 
 
 def main():
@@ -87,7 +91,7 @@ def main():
     parser.add_argument('--steps', type=str, default=None, help=help_steps)
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:).')
-    # parser.add_argument('--gui', type=str, default=None, help='Type of GUI to use')
+    parser.add_argument('--gui', type=str, default=None, help=help_gui)
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
 
     args = parser.parse_args()
@@ -96,6 +100,16 @@ def main():
     exp = experiment.Experiment(args.expname, args.supsci)
     exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} (exp.obsdate).\n" \
             f"# Current date: {dt.today().strftime('%d-%m-%Y %H:%M')}\n")
+
+    if args.gui == 'terminal' or args.gui is None:
+        exp.gui = Terminal()
+    elif args.gui.lower() == 'tui':
+        raise NotImplementedError("'tui' option not implemented yet.")
+    elif args.gui.lower() == 'gui':
+        raise NotImplementedError("'gui' option not implemented yet.")
+    else:
+        print(f"gui option not recognized. Expecting 'terminal', 'tui', or 'gui'. Obtained {args.gui}")
+        sys.exit(1)
 
     if exp.cwd != Path.cwd():
         os.chdir(exp.cwd)
@@ -137,7 +151,6 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-
     if args.refant is not None:
         exp.refant = args.refant
 
@@ -149,18 +162,6 @@ def main():
 
     if args.j2ms2par is not None:
         exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par(',')]}
-
-
-
-    # And move to the cwd dir if needed
-    # Create processing_log?  log dir.
-
-    # Optional inputs:
-    # - fo: for j2ms2.
-    # - if refant set, then avoid first_manual_check.
-    # - which gui to use
-
-    # - In the case of e-EVN, it should be run until the ANTAB steps in all the other experiments.
 
     for a_step in the_steps:
         if not all_steps[a_step](exp):

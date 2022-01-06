@@ -56,9 +56,15 @@ def first_manual_check(exp: experiment.Experiment):
     if not output:
         temp = 'file','seems' if len(exp.correlator_passes) == 1 else 'files','seem'
         print(f"\n\n{'#'*10}\n# Stopping here...")
-        print(f"The list {temp[0]} for {exp.expname} {temp[1]} to have issues to be solved manually.\n{'#'*10}\n")
-    exp.store()
+        print(f"The .lis {temp[0]} for {exp.expname} {temp[1]} to have issues to " \
+              f"be solved manually.\n{'#'*10}\n")
 
+    if exp.eEVNname is not None:
+        print(f"{exp.expname} is part of an e-EVN run. Please edit manually the lis file now.")
+        exp.last_step('checklis')
+        output = False
+
+    exp.store()
     return output
 
 
@@ -75,12 +81,7 @@ def standardplots(exp: experiment.Experiment):
 
 
 def ms_operations(exp: experiment.Experiment):
-    # DIALOG for
-    # - flag weights
-    # - polswap
-    # - onebit if there is a mention on it
-    # - tConvert
-    # - polconvert
+    exp.gui.askMSoperations(exp)
     output = dispatcher(exp, (eee.ysfocus, eee.polswap, eee.flag_weights, eee.onebit,
                               eee.update_piletter))
     exp.store()
