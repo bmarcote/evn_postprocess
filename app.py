@@ -102,7 +102,7 @@ def main():
             f"# Current date: {dt.today().strftime('%d-%m-%Y %H:%M')}\n")
 
     if args.gui == 'terminal' or args.gui is None:
-        exp.gui = Terminal()
+        exp.gui = dialog.Terminal()
     elif args.gui.lower() == 'tui':
         raise NotImplementedError("'tui' option not implemented yet.")
     elif args.gui.lower() == 'gui':
