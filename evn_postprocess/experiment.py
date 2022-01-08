@@ -13,7 +13,6 @@ import subprocess
 import datetime as dt
 import subprocess
 from pathlib import Path
-from datetime import datetime as dt
 from dataclasses import dataclass
 from pyrap import tables as pt
 from enum import Enum
@@ -633,6 +632,13 @@ class Experiment(object):
                                 ant = Antenna(name=ant_name, observed=True)
                                 self.antennas.add(ant)
 
+                    # Takes the predefined "best" antennas as reference
+                    if self.refant is None:
+                        for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
+                            if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
+                                self.refant = [ant,]
+                                break
+
                     with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
                         a_pass.sources = ms_field.getcol('NAME')
 
@@ -641,7 +647,7 @@ class Experiment(object):
                              ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
                     with pt.table(ms.getkeyword('SPECTRAL_WINDOW'), readonly=True, ack=False) as ms_spw:
                         a_pass.freqsetup(ms_spw.getcol('NUM_CHAN')[0], ms_spw.getcol('CHAN_FREQ'),
-                                         ms_spw.getcol('TOTAL_BANDWIDTH')[0,0])
+                                         ms_spw.getcol('TOTAL_BANDWIDTH')[0])
             except RuntimeError:
                 print(f"WARNING: {a_pass.msfile} not found.")
 
