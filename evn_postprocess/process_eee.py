@@ -13,6 +13,7 @@ import glob
 import string
 import random
 import argparse
+import traceback
 from pathlib import Path
 import configparser
 import logging
@@ -176,8 +177,8 @@ def standardplots(exp, do_weights=False):
                                     stdout=None, stderr=subprocess.STDOUT)
 
     except Exception as e:
-        print("WARNING: Standardplots reported an error ({e}). Check if plots were created or run it manually.")
-        input("After checking this issue in another terminal, press any key.")
+        print("WARNING: Standardplots reported an error.")
+        traceback.print_exc()
         return False
     # cmd, output = shell_command("standardplots",
     # # Get all plots done and show them in the best order:
