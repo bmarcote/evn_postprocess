@@ -618,7 +618,7 @@ class Experiment(object):
         """
         for i,a_pass in enumerate(self.correlator_passes):
             try:
-                with pt.table(a_pass.msfile, readonly=True, ack=False) as ms:
+                with pt.table(a_pass.msfile.name, readonly=True, ack=False) as ms:
                     with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
                         for ant_name in ms_ant.getcol('NAME'):
                             if ant_name in a_pass.antennas.names:

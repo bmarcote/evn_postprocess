@@ -181,7 +181,7 @@ def check_lisfiles(exp):
     all_good = True
     for a_pass in exp.correlator_passes:
         cmd, output = shell_command("checklis.py", a_pass.lisfile.name, shell=True)
-        exp.log(f"{cmd}"+"\n"+output.replace('\n', '\n#'), False)
+        exp.log(f"{cmd}"+"\n#"+output.replace('\n', '\n#'), False)
         # The output has the form:
         #      First scan = X
         #       {errors if any otherwise no extra lines}
