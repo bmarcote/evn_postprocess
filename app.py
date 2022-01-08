@@ -158,7 +158,7 @@ def main():
         exp.sources_stdplot = [cs.strip() for cs in args.calsources.split(',')]
 
     if args.onebit is not None:
-        exp.special_params = {'onebit': [ant.strip() for ant in args.onebit(',')]}
+        exp.special_params = {'onebit': [ant.strip().capitalize() for ant in args.onebit(',')]}
 
     if args.j2ms2par is not None:
         exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par(',')]}
