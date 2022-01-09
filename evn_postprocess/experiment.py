@@ -9,6 +9,7 @@ resumed, or restarted.
 import os
 import numpy as np
 import pickle
+import json
 import subprocess
 import datetime as dt
 import subprocess
@@ -42,6 +43,18 @@ class Credentials(object):
     def __iter__(self):
         for key in ('username', 'password'):
                 yield key, getattr(self, key)
+
+    def json(self):
+        """Returns a dict with all attributes of the object.
+        I define this method to use instead of .__dict__ as the later only reporst
+        the internal variables (e.g. _username instead of username) and I want a better
+        human-readable output.
+        """
+        d = dict()
+        for key,val in self.__iter__():
+                d[key] = val
+
+        return d
 
 
 
@@ -78,14 +91,26 @@ class FlagWeight(object):
     def percentage(self, value):
         self._pc = value
 
-
     def __init__(self, threshold: float, percentage: float = -1):
         self.threshold = threshold
         self.percentage = percentage
 
     def __iter__(self):
         for key in ('threshold', 'percentage'):
-                yield key, getattr(self, key)
+            yield key, getattr(self, key)
+
+    def json(self):
+        """Returns a dict with all attributes of the object.
+        I define this method to use instead of .__dict__ as the later only reporst
+        the internal variables (e.g. _username instead of username) and I want a better
+        human-readable output.
+        """
+        d = dict()
+        for key,val in self.__iter__():
+            d[key] = val
+
+        return d
+
 
 
 
@@ -124,6 +149,25 @@ class Source(object):
         self._name = name
         self._type = sourcetype
         self._protected = protected
+
+    def __iter__(self):
+        for key in ('name', 'type', 'protected'):
+            yield key, getattr(self, key)
+
+    def json(self):
+        """Returns a dict with all attributes of the object.
+        I define this method to use instead of .__dict__ as the later only reporst
+        the internal variables (e.g. _username instead of username) and I want a better
+        human-readable output.
+        """
+        d = dict()
+        for key,val in self.__iter__():
+            if isinstance(val, SourceType):
+                d[key] = val.name
+            else:
+                d[key] = val
+
+        return d
 
 
 
@@ -207,6 +251,23 @@ class Antennas(object):
     def __contains__(self, key):
         return key in self.names
 
+    def __iter__(self):
+        for ant in self._antennas:
+            yield ant
+
+    def json(self):
+        """Returns a dict with all attributes of the object.
+        I define this method to use instead of .__dict__ as the later only reporst
+        the internal variables (e.g. _username instead of username) and I want a better
+        human-readable output.
+        """
+        d = dict()
+        for ant in self.__iter__():
+            d['Antenna'] = ant.__dict__
+
+        return d
+
+
 
 
 class Subbands(object):
@@ -248,15 +309,39 @@ class Subbands(object):
                 Total bandwidth for each subband. If not units are provided, Hz are assumed.
         """
         self._n_subbands = freqs.shape[0]
-        assert isinstance(chans, int)
-        assert isinstance(bandwidths, float) or isinstance(bandwidths, u.Quantity)
+        assert isinstance(chans, (int, np.int32, np.int64)), \
+            f"Chans {chans} is not an int as expected (found type {type(chans)})."
+        assert isinstance(bandwidths, float) or isinstance(bandwidths, u.Quantity), \
+            f"Bandiwdth {bandwidths} is not a float or Quantity as expected (found type {type(bandwidths)})."
         assert freqs.shape == (self._n_subbands, chans)
-        self._channels = chans
+        self._channels = int(chans)
         self._freqs = np.copy(freqs)
         if isinstance(bandwidths, float):
             self._bandwidths = bandwidths*u.Hz
         else:
             self._bandwidths = bandwidths
+
+    def __iter__(self):
+        for key in ('n_subbands', 'channels', 'bandwidths', 'frequencies'):
+            yield key, getattr(self, key)
+
+    def json(self):
+        """Returns a dict with all attributes of the object.
+        I define this method to use instead of .__dict__ as the later only reporst
+        the internal variables (e.g. _username instead of username) and I want a better
+        human-readable output.
+        """
+        d = dict()
+        for key,val in self.__iter__():
+            if isinstance(val, u.Quantity):
+                d[key] = val.to(u.Hz).value
+            elif isinstance(val, np.ndarray):
+                d[key] = list(val)
+            else:
+                d[key] = val
+
+        return d
+
 
 
 
@@ -334,18 +419,11 @@ class CorrelatorPass(object):
     def freqsetup(self):
         return self._freqsetup
 
-    def freqsetup(self, channels, frequencies, bandwidths):
+    @freqsetup.setter
+    def freqsetup(self, a_subband):
         """Sets the frequency setup for the given correlator pass.
-        Inputs:
-            - chans : int
-                Number of channels per subband.
-            - freqs : array-like
-                Reference frequency for each channel and subband (NxM array, M number
-                of channels per subband.
-            - bandwidths : float or astropy.units.Quantity
-                Total bandwidth for each subband. If not units are provided, Hz are assumed.
         """
-        self._freqsetup = Subbands(channels, frequencies, bandwidths)
+        self._freqsetup = a_subband
 
     def __init__(self, lisfile: str, msfile: str, fitsidifile: str, pipeline: bool = True,
                  antennas: Antennas = None, flagged_weights = None):
@@ -361,6 +439,31 @@ class CorrelatorPass(object):
             self._antennas = antennas
 
         self._flagged_weights = flagged_weights
+
+    def __iter__(self):
+        for key in ('lisfile', 'msfile', 'fitsidifile', 'pipeline', 'sources', 'antennas',
+                    'flagged_weights', 'freqsetup'):
+            yield key, getattr(self, key)
+
+    def json(self):
+        """Returns a dict with all attributes of the object.
+        I define this method to use instead of .__dict__ as the later only reporst
+        the internal variables (e.g. _username instead of username) and I want a better
+        human-readable output.
+        """
+        d = dict()
+        for key,val in self.__iter__():
+            if hasattr(val, 'json'):
+                d[key] = val.json()
+            elif isinstance(val, Path):
+                d[key] = val.name
+            elif isinstance(val, list):
+                d[key] = [v.json() for v in val]
+            else:
+                d[key] = val
+
+        return d
+
 
 
 
@@ -654,8 +757,9 @@ class Experiment(object):
                         self.timerange = dt.datetime(1858, 11, 17, 0, 0, 2) + \
                              ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
                     with pt.table(ms.getkeyword('SPECTRAL_WINDOW'), readonly=True, ack=False) as ms_spw:
-                        a_pass.freqsetup(ms_spw.getcol('NUM_CHAN')[0], ms_spw.getcol('CHAN_FREQ'),
-                                         ms_spw.getcol('TOTAL_BANDWIDTH')[0])
+                        a_pass.freqsetup = Subbands(ms_spw.getcol('NUM_CHAN')[0],
+                                                    ms_spw.getcol('CHAN_FREQ'),
+                                                    ms_spw.getcol('TOTAL_BANDWIDTH')[0])
             except RuntimeError:
                 print(f"WARNING: {a_pass.msfile} not found.")
 
@@ -853,6 +957,12 @@ class Experiment(object):
         self._checklist[a_step] = is_done
 
 
+    def exists_local_copy(self):
+        """Checks if there is a local copy of the Experiment object stored in a local file.
+        """
+        return (self._local_copy is not None) and self._local_copy.exists()
+
+
     def store(self, path=None):
         """Stores the current Experiment into a file in the indicated path. If not provided,
         it will be '.{expname.lower()}.obj' where exp is the name of the experiment.
@@ -864,10 +974,15 @@ class Experiment(object):
             pickle.dump(self, file)
 
 
-    def exists_local_copy(self):
-        """Checks if there is a local copy of the Experiment object stored in a local file.
+    def store_json(self, path=None):
+        """Stores the current Experiment into a JSON file.
+        If path not prvided, it will be '{expname.lower()}.json'.
         """
-        return (self._local_copy is not None) and self._local_copy.exists()
+        if path is None:
+            path = self.cwd / f"{self.expname.lower()}.json"
+        self._local_copy = path
+        with open(path, 'wb') as file:
+            json.dump(self.json(), file, cls=ExpJsonEncoder, indent=4)
 
 
     def load(self, path=None):
@@ -883,15 +998,53 @@ class Experiment(object):
 
         return obj
 
+
     def __repr__(self, *args, **kwargs):
         rep = super().__repr__(*args, **kwargs)
         rep.replace("object", f"object ({self.expname})")
         return rep
 
+
     def __str__(self):
         return f"<Experiment {self.expname}>"
 
+    def __iter__(self):
+        for key in ('expname', 'eEVNname', 'piname', 'email', 'supsci', 'obsdate', 'obsdatetime',
+                    'timerange', 'sources', 'sources_stdplot', 'antennas', 'refant', 'credentials',
+                    'cwd', 'logfile', 'vix', 'expsum', 'special_params',
+                    'last_step', 'gui', 'correlator_passes'):
+            yield key, getattr(self, key)
+
+    def json(self):
+        """Returns a dict with all attributes of the object.
+        I define this method to use instead of .__dict__ as the later only reporst
+        the internal variables (e.g. _username instead of username) and I want a better
+        human-readable output.
+        """
+        d = dict()
+        for key,val in self.__iter__():
+            if hasattr(val, 'json'):
+                d[key] = val.json()
+            elif isinstance(val, Path):
+                d[key] = val.name
+            elif isinstance(val, dt.datetime):
+                d[key] = val.strftime('%Y-%m-%d')
+            elif isinstance(val, dt.date):
+                d[key] = val.strftime('%Y-%m-%d')
+            elif isinstance(val, list) and (len(val) > 0) and hasattr(val[0], 'json'):
+                d[key] = [v.json() for v in val]
+            elif isinstance(val, tuple) and (len(val) > 0) and isinstance(val[0], dt.datetime):
+                d[key] = [v.strftime('%Y-%m-%d %H:%M:%S') for v in val]
+            elif isinstance(val, dict):
+                d[key] = {k:v.json() if hasattr(v, 'json') else k:v.name if hasattr(v, 'name') else k:v for k,v in val]
+            else:
+                d[key] = val
+
+        return d
+
+
     #TODO: method to do a summary of the whole experiment
+
 
 
 class ExpJsonEncoder(json.JSONEncoder):
@@ -902,14 +1055,14 @@ class ExpJsonEncoder(json.JSONEncoder):
             return obj.strftime('%Y-%m-%d %H:%M:%S')
         elif isinstance(obj, dt.date):
             return obj.strftime('%Y-%m-%d')
-        elif isinstance(obj, Antennas):
-            return obj.__dict__
-        elif isinstance(obj, Antenna):
-            return obj.__dict__
-        elif isinstance(obj, Credentials):
-            return obj.__dict__
+        elif hasattr(obj, 'json'):
+            return obj.json()
         elif isinstance(obj, Path):
             return obj.name
+        elif isinstance(obj, np.ndarray):
+            return list(obj)
         else:
+            print(obj)
             return json.JSONEncoder.default(self, obj)
+
 
