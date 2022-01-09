@@ -39,6 +39,10 @@ class Credentials(object):
         self._username = username
         self._password = password
 
+    def __iter__(self):
+        for key in ('username', 'password'):
+                yield key, getattr(self, key)
+
 
 
 class FlagWeight(object):
@@ -78,6 +82,10 @@ class FlagWeight(object):
     def __init__(self, threshold: float, percentage: float = -1):
         self.threshold = threshold
         self.percentage = percentage
+
+    def __iter__(self):
+        for key in ('threshold', 'percentage'):
+                yield key, getattr(self, key)
 
 
 
@@ -886,4 +894,22 @@ class Experiment(object):
     #TODO: method to do a summary of the whole experiment
 
 
+class ExpJsonEncoder(json.JSONEncoder):
+    """Encodes properly the Experiment class to be able to be written as a JSON format
+    """
+    def default(self, obj):
+        if isinstance(obj, dt.datetime):
+            return obj.strftime('%Y-%m-%d %H:%M:%S')
+        elif isinstance(obj, dt.date):
+            return obj.strftime('%Y-%m-%d')
+        elif isinstance(obj, Antennas):
+            return obj.__dict__
+        elif isinstance(obj, Antenna):
+            return obj.__dict__
+        elif isinstance(obj, Credentials):
+            return obj.__dict__
+        elif isinstance(obj, Path):
+            return obj.name
+        else:
+            return json.JSONEncoder.default(self, obj)
 
