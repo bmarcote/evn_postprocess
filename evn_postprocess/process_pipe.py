@@ -44,9 +44,12 @@ def get_files_from_vlbeer(exp):
     cd = f"cd $IN/{exp.supsci}/{exp.expname.lower()}"
     scp = lambda ext : "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                        f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}\*.{ext} ."
-    for ext in ('log', 'antabfs', 'flag'):
+    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp('flag')]))
+    exp.log(cmd, False)
+    for ext in ('log', 'antabfs'):
         cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp(ext)]))
         exp.log(cmd, False)
+        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"ls {exp.expname.lower()}*{ext}"]))
         the_files = [o for o in output.split('\n') if o != ''] # just to avoid trailing \n
         for a_file in the_files:
             ant = a_file.split('.')[0].replace(exp.expname.lower(), '').capitalize()
@@ -55,9 +58,9 @@ def get_files_from_vlbeer(exp):
             elif ext == 'antabfs':
                 exp.antennas[ant].antabfsfile = True
 
-    exp.log(f"# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}", False)
-    exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.filefsfile)}", False)
-    exp.log(f"# Missing ANTAB files for:\n# {', '.join(set(exp.antennas.names)-set(exp.antennas.filefsfile))}", False)
+    exp.log(f"# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}\n", False)
+    exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}", False)
+    exp.log(f"# Missing ANTAB files for:\n# {', '.join(set(exp.antennas.names)-set(exp.antennas.antabfsfile))}", False)
     return True
 
 
