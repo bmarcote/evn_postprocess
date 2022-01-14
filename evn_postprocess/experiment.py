@@ -227,11 +227,11 @@ class Antennas(object):
 
     @property
     def logfsfile(self):
-        return [a.logfsfile for a in self._antennas if a.logfsfile]
+        return [a.name for a in self._antennas if a.logfsfile]
 
     @property
     def antabfsfile(self):
-        return [a.antabfsfile for a in self._antennas if a.antabfsfile]
+        return [a.name for a in self._antennas if a.antabfsfile]
 
     def __len__(self):
         return len(self._antennas)
@@ -934,7 +934,7 @@ class Experiment(object):
         """Writes into the processing.log file a new entry.
         """
         if timestamp:
-            cmd = f"# {dt.today().strftime('%d-%m-%Y %H:%M')}\n{entry}\n"
+            cmd = f"# {dt.datetime.today().strftime('%d-%m-%Y %H:%M')}\n{entry}\n"
         else:
             cmd = f"{entry}\n"
 
@@ -1036,7 +1036,14 @@ class Experiment(object):
             elif isinstance(val, tuple) and (len(val) > 0) and isinstance(val[0], dt.datetime):
                 d[key] = [v.strftime('%Y-%m-%d %H:%M:%S') for v in val]
             elif isinstance(val, dict):
-                d[key] = {k:v.json() if hasattr(v, 'json') else k:v.name if hasattr(v, 'name') else k:v for k,v in val]
+                d[key] = {}
+                for k,v in val:
+                    if hasattr(v, 'json'):
+                        d[key][k] = v.json()
+                    elif hasattr(v, 'name'):
+                        d[key][k] = v.name
+                    else: 
+                        d[key][k] = v
             else:
                 d[key] = val
 
