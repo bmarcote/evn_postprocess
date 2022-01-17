@@ -23,7 +23,7 @@ def dispatcher(exp: experiment.Experiment, functions):
     # except RuntimeError: # Not handled, raised to above
     finally:
         exp.store()
-        print('ERROR: Pipeline ending here. Experiment has been correctly stored.')
+        # print('ERROR: Pipeline ending here. Experiment has been correctly stored.')
 
     return True
 
@@ -32,9 +32,9 @@ def setting_up_environment(exp: experiment.Experiment):
     """Sets up the environment for the post-processing of the experiment.
     This implies to create the
     """
-    output = dispatcher(exp, (env.create_all_dirs, env.copy_files, eee.set_credentials_pipelet,
-                              pipe.get_files_from_vlbeer))
+    output = dispatcher(exp, (env.create_all_dirs, env.copy_files, eee.set_credentials_pipelet))
     exp.parse_expsum()
+    output = dispatcher(exp, (pipe.get_files_from_vlbeer, ))
     exp.store()
     return output
 
@@ -43,7 +43,7 @@ def preparing_lis_files(exp: experiment.Experiment):
     """Checks that the .lis file(s) already exists.
     Otherwise it creates it in ccs and copy it to the experiment folder.
     """
-    output = dispatcher(exp, (ccs.lis_files_in_ccs, ccs.create_lis_files, ccs.get_lis_files, \
+    output = dispatcher(exp, (ccs.create_lis_files, ccs.get_lis_files, \
                               eee.get_passes_from_lisfiles))
     exp.store()
     return output
