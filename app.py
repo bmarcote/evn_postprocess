@@ -98,8 +98,8 @@ def main():
 
 
     exp = experiment.Experiment(args.expname, args.supsci)
-    exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} (exp.obsdate).\n" \
-            f"# Current date: {dt.today().strftime('%d-%m-%Y %H:%M')}\n")
+    exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n" \
+            f"# Running on: {dt.today().strftime('%d %b %Y %H:%M')}\n")
 
     if args.gui == 'terminal' or args.gui is None:
         exp.gui = dialog.Terminal()
