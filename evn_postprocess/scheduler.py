@@ -19,7 +19,7 @@ def dispatcher(exp: experiment.Experiment, functions):
     try:
         for a_step in functions:
             if not a_step(exp):
-                raise RuntimeError(f"The following function did not run properly for {exp.expname}: {a_step}.")
+                raise RuntimeError(f"The following function did not run properly for {exp.expname}: {a_step.__name__}.")
     # except RuntimeError: # Not handled, raised to above
     finally:
         exp.store()
@@ -61,7 +61,7 @@ def first_manual_check(exp: experiment.Experiment):
 
     if exp.eEVNname is not None:
         print(f"{exp.expname} is part of an e-EVN run. Please edit manually the lis file now.")
-        exp.last_step('checklis')
+        exp.last_step = 'checklis'
         output = False
 
     exp.store()
@@ -72,11 +72,15 @@ def creating_ms(exp: experiment.Experiment):
     """Steps from retrieving the cor files to create the MS and standardplots
     """
     output = dispatcher(exp, (eee.getdata, eee.j2ms2, eee.update_ms_expname, eee.get_metadata_from_ms))
+    exp.last_step = 'ms'
+    exp.store()
     return output
 
 
 def standardplots(exp: experiment.Experiment):
     output = dispatcher(exp, (eee.standardplots, eee.open_standardplot_files))
+    exp.last_step = 'plots'
+    exp.store()
     return output
 
 
@@ -87,24 +91,32 @@ def ms_operations(exp: experiment.Experiment):
     exp.store()
     # To get plots on, specially, ampphase without the drops that have been flagged here:
     eee.standardplots(exp, do_weights=False)
+    exp.last_step = 'msops'
+    exp.store()
     return output
 
 
 def tconvert(exp: experiment.Experiment):
-    output = dispatcher(exp, (eee.tconvert, eee.polConvert))
+    output = dispatcher(exp, (eee.tconvert, eee.polconvert))
     if len(exp.antennas.polconvert) > 0:
         #TODO: if polconvert runs, then create again the MS and run standardplots
         pass
+    exp.last_step = 'tconvert'
     exp.store()
     return output
 
 
 def archive(exp: experiment.Experiment):
-    return eee.archive(exp)
+    output = eee.archive(exp)
+    if output:
+        exp.last_step = 'archive'
+        exp.store()
+    return output
 
 
 def antab_editor(exp: experiment.Experiment):
     output = dispatcher(exp, (pipe.run_antab_editor,))
+    exp.last_step = 'antab'
     exp.store()
     return output
 
@@ -116,6 +128,7 @@ def getting_pipeline_files(exp: experiment.Experiment):
     output = dispatcher(exp, (pipe.create_uvflg, pipe.create_input_file))
     # Here there may be a waiting task for e-EVN experiments until all the others are in.
     # Copy antab file and uvflg to input
+    exp.last_step = 'pipeinputs'
     exp.store()
     return output
 
@@ -125,8 +138,8 @@ def pipeline(exp: experiment.Experiment):
     output = dispatcher(exp, (pipe.run_pipeline,))
     exp.store()
     output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
-    exp.store()
     exp.last_step = 'pipeline'
+    exp.store()
     # This is to force the manual check of the pipeline results
     return False # output
 
@@ -134,6 +147,9 @@ def pipeline(exp: experiment.Experiment):
 
 def after_pipeline(exp: experiment.Experiment):
     pipe.ampcal(exp)
+    exp.last_step = 'post_pipeline'
+    exp.store()
+    return True
 
 
 

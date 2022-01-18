@@ -714,7 +714,7 @@ class Experiment(object):
         logpath.mkdir(exist_ok=True)
         self._logs = {'dir': logpath, 'file': self.cwd / "processing.log"}
         self._checklist = {} # TODO: add here by default all steps in the check list, with False value
-        self._local_copy = None
+        self._local_copy = self.cwd / f"{self.expname.lower()}.obj"
         self.parse_masterprojects()
         self._special_pars = {}
         self._last_step = None
@@ -957,20 +957,28 @@ class Experiment(object):
         self._checklist[a_step] = is_done
 
 
+    @property
+    def feedback_page(self):
+        """Returns the url link to the station feedback pages for the experiment.
+        """
+        return f"http://old.evlbi.org/session/{self.obsdatetime.strftime('%b%y').lower()}/" \
+               f"{self.expname.lower() if self.eEVNname is None else self.eEVNname.lower()}.html"
+
+
     def exists_local_copy(self):
         """Checks if there is a local copy of the Experiment object stored in a local file.
         """
-        return (self._local_copy is not None) and self._local_copy.exists()
+        return self._local_copy.exists()
 
 
     def store(self, path=None):
         """Stores the current Experiment into a file in the indicated path. If not provided,
         it will be '.{expname.lower()}.obj' where exp is the name of the experiment.
         """
-        if path is None:
-            path = self.cwd / f"{self.expname.lower()}.obj"
-        self._local_copy = path
-        with open(path, 'wb') as file:
+        if path is not None:
+            self._local_copy = path
+
+        with open(self._local_copy, 'wb') as file:
             pickle.dump(self, file)
 
 
@@ -978,10 +986,10 @@ class Experiment(object):
         """Stores the current Experiment into a JSON file.
         If path not prvided, it will be '{expname.lower()}.json'.
         """
-        if path is None:
-            path = self.cwd / f"{self.expname.lower()}.json"
-        self._local_copy = path
-        with open(path, 'wb') as file:
+        if path is not None:
+            self._local_copy = path
+
+        with open(self._local_copy, 'wb') as file:
             json.dump(self.json(), file, cls=ExpJsonEncoder, indent=4)
 
 
@@ -989,11 +997,10 @@ class Experiment(object):
         """Loads the current Experiment that was stored in a file in the indicated path. If path is None,
         it assumes the standard path of '.{exp}.obj' where exp is the name of the experiment.
         """
-        if path is None:
-            path = self.cwd / f"{self.expname.lower()}.obj"
+        if path is not None:
+            self._local_copy = path
 
-        self._local_copy = path
-        with open(path, 'wb') as file:
+        with open(self._local_copy, 'rb') as file:
             obj = pickle.load(file)
 
         return obj
@@ -1042,7 +1049,7 @@ class Experiment(object):
                         d[key][k] = v.json()
                     elif hasattr(v, 'name'):
                         d[key][k] = v.name
-                    else: 
+                    else:
                         d[key][k] = v
             else:
                 d[key] = val

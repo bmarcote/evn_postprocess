@@ -80,9 +80,6 @@ def remote_file_exists(host, path):
     raise Exception(f"SSH connection to {host} failed.")
 
 
-
-
-
 def create_all_dirs(exp):
     """Creates all folders (in eee and jop83) for the associated post-processing.
     Input:
@@ -115,7 +112,6 @@ def copy_files(exp):
                                 f"{','.join([f for f,b in zip(files, exists) if b])}")
 
     return True
-
 
 
 def update_lis_file(lisfilename, oldexp, newexp):
@@ -234,22 +230,22 @@ def station_1bit_in_vix(vexfile):
         raise FileNotFoundError(f"{vexfile} file not found.")
 
 
-
 def extract_tail_standardplots_output(stdplt_output):
     """Given a full log output from standardplots, it returns only the last bits that contain
     the information provided by the "r" command.
     """
     last_lines = []
-    for a_line in stdplt_output.split('\n')[::-1]:
-        # All "r" output lines always start with those messages
-        # (listTimeRage: , listSources: , listAntennas: , listFreqs: ):
-        if ('list' in a_line) or (a_line.strip() == ''):
-            last_lines.append(a_line)
-        else:
-            # We are already done
-            return ''.join(last_lines[::-1])
+    for an_output in stdplt_output:
+        for a_line in an_output.split('\n')[::-1]:
+            # All "r" output lines always start with those messages
+            # (listTimeRage: , listSources: , listAntennas: , listFreqs: ):
+            if 'list' in a_line:
+                last_lines.append(a_line)
+            elif 'ms: Current' in a_line:
+                # We are already done for this output
+                break
+        last_lines.append('\n')
 
-    # Just in case something went unexpected...
     return '\n'.join(last_lines[::-1])
 
 

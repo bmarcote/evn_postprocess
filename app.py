@@ -73,7 +73,7 @@ def main():
                  'checklis': sch.first_manual_check,
                  'ms': sch.creating_ms,
                  'plots': sch.standardplots,
-                 'MSoperations': sch.ms_operations,
+                 'msops': sch.ms_operations,
                  'tconvert': sch.tconvert,
                  'archive': sch.archive,
                  'antab': sch.antab_editor,
@@ -117,16 +117,17 @@ def main():
 
     # -n  parameter so it can ignore all the previous steps
     if exp.exists_local_copy():
+        print('Restoring stored information from a previous run.')
         exp = exp.load()
 
     try:
         step_keys = list(all_steps.keys())
-        if args.steps is None:
+        if (exp.last_step is None) and (args.steps is None):
             the_steps = step_keys
         elif (exp.last_step is not None) and (args.steps is None):
             the_steps = step_keys[step_keys.index(exp.last_step)+1:]
-            exp.log(f"Starting after the last sucessful step run in a previous iteration ({exp.last_step}).", False)
-            print(f"Starting after the last sucessful step run in a previous iteration ({exp.last_step}).")
+            exp.log(f"Starting after the last sucessful step from a previous run ('{exp.last_step}').", False)
+            print(f"Starting after the last sucessful step from a previous run ('{exp.last_step}').")
         else:
             if ',' in args.steps:
                 if args.steps.count(',') > 1:
@@ -136,10 +137,14 @@ def main():
                     if a_step not in all_steps:
                         raise KeyError
                 the_steps = step_keys[step_keys.index(args.steps[0]):step_keys.index(args.steps[1])]
+                exp.log(f"Running only the following steps: {', '.join(the_steps)}.", False)
+                print(f"Running only the following steps: {', '.join(the_steps)}.")
             else:
                 if args.steps not in all_steps:
                     raise KeyError
                 the_steps = step_keys[step_keys.index(args.steps):]
+                exp.log(f"Starting at the step '{args.steps}'.")
+                print(f"Starting at the step '{args.steps}'.")
     except ValueError as e:
         print("ERROR: more than two steps have been introduced.\n" \
               "Only one or two options are expected.")
