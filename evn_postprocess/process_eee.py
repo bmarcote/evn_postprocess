@@ -250,7 +250,7 @@ def flag_weights(exp):
         print('The following may take a while...')
         cmd, output = environment.shell_command("flag_weights.py", [a_pass.msfile.name,
                 str(a_pass.flagged_weights.threshold)], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        exp.log(f"{cmd}\n# {output.split('\r')[-1].replace('\n', '\n# ')}\n", False)
+        exp.log(cmd+"\n# "+output.split('\r')[-1].replace('\n', '\n# ')+"\n", False)
         # Find the percentage of flagged data and stores it in exp
         str_end = '% data with non-zero'
         str_start = 'execution).'
