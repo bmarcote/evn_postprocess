@@ -1,4 +1,5 @@
 import abc
+import sys
 from . import experiment
 
 
@@ -36,20 +37,23 @@ class Terminal(Dialog):
         It returns None if none are specified or a Python list of the introduced antennas.
         It verifies that all introduced antennas are included in the experiment.
         """
-        antennas = None
+        antennas = []
         while True:
             try:
-                polswap = input(f'{asking_text}:\n').replace('\n', '')
-                if polswap != '':
-                    antennas = [ant.strip().capitalize() for ant in polswap.split(',' if ',' in polswap else ' ')]
+                output = input(asking_text).replace('\n', '')
+                if output != '':
+                    antennas = [ant.strip().capitalize() for ant in output.split(',' if ',' in output else ' ')]
                     for antenna in antennas:
                         if antenna not in exp.antennas.names:
                             raise ValueError(f"Antenna {antenna} not recognized (not included " \
                                              f"in {', '.join(exp.antennas.names)})")
-                    break
+                break
             except ValueError as e:
                 print(f'ValueError: {e}.')
                 continue
+            except KeyboardInterrupt as e:
+                print('\nPipeline aborted !')
+                sys.exit(1)
 
         return antennas
 
@@ -69,9 +73,10 @@ class Terminal(Dialog):
         It returns a bool indicating if the dialog and recording of the parameters
         went sucessfully.
         """
+        print("\n\n\n### Please answer to the following questions:\n")
         while True:
             try:
-                threshold = float(input('Threshold for flagging weights in the MS:\n'))
+                threshold = float(input("\n\033[1mThreshold for flagging weights in the MS:\n>\033[0m "))
                 if 0.0 < threshold < 1.0:
                     break
                 else:
@@ -81,12 +86,14 @@ class Terminal(Dialog):
                 print(f'ValueError: could not convert string to float: {threshold}')
                 continue
 
-        polswap = self.ask_for_antenna('Antennas for polswap (comma or space separated)')
-        onebit = self.ask_for_antenna('Antennas that recorded one-bit data')
-        polconvert = self.ask_for_antenna('Antennas that requires PolConvert')
+        polswap = self.ask_for_antennas(exp, "\n\033[1mAntennas for polswap (comma or space separated)\n" \
+                                             f"\033[0m(possible antennas are: {', '.join(exp.antennas.names)})" \
+                                             "\n\033[1m>\033[0m ")
+        onebit = self.ask_for_antennas(exp, "\n\033[1mAntennas that recorded one-bit data:\n> \033[0m")
+        polconvert = self.ask_for_antennas(exp, "\n\033[1mAntennas that requires PolConvert:\n> \033[0m")
 
-        for a_pass in exp.correlator_passes:
-            exp.correlator_passes[a_pass].flagged_weights = experiment.FlagWeight(threshold)
+        for i,a_pass in enumerate(exp.correlator_passes):
+            exp.correlator_passes[i].flagged_weights = experiment.FlagWeight(threshold)
 
         for antenna in polswap:
             exp.antennas[antenna].polswap = True

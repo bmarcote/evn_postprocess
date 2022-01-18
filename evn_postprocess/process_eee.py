@@ -95,7 +95,7 @@ def getdata(exp):
                     ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
                      "-lis", a_pass.lisfile.name], shell=True, stdout=None,
                      stderr=subprocess.STDOUT, bufsize=0)
-        exp.log(cmd)
+        exp.log(cmd, False)
 
     return True
 
@@ -144,7 +144,7 @@ def get_metadata_from_ms(exp):
     return True
 
 
-def standardplots(exp, do_weights=False):
+def standardplots(exp, do_weights=True):
     """Runs the standardplots on the specified experiment using a reference antenna
     and sources to be picked for the auto- and cross-correlations.
     """
@@ -153,7 +153,7 @@ def standardplots(exp, do_weights=False):
     # Then once all of them finish, open the plots and ask user.
     calsources = ','.join(exp.sources_stdplot)
     counter = 0
-    output = None
+    outputs = []
     try:
         for a_pass in exp.correlator_passes:
             if a_pass.pipeline:
@@ -169,12 +169,19 @@ def standardplots(exp, do_weights=False):
                 counter += 1
                 if counter == 1 and do_weights:
                     cmd, output = environment.shell_command("standardplots",
-                                      ["-weight", a_pass.msfile, refant, calsources],
+                                      ["-weight", a_pass.msfile.name, refant, calsources],
                                       stdout=None, stderr=subprocess.STDOUT)
                 else:
                     cmd, output = environment.shell_command("standardplots",
-                                    [a_pass.msfile, refant, calsources],
+                                    [a_pass.msfile.name, refant, calsources],
                                     stdout=None, stderr=subprocess.STDOUT)
+
+                exp.log(cmd)
+                # Runs again jplotter but only to retrieve the summary into the output
+                cmd, output = environment.shell_command("echo",
+                                  [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                outputs.append(output)
 
     except Exception as e:
         print("WARNING: Standardplots reported an error.")
@@ -182,7 +189,7 @@ def standardplots(exp, do_weights=False):
         return False
     # cmd, output = shell_command("standardplots",
     # # Get all plots done and show them in the best order:
-    exp.log(environment.extract_tail_standardplots_output(output[0]))
+    exp.log(environment.extract_tail_standardplots_output(output), False)
     return True
 
 
@@ -212,7 +219,7 @@ def onebit(exp):
     if len(exp.antennas.onebit) > 0:
         for a_pass in exp.correlator_passes:
             cmd, output = environment.shell_command("scale1bit.py",
-                          [a_pass.msfile, ' '.join(exp.antennas.onebit)], shell=True,
+                          [a_pass.msfile.name, ' '.join(exp.antennas.onebit)], shell=True,
                           stdout=None, stderr=subprocess.STDOUT)
     elif environment.station_1bit_in_vix(exp.vix):
         print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} " \
@@ -223,7 +230,7 @@ def onebit(exp):
 
 def ysfocus(exp):
     for a_pass in exp.correlator_passes:
-        environment.shell_command("ysfocus.py", a_pass.msfile, stdout=None, shell=True, stderr=subprocess.STDOUT)
+        environment.shell_command("ysfocus.py", a_pass.msfile.name, stdout=None, shell=True, stderr=subprocess.STDOUT)
     return True
 
 
@@ -239,12 +246,11 @@ def polswap(exp):
 
 
 def flag_weights(exp):
-    outputs = []
     for a_pass in exp.correlator_passes:
-        cmd, output = environment.shell_command("flag_weights.py", [a_pass.msfile,
-                a_pass.flagged_weights.threshold], shell=True, stdout=None, stderr=subprocess.STDOUT)
-        exp.log(cmd+'\n# '.join(output))
-        outputs.append(output[0])
+        print('The following may take a while...')
+        cmd, output = environment.shell_command("flag_weights.py", [a_pass.msfile.name,
+                str(a_pass.flagged_weights.threshold)], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        exp.log(f"{cmd}\n# {output.split('\r')[-1].replace('\n', '\n# ')}\n", False)
         # Find the percentage of flagged data and stores it in exp
         str_end = '% data with non-zero'
         str_start = 'execution).'
@@ -282,29 +288,30 @@ def update_piletter(exp):
     return True
 
 
-def tConvert(exp):
+def tconvert(exp):
     """Runs tConvert in all MS files available in the directory
     """
     for a_pass in exp.correlator_passes:
         existing_files = glob.glob(f"{a_pass.fitsidifile}*")
         if len(existing_files) > 0:
-            for a_existing_file in existing_files:
-                os.remove(a_existing_file)
-
-        environment.shell_command("tConvert", [a_pass.msfile, a_pass.fitsidifile],
-                                  stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+            continue
+        environment.shell_command("tConvert", [a_pass.msfile.name, a_pass.fitsidifile],
+                                  stdout=None, stderr=subprocess.STDOUT)
     return True
 
 
-def polConvert(exp):
+def polconvert(exp):
     """Checks if PolConvert is required for any antenna.
     In that case, prepares the templates for running it and (potentially in the future?)
     will run it. For now it just requests the user to run it manually.
     """
     if len(exp.antennas.polconvert) > 0:
         # for a_pass in exp.correlator_passes:
-        print("PolConvert has not been implemented yet.\nRun it manually.")
-        exp.last_step('tconvert')
+        print("\n\n\033[1mPolConvert has not been implemented yet.\nPlease run it manually now and re-run me.\033[0m")
+
+        
+        # Keep the following as it will require a manual interaction
+        exp.last_step = 'tconvert'
         return False
     else:
         exp.log(f"# PolConvert is not required.")
