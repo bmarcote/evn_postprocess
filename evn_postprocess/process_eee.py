@@ -42,6 +42,7 @@ def create_folders(exp):
         exp.log(f"mkdir /data0/{exp.supsci.lower()}/{exp.expname.upper()}", False)
         print(f"Directory '/data0/{exp.supsci.lower()}/{exp.expname.upper()}' has been created.")
 
+    return True
 
 
 
@@ -324,7 +325,7 @@ def polconvert(exp):
         print("\n\n\033[1mOnce PolConvert has run, re-run me.\033[0m\n\n")
         # Keep the following as it will require a manual interaction
         exp.last_step = 'polconvert'
-        return False
+        return None
     else:
         exp.log(f"# PolConvert is not required.", False)
         # dialog_text = "PolConvert is required.\n"
@@ -360,8 +361,10 @@ def post_polconvert(exp):
         exp.log("mv *IDI? *IDI?? *IDI???  idi_ori/", False)
         exp.log(f"zmv '(*).PCONVERT' '$1'", False)
 
+    exp.last_step = 'post_polconvert'
     # Create again a MS from these converted files so I can run standardplots over the corrected data
     # TODO: Doing it manually for now
+    return None
     return False
 
 
@@ -423,6 +426,7 @@ def send_letters(exp):
         print('Now it is time to write the NME Report. Good luck!')
     else:
         print('Experiment done!\nYou may have a coffee/tea now.')
+
 
 
 # def archive_piletter(exp):

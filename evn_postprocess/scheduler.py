@@ -9,6 +9,9 @@ from . import process_pipe as pipe
 # Create processing_log?  log dir.
 # - In the case of e-EVN, it should be run until the ANTAB steps in all the other experiments.
 
+class ManualInteractionRequired(Exception):
+    pass
+
 
 def dispatcher(exp: experiment.Experiment, functions):
     """Runs all functions one-after-the-next-one.
@@ -18,7 +21,9 @@ def dispatcher(exp: experiment.Experiment, functions):
     """
     try:
         for a_step in functions:
-            if not a_step(exp):
+            if (output := a_step(exp)) is None:
+                raise ManualInteractionRequired(f"Stopping for manual intervention at {a_step.__name__}.")
+            elif not output:
                 raise RuntimeError(f"The following function did not run properly for {exp.expname}: {a_step.__name__}.")
     # except RuntimeError: # Not handled, raised to above
     finally:
@@ -62,7 +67,7 @@ def first_manual_check(exp: experiment.Experiment):
     if exp.eEVNname is not None:
         print(f"{exp.expname} is part of an e-EVN run. Please edit manually the lis file now.")
         exp.last_step = 'checklis'
-        output = False
+        output = None
 
     exp.store()
     return output
@@ -148,7 +153,10 @@ def pipeline(exp: experiment.Experiment):
     exp.last_step = 'pipeline'
     exp.store()
     # This is to force the manual check of the pipeline results
-    return False # output
+    print('\n\nNow check manually the Pipeline results in the browser.')
+    print('You may need to re-run the pipeline manually if you want to improve the results.')
+    print('Re-run me only once you are happy with the final results and you have archived them again.')
+    return None # output
 
 
 
