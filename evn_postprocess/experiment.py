@@ -886,10 +886,10 @@ class Experiment(object):
         vixfilepath = self.cwd / f"{ename.lower()}.vix"
         if not vixfilepath.exists():
             cmd, output = env.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
-            self.log(f"scp jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix .", False)
+            self.log(f"scp jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix .")
         if not (self.cwd / f"{self.expname}.vix").exists():
             os.symlink(f"{ename.lower()}.vix", f"{self.expname}.vix")
-            self.log(f"{ename.lower()}.vix {self.expname}.vix", False)
+            self.log(f"{ename.lower()}.vix {self.expname}.vix")
 
         return vixfilepath
 
@@ -902,7 +902,7 @@ class Experiment(object):
         expsumfilepath = self.cwd / f"{self.expname.lower()}.expsum"
         if not expsumfilepath.exists():
             cmd, output = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.expsum", '.')
-            self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.expsum .", False)
+            self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.expsum .")
 
         return expsumfilepath
 
@@ -915,7 +915,7 @@ class Experiment(object):
         piletterpath = self.cwd / f"{self.expname.lower()}.piletter"
         if not piletterpath.exists():
             cmd, output = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.piletter", '.')
-            self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.piletter .", False)
+            self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.piletter .")
 
         return piletterpath
 
@@ -930,7 +930,7 @@ class Experiment(object):
         return self._logs
 
 
-    def log(self, entry, timestamp=True):
+    def log(self, entry, timestamp=False):
         """Writes into the processing.log file a new entry.
         """
         if timestamp:
