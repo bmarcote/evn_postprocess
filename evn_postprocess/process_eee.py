@@ -39,7 +39,7 @@ def create_folders(exp):
     expdir = Path(f"/data0/{exp.supsci.lower()}/{exp.expname.upper()}")
     if not expdir.exists():
         expdir.mkdir(parents=True)
-        exp.log(f"mkdir /data0/{exp.supsci.lower()}/{exp.expname.upper()}", False)
+        exp.log(f"mkdir /data0/{exp.supsci.lower()}/{exp.expname.upper()}")
         print(f"Directory '/data0/{exp.supsci.lower()}/{exp.expname.upper()}' has been created.")
 
     return True
@@ -96,7 +96,7 @@ def getdata(exp):
                     ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
                      "-lis", a_pass.lisfile.name], shell=True, stdout=None,
                      stderr=subprocess.STDOUT, bufsize=0)
-        exp.log(cmd, False)
+        exp.log(cmd)
 
     return True
 
@@ -122,7 +122,7 @@ def j2ms2(exp):
                 cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
                     shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
 
-            exp.log(cmd)
+            exp.log(cmd, timestamp=True)
 
     return True
 
@@ -190,7 +190,7 @@ def standardplots(exp, do_weights=True):
         return False
     # cmd, output = shell_command("standardplots",
     # # Get all plots done and show them in the best order:
-    exp.log(environment.extract_tail_standardplots_output(output), False)
+    exp.log(environment.extract_tail_standardplots_output(output))
     return True
 
 
@@ -251,7 +251,7 @@ def flag_weights(exp):
         print('The following may take a while...')
         cmd, output = environment.shell_command("flag_weights.py", [a_pass.msfile.name,
                 str(a_pass.flagged_weights.threshold)], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        exp.log(cmd+"\n# "+output.split('\r')[-1].replace('\n', '\n# ')+"\n", False)
+        exp.log(cmd+"\n# "+output.split('\r')[-1].replace('\n', '\n# ')+"\n")
         # Find the percentage of flagged data and stores it in exp
         str_end = '% data with non-zero'
         str_start = 'execution).'
@@ -310,7 +310,7 @@ def polconvert(exp):
         polconv_inp = Path('./polconvert_inputs.ini')
         if not polconv_inp.exists():
             polconv_inp = Path('/home/jops/polconvert/polconvert_inputs.ini').rename('./polconvert_inputs.ini')
-            exp.log("cp ~/polconvert/polconvert_inputs.ini ./polconvert_inputs.ini", False)
+            exp.log("cp ~/polconvert/polconvert_inputs.ini ./polconvert_inputs.ini")
             environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDIXXX/g'", polconv_inp],
                                       shell=True, bufsize=None, stdout=None)
             environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI*/{exp.expname.lower()}_1_1.IDI*/g'", polconv_inp],
@@ -327,7 +327,7 @@ def polconvert(exp):
         exp.last_step = 'polconvert'
         return None
     else:
-        exp.log(f"# PolConvert is not required.", False)
+        exp.log(f"# PolConvert is not required.")
         # dialog_text = "PolConvert is required.\n"
         # dialog_text += f"Please run it manually for {','.join(exp.polconvert_antennas)}."
         # dialog_text += "Once you are done (all FITS properly corrected), press Continue."
@@ -357,9 +357,9 @@ def post_polconvert(exp):
         for an_idi in Path(exp.cwd).glob('*IDI*.PCONVERT'):
             an_idi.rename(an_idi.name.replace('.PCONVERT', ''))
 
-        exp.log("mkdir idi_ori", False)
-        exp.log("mv *IDI? *IDI?? *IDI???  idi_ori/", False)
-        exp.log(f"zmv '(*).PCONVERT' '$1'", False)
+        exp.log("mkdir idi_ori")
+        exp.log("mv *IDI? *IDI?? *IDI???  idi_ori/")
+        exp.log(f"zmv '(*).PCONVERT' '$1'")
 
     exp.last_step = 'post_polconvert'
     # Create again a MS from these converted files so I can run standardplots over the corrected data
@@ -401,12 +401,14 @@ def set_credentials_pipelet(exp):
 
 
 def archive(exp):
-    dialog.continue_dialog("Please update the PI letter before continue.", f"{exp.expname} -- PI letter")
     # Compress all figures from standardplots
     environment.shell_command("gzip", "*ps", shell=True)
-    # TODO: only auth if no NME
-    environment.archive("-auth", exp, f"-n {exp.credentials.username} -p {exp.credentials.password}")
-    environment.archive("-stnd", exp, f"{exp.expname.lower()}.piletter *ps.gz")
+    exp.log('gzip *ps')
+    if (exp.credentials.username is not None) and (exp.credentials.password is not None):
+        assert len(glob.glob("*_*.auth")) == 0, 'No credentials stored but auth file found'
+        environment.archive("-auth", exp, f"-n {exp.credentials.username} -p {exp.credentials.password}")
+
+    environment.archive("-stnd", exp, "*ps.gz")
     environment.archive("-fits", exp, "*IDI*")
     return True
 

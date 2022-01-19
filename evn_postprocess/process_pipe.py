@@ -41,7 +41,7 @@ def create_folders(exp):
 def get_files_from_vlbeer(exp):
     """Retrieves the antabfs, log, and flag files that should be in vlbeer for the given experiment.
     """
-    cd = f"cd $IN/{exp.supsci}/{exp.expname.lower()}"
+    cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
     scp = lambda ext : "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                        f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}\*.{ext} ."
     cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp('flag')]))
@@ -68,7 +68,7 @@ def get_files_from_vlbeer(exp):
 def create_uvflg(exp):
     """Produces the combined uvflg file containing the full flagging from all telescopes.
     """
-    cd = f"cd $IN/{exp.supsci}/{exp.expname.lower()}"
+    cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
     if not env.remote_file_exists('pipe@jop83', f"{cd}/{exp.expname.lower()}.uvflg"):
         cmd, output = env.ssh('pipe@jop83', ';'.join([cd, 'uvflgfs.sh']))
         exp.log(cmd + output.replace('\n', '\n# '), False)
@@ -83,7 +83,7 @@ def create_uvflg(exp):
 def run_antab_editor(exp):
     """Opens antab_editor.py for the given experiment.
     """
-    cd = f"cd $IN/{exp.supsci}/{exp.expname.lower()}"
+    cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
     if exp.eEVNname is not None:
         print(f"This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}.\n" \
               "Please run antab_editor.py manually to include all experiment associated to the run " \
@@ -140,15 +140,18 @@ def create_input_file(exp):
     if len(exp.correlator_passes) > 2:
         to_change += "'#doprimarybeam = 1' 'doprimarybeam = 1'"
 
-    cmd, output = env.ssh('pipe@jop83', "cp $IN/template.inp $IN/{1}/{1}.inp.txt;".format(exp.expname.lower()) + \
-                 f"replace {to_change} -- $IN/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt")
+    cmd, output = env.ssh('pipe@jop83',
+        "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{1}/{1}.inp.txt".format(exp.expname.lower()))
+    exp.log(cmd, False)
+    cmd, output = env.ssh('pipe@jop83',
+         f"replace {to_change} -- /jop83_0/pipe/in/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt")
     exp.log(cmd, False)
     if len(exp.correlator_passes) > 1:
-        cmd, output = env.ssh('pipe@jop83', "mv $IN/{1}/{1}.inp.txt $IN/{1}/{1}_1.inp.txt".format(exp.expname.lower()))
+        cmd, output = env.ssh('pipe@jop83', "mv /jop83_0/pipe/in/{1}/{1}.inp.txt /jop83_0/pipe/in/{1}/{1}_1.inp.txt".format(exp.expname.lower()))
         exp.log(cmd, False)
         for i in range(2, len(exp.correlator_passes)+1):
             cmd, output = env.ssh('pipe@jop83',
-                    "cp $IN/{1}/{1}_1.inp.txt $IN/{1}/{1}_{2}.inp.txt".format(exp.expname.lower(), i))
+                    "cp /jop83_0/pipe/in/{1}/{1}_1.inp.txt /jop83_0/pipe/in/{1}/{1}_{2}.inp.txt".format(exp.expname.lower(), i))
             exp.log(cmd, False)
 
     return True
