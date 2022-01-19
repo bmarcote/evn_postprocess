@@ -106,6 +106,13 @@ def tconvert(exp: experiment.Experiment):
     return output
 
 
+def post_polconvert(exp: experiment.Experiment):
+    output = dispatcher(exp, (eee.post_polconvert, ))
+    exp.last_step = 'post_polconvert'
+    exp.store()
+    return output
+
+
 def archive(exp: experiment.Experiment):
     output = eee.archive(exp)
     if output:
