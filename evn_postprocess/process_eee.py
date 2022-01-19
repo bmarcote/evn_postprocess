@@ -306,20 +306,65 @@ def polconvert(exp):
     will run it. For now it just requests the user to run it manually.
     """
     if len(exp.antennas.polconvert) > 0:
-        # for a_pass in exp.correlator_passes:
-        print("\n\n\033[1mPolConvert has not been implemented yet.\nPlease run it manually now and re-run me.\033[0m")
+        polconv_inp = Path('./polconvert_inputs.ini')
+        if not polconv_inp.exists():
+            polconv_inp = Path('/home/jops/polconvert/polconvert_inputs.ini').rename('./polconvert_inputs.ini')
+            exp.log("cp ~/polconvert/polconvert_inputs.ini ./polconvert_inputs.ini", False)
+            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDIXXX/g'", polconv_inp],
+                                      shell=True, bufsize=None, stdout=None)
+            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI*/{exp.expname.lower()}_1_1.IDI*/g'", polconv_inp],
+                                      shell=True, bufsize=None, stdout=None)
+            ants = ', '.join(["'"+ant.upper()+"'" for ant in exp.antennas.polconvert])
+            environment.shell_command('sed', ['-i', f"'s/'T6'/{ants}/g'", polconv_inp],
+                                      shell=True, bufsize=None, stdout=None)
 
-        
+        print("\n\n\033[1m### PolConvert needs to be run manually.\033[0m\n")
+        print("You would find the input template in the current directory.\nEdit it manually and then run it with:\n")
+        print("> polconvert.py  polconvert_inputs.ini")
+        print("\n\n\033[1mOnce PolConvert has run, re-run me.\033[0m\n\n")
         # Keep the following as it will require a manual interaction
-        exp.last_step = 'tconvert'
+        exp.last_step = 'polconvert'
         return False
     else:
-        exp.log(f"# PolConvert is not required.")
+        exp.log(f"# PolConvert is not required.", False)
         # dialog_text = "PolConvert is required.\n"
         # dialog_text += f"Please run it manually for {','.join(exp.polconvert_antennas)}."
         # dialog_text += "Once you are done (all FITS properly corrected), press Continue."
         # dialog.warning_dialog(dialog_text)
     return True
+
+
+def post_polconvert(exp):
+    """Assumes that PolConvert has run, creating the new (corrected) files *IDI*.PCONVERT.
+    This function (if indeed PolConvert had run) would move all converted files to the
+    standard name (keeping the original ones in a folder (./unconverted_idi_files/),
+    and runs again standardplots to confirm that the conversion has been loaded properly.
+    """
+    if len(exp.antennas.polconvert) == 0:
+        return True
+
+    if len(glob.glob('*IDI*.PCONVERT')) == 0:
+        # Files would be expected but then let's assume the user already renamed them
+        return True
+    else:
+        idi_ori = Path(exp.cwd / 'idi_ori/')
+        idi_ori.mkdir(exist_ok=True)
+        for an_idi in Path(exp.cwd).glob('*IDI*'):
+            if '.PCONVERT' not in an_idi.name:
+                an_idi.rename(idi_ori / an_idi.name)
+
+        for an_idi in Path(exp.cwd).glob('*IDI*.PCONVERT'):
+            an_idi.rename(an_idi.name.replace('.PCONVERT', ''))
+
+        exp.log("mkdir idi_ori", False)
+        exp.log("mv *IDI? *IDI?? *IDI???  idi_ori/", False)
+        exp.log(f"zmv '(*).PCONVERT' '$1'", False)
+
+    # Create again a MS from these converted files so I can run standardplots over the corrected data
+    # TODO: Doing it manually for now
+    return False
+
+
 
 
 def set_credentials_pipelet(exp):

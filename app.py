@@ -46,7 +46,8 @@ The available steps are:
            Runs scale 1 bit if necessary.
     - standardplots : Runs standardplots.
     - MSoperations : Runs the full MS operations like ysfocus, polswap, flag_weights, etc.
-    - tConvert : Runs tConvert on all available MS files, and asks if polConvert is required.
+    - tConvert : Runs tConvert on all available MS files, and runs polConvert is required.
+    - post_polconvert : if polConvert did run, then renames the new *.PCONVERT files and do standardplots on them.
     - archive : Sets the credentials for the experiment, create the pipe letter and archive all the data.
     - prepipeline : Retrieves all ANTAB, uvflg files, and prepares a draft input file for the pipeline.
     - pipeline : Runs the EVN Pipeline for all correlated passes.
@@ -75,6 +76,7 @@ def main():
                  'plots': sch.standardplots,
                  'msops': sch.ms_operations,
                  'tconvert': sch.tconvert,
+                 'post_polconvert': sch.post_polconvert,
                  'archive': sch.archive,
                  'antab': sch.antab_editor,
                  'pipeinputs': sch.getting_pipeline_files,
