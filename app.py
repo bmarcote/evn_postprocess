@@ -170,11 +170,15 @@ def main():
     if args.j2ms2par is not None:
         exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par(',')]}
 
-    for a_step in the_steps:
-        if not all_steps[a_step](exp):
-            raise RuntimeError(f"An error was found in {exp.expname} at the step {a_step.__name__}")
-        exp.last_step = a_step
-        exp.store()
+    try:
+        for a_step in the_steps:
+            if not all_steps[a_step](exp):
+                raise RuntimeError(f"An error was found in {exp.expname} at the step {a_step.__name__}")
+            exp.last_step = a_step
+            exp.store()
+    except sch.ManualInteractionRequired as e:
+        print('\n\nStopped for manual interaction (see above). Re-run once you have done your duty.')
+        return
 
     print('\nThe post-processing has finished properly.')
 
