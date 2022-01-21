@@ -106,10 +106,11 @@ def j2ms2(exp):
     If the MS to produce already exists, then it will not generate it again.
     inputs: exp : experiment.Experiment
     """
-    for a_pass in exp.correlator_passes:
+    for i,a_pass in enumerate(exp.correlator_passes):
         with open(a_pass.lisfile) as f:
             outms = [a for a in f.readline().replace('\n','').split(' ') \
                                  if (('.ms' in a) and ('.UVF' not in a))][0]
+            exp.correlator_passes[i].msfile = outms
         if not os.path.isdir(outms):
             # print('Removing the pre-existing MS file {outms}')
             # cmd,output = environment.shell_command("rm", ["-rf", outms], shell=True)
@@ -133,7 +134,7 @@ def update_ms_expname(exp):
     """
     if (exp.eEVNname is not None) and (exp.eEVNname != exp.expname):
         for a_pass in exp.correlator_passes:
-            environment.shell_command("expname.py", [a_pass.msfile, exp.expname],
+            environment.shell_command("expname.py", [a_pass.msfile.name, exp.expname],
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             exp.log(f"expname.py {a_pass.msfile} {exp.expname}")
 

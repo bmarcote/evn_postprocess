@@ -35,7 +35,7 @@ def create_folders(exp):
     for a_dir in (tmpdir, indir, outdir):
         if not env.remote_file_exists('pipe@jop83', a_dir):
             output = env.ssh('pipe@jop83', f"mkdir -p {a_dir}")
-            exp.log(f"mkdir -p {a_dir}", False)
+            exp.log(f"mkdir -p {a_dir}")
 
 
 def get_files_from_vlbeer(exp):
@@ -45,10 +45,10 @@ def get_files_from_vlbeer(exp):
     scp = lambda ext : "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                        f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}\*.{ext} ."
     cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp('flag')]))
-    exp.log(cmd, False)
+    exp.log(cmd)
     for ext in ('log', 'antabfs'):
         cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp(ext)]))
-        exp.log(cmd, False)
+        exp.log(cmd)
         cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"ls {exp.expname.lower()}*{ext}"]))
         the_files = [o for o in output.split('\n') if o != ''] # just to avoid trailing \n
         for a_file in the_files:
@@ -58,10 +58,10 @@ def get_files_from_vlbeer(exp):
             elif ext == 'antabfs':
                 exp.antennas[ant].antabfsfile = True
 
-    exp.log(f"# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}\n", False)
-    exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.logfsfile))}", False)
-    exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}", False)
-    exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.antabfsfile))}", False)
+    exp.log(f"# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}\n")
+    exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.logfsfile))}")
+    exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}")
+    exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.antabfsfile))}")
     return True
 
 
@@ -70,12 +70,17 @@ def create_uvflg(exp):
     """
     cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
     if not env.remote_file_exists('pipe@jop83', f"{cd}/{exp.expname.lower()}.uvflg"):
-        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, 'uvflgfs.sh']))
-        exp.log(cmd + output.replace('\n', '\n# '), False)
+        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, 'uvflgall.csh']))
         print(output)
-        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"cat *uvflgfs {exp.expname.lower()}.uvflg"]))
-        exp.log(cmd + output, False)
-        print(output)
+        output_tail = []
+        for outline in output[::-1].split('\n'):
+            if 'line ' in outline:
+                break
+            output_tail.append(outline)
+
+        exp.log(cmd + '\n# ' + ',\n'.join(output_tail[::-1]).replace('\n', '\n# '))
+        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"cat *uvflgfs > {exp.expname.lower()}.uvflg"]))
+        exp.log(cmd)
 
     return True
 
@@ -90,30 +95,32 @@ def run_antab_editor(exp):
               "(using the '-a' option).\n\nThen run the post-processing again.")
         # I fake it to be sucessful in the object to let it to run seemless in a following iteraction
         exp.last_step = 'antab_editor'
-        return False
+        return None
 
     if len(exp.correlator_passes) == 2:
-        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, 'antab_editor.py -l']))
+        cmd, output = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py -l']))
     else:
-        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, 'antab_editor.py']))
+        cmd, output = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py']))
 
-    exp.log(cmd, False)
-    return True
+    print('\n\n\nRun antab_editor.py manually in pipe.')
+    exp.last_step = 'antab_editor'
+    exp.log(cmd)
+    return None
 
 
 def create_input_file(exp):
     """Copies the template of an input file for the EVN Pipeline and modifies the standard parameters.
     """
     # First copies the final uvflg and antab files to the input directory
-    cdinp = f"cd /jop83_0/pipe/in/{exp.expname.lower()}/"
-    cdtemp = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}/"
+    cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}/"
+    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}/"
     if not env.remote_file_exists('pipe@jop83', f"{cdinp}{exp.expname.lower()}*.uvflg"):
         cmd, output = env.ssh('pipe@jop83', f"cp {cdtemp}{exp.expname.lower()}*.uvflg {cdinp}")
-        exp.log(cmd, False)
+        exp.log(cmd)
 
     if not env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.antab"):
         cmd, output = env.ssh('pipe@jop83', f"cp {cdtemp}/{exp.expname.lower()}.antab {cdinp}")
-        exp.log(cmd, False)
+        exp.log(cmd)
 
     if env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.inp.txt"):
         return True
