@@ -357,11 +357,25 @@ class CorrelatorPass(object):
         """
         return self._lisfile
 
+    @lisfile.setter
+    def lisfile(self, new_lisfile):
+        if isinstance(new_lisfile, Path):
+            self._lisfile = new_lisfile
+        elif isinstance(new_lisfile, str):
+            self._lisfile = Path(new_lisfile)
+
     @property
     def msfile(self):
         """Returns the name of the MS file (libpath.Path object) associated to this correlator pass.
         """
         return self._msfile
+
+    @msfile.setter
+    def msfile(self, new_msfile):
+        if isinstance(new_msfile, Path):
+            self._msfile = new_msfile
+        elif isinstance(new_msfile, str):
+            self._msfile = Path(new_msfile)
 
     @property
     def fitsidifile(self):
@@ -711,7 +725,7 @@ class Experiment(object):
         self._credentials = Credentials(None, None)
         self._passes = []
         logpath = self.cwd / "logs"
-        logpath.mkdir(exist_ok=True)
+        logpath.mkdir(parents=True, exist_ok=True)
         self._logs = {'dir': logpath, 'file': self.cwd / "processing.log"}
         self._checklist = {} # TODO: add here by default all steps in the check list, with False value
         self._local_copy = self.cwd / f"{self.expname.lower()}.obj"
@@ -882,14 +896,13 @@ class Experiment(object):
         """Returns the (Path object) to the .vix file related to the experiment.
         If the file does not exist in the experiment dir (in eee), is retrieved from ccs.
         """
+        vixfilepath = Path(f"{self.expname.lower()}.vix")
         ename = self.expname if self.eEVNname is None else self.eEVNname
-        vixfilepath = self.cwd / f"{ename.lower()}.vix"
         if not vixfilepath.exists():
             cmd, output = env.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
-            self.log(f"scp jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix .")
-        if not (self.cwd / f"{self.expname}.vix").exists():
+            self.log(f"scp jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix {self.expname.lower()}.vix")
             os.symlink(f"{ename.lower()}.vix", f"{self.expname}.vix")
-            self.log(f"{ename.lower()}.vix {self.expname}.vix")
+            self.log(f"ln -s {ename.lower()}.vix {self.expname}.vix")
 
         return vixfilepath
 

@@ -11,6 +11,7 @@ def scp(originpath, destpath):
     """Does a scp from originpath to destpath. If the process returns an error,
     then it raises ValueError.
     """
+    print("\n\033[1m> " + f"scp {originpath} {destpath}" + "\033[0m")
     process = subprocess.call(["scp", originpath, destpath], shell=False,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if process != 0:
@@ -24,7 +25,7 @@ def ssh(computer, commands):
     Returns the output or raises ValueError in case of errors.
     The output is expected to be in UTF-8 format.
     """
-    print("\n\033[1m> " + f"ssh {computer};{commands}" + "\033[0m")
+    print("\n\033[1m> " + f"ssh {computer} {commands}" + "\033[0m")
     process = subprocess.Popen(["ssh", computer, commands], shell=False,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # logger.info(output)

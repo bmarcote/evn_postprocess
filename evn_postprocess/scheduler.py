@@ -65,9 +65,10 @@ def first_manual_check(exp: experiment.Experiment):
               f"be solved manually.\n{'#'*10}\n")
 
     if exp.eEVNname is not None:
-        print(f"{exp.expname} is part of an e-EVN run. Please edit manually the lis file now.")
+        print(f"\n\n{exp.expname} is part of an e-EVN run. Please edit manually the lis file now.")
         exp.last_step = 'checklis'
         output = None
+        raise ManualInteractionRequired('The lis file needs to be manually edited.')
 
     exp.store()
     return output

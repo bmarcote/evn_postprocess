@@ -173,7 +173,7 @@ def main():
     try:
         for a_step in the_steps:
             if not all_steps[a_step](exp):
-                raise RuntimeError(f"An error was found in {exp.expname} at the step {a_step.__name__}")
+                raise RuntimeError(f"An error was found in {exp.expname} at the step {all_steps[a_step].__name__}")
             exp.last_step = a_step
             exp.store()
     except sch.ManualInteractionRequired as e:
