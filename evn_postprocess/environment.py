@@ -258,7 +258,7 @@ def archive(flag, experiment, rest_parameters):
     """
     cmd, output = shell_command("archive.pl",
             [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters], shell=True)
-    exp.log(cmd, '# '+'# '.join(output))
+    experiment.log(cmd, '# '+'# '.join(output))
     return cmd, output
 
 

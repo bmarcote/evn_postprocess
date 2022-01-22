@@ -38,6 +38,7 @@ it will automatically continue from the last successful step that run.
 
 The available steps are:
 
+    XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
     - setting_up : Sets up the experiment, creates the required folders in @eee and @pipe, and copy the
                    already-existing files (.expsum, .vix, etc).
     - lisfile : Produces a .lis file in @ccs and copies them to @eee.
@@ -81,7 +82,8 @@ def main():
                  'antab': sch.antab_editor,
                  'pipeinputs': sch.getting_pipeline_files,
                  'pipeline': sch.pipeline,
-                 'post_pipeline': sch.after_pipeline}
+                 'postpipe': sch.after_pipeline,
+                 'last': sch.finishing_experiment}
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
                                     formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('expname', type=str, help='Name of the EVN experiment (case-insensitive).')
