@@ -65,36 +65,34 @@ def get_files_from_vlbeer(exp):
     return True
 
 
-def create_uvflg(exp):
-    """Produces the combined uvflg file containing the full flagging from all telescopes.
-    """
-    cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
-    if not env.remote_file_exists('pipe@jop83', f"{cd}/{exp.expname.lower()}.uvflg"):
-        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, 'uvflgall.csh']))
-        print(output)
-        output_tail = []
-        for outline in output[::-1].split('\n'):
-            if 'line ' in outline:
-                break
-            output_tail.append(outline)
-
-        exp.log(cmd + '\n# ' + ',\n'.join(output_tail[::-1]).replace('\n', '\n# '))
-        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"cat *uvflgfs > {exp.expname.lower()}.uvflg"]))
-        exp.log(cmd)
-
-    return True
-
-
 def run_antab_editor(exp):
     """Opens antab_editor.py for the given experiment.
     """
     cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
+    cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}"
+    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}"
+    if env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.antab"):
+        print("Antab file already found in {cdinp}.")
+        return True
+
+    if env.remote_file_exists('pipe@jop83',
+                    f"{cdtemp}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}*.antab"):
+        print("Copying Antab file from {cdinp}.")
+        cmd, output = env.ssh('pipe@jop83', f"cp {cdtemp}/*.antab {cdinp}/")
+        exp.log(cmd)
+        if (exp.eEVNname is not None) and (exp.expname != exp.eEVNname):
+            # We need to rename to the actual name
+            for an_antab in env.ssh('pipe@jop83', f"{cdinp}/*.antab")[1].split('\n'):
+                if an_antab != '':
+                    env.ssh('pipe@jop83', f"mv {an_antab} " \
+                    f"{'/'.join([*an_antab.split('/')[:-1], an_antab.split('/')[-1].replace(exp.eEVNname, exp.expname)])}")
+        return True
+
     if exp.eEVNname is not None:
         print(f"This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}.\n" \
               "Please run antab_editor.py manually to include all experiment associated to the run " \
               "(using the '-a' option).\n\nThen run the post-processing again.")
         # I fake it to be sucessful in the object to let it to run seemless in a following iteraction
-        exp.last_step = 'antab_editor'
         return None
 
     if len(exp.correlator_passes) == 2:
@@ -103,9 +101,41 @@ def run_antab_editor(exp):
         cmd, output = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py']))
 
     print('\n\n\nRun antab_editor.py manually in pipe.')
-    exp.last_step = 'antab_editor'
     exp.log(cmd)
     return None
+
+
+def create_uvflg(exp):
+    """Produces the combined uvflg file containing the full flagging from all telescopes.
+    """
+    if (exp.eEVNname is None) or (exp.expname == exp.eEVNname):
+        cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
+        if not env.remote_file_exists('pipe@jop83', f"{cd}/{exp.expname.lower()}.uvflg"):
+            cmd, output = env.ssh('pipe@jop83', ';'.join([cd, 'uvflgall.csh']))
+            print(output)
+            output_tail = []
+            for outline in output[::-1].split('\n'):
+                if 'line ' in outline:
+                    break
+                output_tail.append(outline)
+
+            exp.log(cmd + '\n# ' + ',\n'.join(output_tail[::-1]).replace('\n', '\n# '))
+            cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"cat *uvflgfs > {exp.expname.lower()}.uvflg"]))
+            exp.log(cmd)
+    else:
+        cd = f"/jop83_0/pipe/in/{exp.supsci}/{exp.eEVNname.lower()}"
+        if not env.remote_file_exists('pipe@jop83', f"{cd}/{exp.eEVNname.lower()}.uvflg"):
+            print(f"You first need to process the original experiment in this e-EVN run ({exp.eEVNname}).")
+            print("Once you have created the .uvflg file for such expeirment I will be able to run by myself.")
+            return None
+
+    cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}"
+    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}"
+    if not env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.uvflg"):
+        cmd, output = env.ssh('pipe@jop83', f"cp {cdtemp}/*.uvflg {cdinp}/")
+        exp.log(cmd)
+
+    return True
 
 
 def create_input_file(exp):
@@ -114,13 +144,6 @@ def create_input_file(exp):
     # First copies the final uvflg and antab files to the input directory
     cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}/"
     cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}/"
-    if not env.remote_file_exists('pipe@jop83', f"{cdinp}{exp.expname.lower()}*.uvflg"):
-        cmd, output = env.ssh('pipe@jop83', f"cp {cdtemp}{exp.expname.lower()}*.uvflg {cdinp}")
-        exp.log(cmd)
-
-    if not env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.antab"):
-        cmd, output = env.ssh('pipe@jop83', f"cp {cdtemp}/{exp.expname.lower()}.antab {cdinp}")
-        exp.log(cmd)
 
     if env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.inp.txt"):
         return True
@@ -128,6 +151,8 @@ def create_input_file(exp):
     # Parameters to modify inside the input file
     if exp.supsci == 'marcote':
         cmd, output = env.ssh('pipe@jop83', 'give_me_next_userno.sh')
+        if (output is None) or (output.replace('\n', '').strip() == ''):
+            raise ValueError('Did not get any output from give_me_next_userno.sh in pipe')
         userno = output
     else:
         userno = 'XXXXX'
@@ -148,7 +173,7 @@ def create_input_file(exp):
         to_change += "'#doprimarybeam = 1' 'doprimarybeam = 1'"
 
     cmd, output = env.ssh('pipe@jop83',
-        "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{1}/{1}.inp.txt".format(exp.expname.lower()))
+        "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()))
     exp.log(cmd, False)
     cmd, output = env.ssh('pipe@jop83',
          f"replace {to_change} -- /jop83_0/pipe/in/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt")
@@ -169,6 +194,10 @@ def run_pipeline(exp):
     """
     exp.log('# Running the pipeline...', True)
     cd = f"cd /jop83_0/pipe/in/{exp.expname.lower()}"
+    # TODO:
+    print('\n\n\n\033[1mModify the input file for the pipeline and run it manually\033[0m')
+    exp.last_step = 'pipeline'
+    return None
     if len(exp.correlator_passes) > 1:
         cmd, output = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}_1.inp.txt")
     else:

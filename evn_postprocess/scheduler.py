@@ -68,9 +68,9 @@ def first_manual_check(exp: experiment.Experiment):
         print(f"\n\n{exp.expname} is part of an e-EVN run. Please edit manually the lis file now.")
         exp.last_step = 'checklis'
         output = None
+        exp.store()
         raise ManualInteractionRequired('The lis file needs to be manually edited.')
 
-    exp.store()
     return output
 
 
@@ -146,23 +146,26 @@ def getting_pipeline_files(exp: experiment.Experiment):
 
 
 def pipeline(exp: experiment.Experiment):
-    # TODO: authentification for pipeline results
     output = dispatcher(exp, (pipe.run_pipeline,))
-    exp.store()
-    output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
     exp.last_step = 'pipeline'
     exp.store()
-    # This is to force the manual check of the pipeline results
-    print('\n\nNow check manually the Pipeline results in the browser.')
-    print('You may need to re-run the pipeline manually if you want to improve the results.')
-    print('Re-run me only once you are happy with the final results and you have archived them again.')
-    return None # output
-
+    return output
 
 
 def after_pipeline(exp: experiment.Experiment):
+    # TODO: authentification for pipeline results
+    output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
+    exp.last_step = 'postpipe'
+    exp.store()
+    print('\n\nNow check manually the Pipeline results in the browser.')
+    print('You may need to re-run the pipeline if you want to improve the results.')
+    print('Re-run me only once you are happy with the final results and you have archived them again.')
+    return output
+
+
+def finishing_experiment(exp: experiment.Experiment):
     pipe.ampcal(exp)
-    exp.last_step = 'post_pipeline'
+    exp.last_step = 'last'
     exp.store()
     return True
 

@@ -169,7 +169,7 @@ def standardplots(exp, do_weights=True):
                     raise ValueError("Couldn't find a good reference antenna for standardplots. " \
                                      "Please specify it manually.")
                 counter += 1
-                if counter == 1 and do_weights:
+                if (counter == 1) and do_weights:
                     cmd, output = environment.shell_command("standardplots",
                                       ["-weight", a_pass.msfile.name, refant, calsources],
                                       stdout=None, stderr=subprocess.STDOUT)
@@ -205,12 +205,12 @@ def open_standardplot_files(exp):
 
     try:
         for a_plot in standardplots:
-            environment.shell_command("gv", a_plot, stdout=None,
-                stderr=subprocess.STDOUT)
-            return True
+            environment.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
     except Exception as e:
         print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")
         return False
+
+    return True
 
 
 def onebit(exp):
@@ -402,12 +402,15 @@ def set_credentials_pipelet(exp):
 
 
 def archive(exp):
-    # Compress all figures from standardplots
-    environment.shell_command("gzip", "*ps", shell=True)
-    exp.log('gzip *ps')
+    # Compress all figures from standardplots if they haven't been yet
+    if len(glob.glob("*.ps")) > 0:
+        environment.shell_command("gzip", "*ps", shell=True)
+        exp.log('gzip *ps')
+
     if (exp.credentials.username is not None) and (exp.credentials.password is not None):
-        assert len(glob.glob("*_*.auth")) == 0, 'No credentials stored but auth file found'
         environment.archive("-auth", exp, f"-n {exp.credentials.username} -p {exp.credentials.password}")
+    else:
+        assert len(glob.glob("*_*.auth")) == 0, 'No credentials stored but auth file found'
 
     environment.archive("-stnd", exp, "*ps.gz")
     environment.archive("-fits", exp, "*IDI*")
