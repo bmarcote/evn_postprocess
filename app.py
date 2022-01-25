@@ -172,6 +172,8 @@ def main():
     if args.j2ms2par is not None:
         exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par(',')]}
 
+    # TODO: This is temporal, until the script works completely
+    env.shell_command('create_processing_log.py', ['-o', 'processing_manual.log', exp.expname], shell=True)
     try:
         for a_step in the_steps:
             if not all_steps[a_step](exp):
