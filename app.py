@@ -49,7 +49,8 @@ The available steps are:
     - tconvert : Runs tConvert on all available MS files, and runs polConvert is required.
     - post_polconvert : if polConvert did run, then renames the new *.PCONVERT files and do standardplots on them.
     - archive : Sets the credentials for the experiment, create the pipe letter and archive all the data.
-    - antab : Opens antab_editor.py with all the expected files already in the directory.
+    - antab : Retrieves the .antab file to be used in the pipeline. If it was not generated, Opens antab_editor.py.
+              Needs to run again once you have run antab_editor.py manually.
     - pipeinputs : Prepares a draft input file for the pipeline and recovers all needed files.
     - pipeline : Runs the EVN Pipeline for all correlated passes.
     - postpipe : Runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
@@ -173,7 +174,8 @@ def main():
         exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par(',')]}
 
     # TODO: This is temporal, until the script works completely
-    env.shell_command('create_processing_log.py', ['-o', 'processing_manual.log', exp.expname], shell=True)
+    if not os.path.isfile('processing_manual.log'):
+        env.shell_command('create_processing_log.py', ['-o', 'processing_manual.log', exp.expname], shell=True)
     try:
         for a_step in the_steps:
             if not all_steps[a_step](exp):
