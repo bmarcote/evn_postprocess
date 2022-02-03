@@ -19,6 +19,7 @@ from datetime import datetime
 from evn_postprocess.evn_postprocess import experiment
 from evn_postprocess.evn_postprocess import scheduler as sch
 from evn_postprocess.evn_postprocess import dialog
+from evn_postprocess.evn_postprocess import environment as env
 from evn_postprocess.evn_postprocess import process_ccs as ccs
 from evn_postprocess.evn_postprocess import process_eee as eee
 from evn_postprocess.evn_postprocess import process_pipe as pipe
