@@ -39,22 +39,21 @@ it will automatically continue from the last successful step that run.
 
 The available steps are:
 
-    XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
     - setting_up : Sets up the experiment, creates the required folders in @eee and @pipe, and copy the
                    already-existing files (.expsum, .vix, etc).
     - lisfile : Produces a .lis file in @ccs and copies them to @eee.
     - checklis : Checks the existing .lis files and asks the user some parameters to continue.
     - ms : Gets the data for all available .lis files and runs j2ms2 to produce MS files.
-           Runs scale 1 bit if necessary.
-    - standardplots : Runs standardplots.
-    - MSoperations : Runs the full MS operations like ysfocus, polswap, flag_weights, etc.
-    - tConvert : Runs tConvert on all available MS files, and runs polConvert is required.
+    - plots : Runs standardplots.
+    - msops : Runs the full MS operations like ysfocus, polswap, flag_weights, etc.
+    - tconvert : Runs tConvert on all available MS files, and runs polConvert is required.
     - post_polconvert : if polConvert did run, then renames the new *.PCONVERT files and do standardplots on them.
     - archive : Sets the credentials for the experiment, create the pipe letter and archive all the data.
-    - prepipeline : Retrieves all ANTAB, uvflg files, and prepares a draft input file for the pipeline.
+    - antab : Opens antab_editor.py with all the expected files already in the directory.
+    - pipeinputs : Prepares a draft input file for the pipeline and recovers all needed files.
     - pipeline : Runs the EVN Pipeline for all correlated passes.
-    - postpipeline : Runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
-    - letters : Asks to update the PI letter, and sends it and pipeletter. Also runs parsePIletter.py.
+    - postpipe : Runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
+    - last : Asks to update the PI letter, and sends it and pipeletter. Also runs parsePIletter.py.
 
 """
 

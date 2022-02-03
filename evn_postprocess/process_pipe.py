@@ -58,10 +58,18 @@ def get_files_from_vlbeer(exp):
             elif ext == 'antabfs':
                 exp.antennas[ant].antabfsfile = True
 
-    exp.log(f"# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}\n")
-    exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.logfsfile))}")
+    exp.log(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
+    if len(set(exp.antennas.names)-set(exp.antennas.logfsfile)) > 0:
+        exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.logfsfile))}\n")
+    else:
+        exp.log("# No missing log files for any station.\n")
+
     exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}")
-    exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.antabfsfile))}")
+    if len(set(exp.antennas.names)-set(exp.antennas.antabfsfile)) > 0:
+        exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.antabfsfile))}\n")
+    else:
+        exp.log("# No missing antab files for any station.\n")
+
     return True
 
 

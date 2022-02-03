@@ -249,7 +249,7 @@ def polswap(exp):
 
 def flag_weights(exp):
     for a_pass in exp.correlator_passes:
-        print('The following may take a while...')
+        print('\n\nThe following may take a while...')
         cmd, output = environment.shell_command("flag_weights.py", [a_pass.msfile.name,
                 str(a_pass.flagged_weights.threshold)], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         exp.log(cmd+"\n# "+output.split('\r')[-1].replace('\n', '\n# ')+"\n")
