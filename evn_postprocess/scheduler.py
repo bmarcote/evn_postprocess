@@ -154,7 +154,8 @@ def pipeline(exp: experiment.Experiment):
 
 def after_pipeline(exp: experiment.Experiment):
     # TODO: authentification for pipeline results
-    output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
+    # output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
+    output = dispatcher(exp, (pipe.comment_tasav_files, pipe.archive))
     exp.last_step = 'postpipe'
     exp.store()
     print('\n\nNow check manually the Pipeline results in the browser.')
