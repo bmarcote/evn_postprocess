@@ -156,8 +156,8 @@ def standardplots(exp, do_weights=True):
     calsources = ','.join(exp.sources_stdplot)
     counter = 0
     outputs = []
-    try:
-        for a_pass in exp.correlator_passes:
+    for a_pass in exp.correlator_passes:
+        try:
             if a_pass.pipeline:
                 if exp.refant is not None:
                     refant = exp.refant[0] if len(exp.refant) == 1 else f"({'|'.join(exp.refant)})"
@@ -185,11 +185,11 @@ def standardplots(exp, do_weights=True):
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 outputs.append(output)
 
-    except Exception as e:
-        print("WARNING: Standardplots reported an error.")
-        traceback.print_exc()
-        return False
-    # cmd, output = shell_command("standardplots",
+        except Exception as e:
+            print("WARNING: Standardplots reported an error.")
+            traceback.print_exc()
+            return False
+
     # # Get all plots done and show them in the best order:
     exp.log(environment.extract_tail_standardplots_output(output))
     return True
