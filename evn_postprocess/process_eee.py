@@ -310,14 +310,15 @@ def polconvert(exp):
     if len(exp.antennas.polconvert) > 0:
         polconv_inp = Path('./polconvert_inputs.ini')
         if not polconv_inp.exists():
-            polconv_inp = Path('/home/jops/polconvert/polconvert_inputs.ini').rename('./polconvert_inputs.ini')
             exp.log("cp ~/polconvert/polconvert_inputs.ini ./polconvert_inputs.ini")
-            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDIXXX/g'", polconv_inp],
-                                      shell=True, bufsize=None, stdout=None)
-            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI*/{exp.expname.lower()}_1_1.IDI*/g'", polconv_inp],
-                                      shell=True, bufsize=None, stdout=None)
+            environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.ini', './polconvert_inputs.ini'],
+                                      shell=True, stdout=None)
+            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDIXXX/g'",
+                                      polconv_inp.name], shell=True, bufsize=None, stdout=None)
+            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI*/{exp.expname.lower()}_1_1.IDI*/g'",
+                                      polconv_inp.name], shell=True, bufsize=None, stdout=None)
             ants = ', '.join(["'"+ant.upper()+"'" for ant in exp.antennas.polconvert])
-            environment.shell_command('sed', ['-i', f"'s/'T6'/{ants}/g'", polconv_inp],
+            environment.shell_command('sed', ['-i', f"'s/'T6'/{ants}/g'", polconv_inp.name],
                                       shell=True, bufsize=None, stdout=None)
 
         print("\n\n\033[1m### PolConvert needs to be run manually.\033[0m\n")
