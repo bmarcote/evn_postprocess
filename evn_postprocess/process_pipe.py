@@ -58,10 +58,18 @@ def get_files_from_vlbeer(exp):
             elif ext == 'antabfs':
                 exp.antennas[ant].antabfsfile = True
 
-    exp.log(f"# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}\n")
-    exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.logfsfile))}")
+    exp.log(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
+    if len(set(exp.antennas.names)-set(exp.antennas.logfsfile)) > 0:
+        exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.logfsfile))}\n")
+    else:
+        exp.log("# No missing log files for any station.\n")
+
     exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}")
-    exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.antabfsfile))}")
+    if len(set(exp.antennas.names)-set(exp.antennas.antabfsfile)) > 0:
+        exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.antabfsfile))}\n")
+    else:
+        exp.log("# No missing antab files for any station.\n")
+
     return True
 
 
@@ -217,9 +225,13 @@ def run_pipeline(exp):
 def comment_tasav_files(exp):
     """Creates the comment and tasav files after the EVN Pipeline has run.
     """
-    cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
-    cmd, output = env.ssh('pipe@jop83', f"{cd} && comment_tasav_file.py {exp.expname.lower()}")
-    exp.log(cmd)
+    cdin = f"/jop83_0/pipe/in/{exp.expname.lower()}"
+    cdout = f"/jop83_0/pipe/out/{exp.expname.lower()}"
+    if not (env.remote_file_exists('pipe@jop83', f"{cdout}/eb088\*.comment") and \
+           env.remote_file_exists('pipe@jop83', f"{cdin}/eb088\*.tasav.txt")):
+        cmd, output = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
+        exp.log(cmd)
+
     return True
 
 
@@ -228,7 +240,7 @@ def pipeline_feedback(exp):
     """
     cd= f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
     cmd, output = env.ssh('pipe@jop83', f"{cd} && feedback.pl -exp '{exp.expname.lower()}' " \
-                  f"-jsss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'")
+                  f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
     exp.log(cmd)
     return True
 
@@ -238,7 +250,7 @@ def archive(exp):
     """
     for f in ('in', 'out'):
         cd= f"cd /jop83_0/pipe/{f}/{exp.expname.lower()}"
-        cmd, output = env.ssh('jops@jop83', f"{cd} && archive -pipe -e {exp.expname.lower()}_{exp.obsdate}")
+        cmd, output = env.ssh('jops@jop83', f"{cd} && archive -pipe -e {exp.expname.lower()}_{exp.obsdate}", stdout=None)
         exp.log(cmd)
 
     return True
