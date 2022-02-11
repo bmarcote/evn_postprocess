@@ -20,19 +20,21 @@ def scp(originpath, destpath):
     return f"scp {originpath} {destpath}", process
 
 
-def ssh(computer, commands):
+def ssh(computer, commands, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
     """Sends a ssh command to the indicated computer.
     Returns the output or raises ValueError in case of errors.
     The output is expected to be in UTF-8 format.
     """
     print("\n\033[1m> " + f"ssh {computer} {commands}" + "\033[0m")
-    process = subprocess.Popen(["ssh", computer, commands], shell=False,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(["ssh", computer, commands], shell=shell, stdout=stdout, stderr=stderr)
     # logger.info(output)
-    if process.returncode != 0 and process.returncode is not None:
+    if (process.returncode != 0) and (process.returncode is not None):
         raise ValueError(f"Error code {process.returncode} when running ssh {computer}:{commands} in ccs.")
 
-    return f"ssh {computer}:{commands}", process.communicate()[0].decode('utf-8')
+    if process.communicate()[0] is not None:
+        return f"ssh {computer}:{commands}", process.communicate()[0].decode('utf-8')
+
+    return f"ssh {computer}:{commands}"
 
 
 def shell_command(command, parameters=None, shell=True, bufsize=-1,

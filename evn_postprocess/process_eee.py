@@ -156,8 +156,8 @@ def standardplots(exp, do_weights=True):
     calsources = ','.join(exp.sources_stdplot)
     counter = 0
     outputs = []
-    try:
-        for a_pass in exp.correlator_passes:
+    for a_pass in exp.correlator_passes:
+        try:
             if a_pass.pipeline:
                 if exp.refant is not None:
                     refant = exp.refant[0] if len(exp.refant) == 1 else f"({'|'.join(exp.refant)})"
@@ -185,11 +185,11 @@ def standardplots(exp, do_weights=True):
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 outputs.append(output)
 
-    except Exception as e:
-        print("WARNING: Standardplots reported an error.")
-        traceback.print_exc()
-        return False
-    # cmd, output = shell_command("standardplots",
+        except Exception as e:
+            print("WARNING: Standardplots reported an error.")
+            traceback.print_exc()
+            return False
+
     # # Get all plots done and show them in the best order:
     exp.log(environment.extract_tail_standardplots_output(output))
     return True
@@ -249,7 +249,7 @@ def polswap(exp):
 
 def flag_weights(exp):
     for a_pass in exp.correlator_passes:
-        print('The following may take a while...')
+        print('\n\nThe following may take a while...')
         cmd, output = environment.shell_command("flag_weights.py", [a_pass.msfile.name,
                 str(a_pass.flagged_weights.threshold)], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         exp.log(cmd+"\n# "+output.split('\r')[-1].replace('\n', '\n# ')+"\n")
@@ -310,14 +310,15 @@ def polconvert(exp):
     if len(exp.antennas.polconvert) > 0:
         polconv_inp = Path('./polconvert_inputs.ini')
         if not polconv_inp.exists():
-            polconv_inp = Path('/home/jops/polconvert/polconvert_inputs.ini').rename('./polconvert_inputs.ini')
             exp.log("cp ~/polconvert/polconvert_inputs.ini ./polconvert_inputs.ini")
-            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDIXXX/g'", polconv_inp],
-                                      shell=True, bufsize=None, stdout=None)
-            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI*/{exp.expname.lower()}_1_1.IDI*/g'", polconv_inp],
-                                      shell=True, bufsize=None, stdout=None)
+            environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.ini', './polconvert_inputs.ini'],
+                                      shell=True, stdout=None)
+            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDIXXX/g'",
+                                      polconv_inp.name], shell=True, bufsize=None, stdout=None)
+            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI*/{exp.expname.lower()}_1_1.IDI*/g'",
+                                      polconv_inp.name], shell=True, bufsize=None, stdout=None)
             ants = ', '.join(["'"+ant.upper()+"'" for ant in exp.antennas.polconvert])
-            environment.shell_command('sed', ['-i', f"'s/'T6'/{ants}/g'", polconv_inp],
+            environment.shell_command('sed', ['-i', f"'s/'T6'/{ants}/g'", polconv_inp.name],
                                       shell=True, bufsize=None, stdout=None)
 
         print("\n\n\033[1m### PolConvert needs to be run manually.\033[0m\n")
