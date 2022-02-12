@@ -3,26 +3,15 @@
 """
 import os
 import sys
-import glob
-import time
-import string
-import random
 import argparse
 import traceback
-import configparser
-import logging
-import subprocess
 from pathlib import Path
 from datetime import datetime as dt
 # from inspect import signature  # WHAT?  to know how many parameters has each function
-from datetime import datetime
 from evn_postprocess.evn_postprocess import experiment
 from evn_postprocess.evn_postprocess import scheduler as sch
 from evn_postprocess.evn_postprocess import dialog
 from evn_postprocess.evn_postprocess import environment as env
-from evn_postprocess.evn_postprocess import process_ccs as ccs
-from evn_postprocess.evn_postprocess import process_eee as eee
-from evn_postprocess.evn_postprocess import process_pipe as pipe
 
 
 # Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
@@ -31,7 +20,8 @@ __version__ = 0.5
 __prog__ = 'evn_postprocess.py'
 usage = "%(prog)s  [-h]  <experiment_name>  <support_scientist>\n"
 description = """Post-processing of EVN experiments.
-The program runs the full post-process for a correlated EVN experiment, from retrieving the correlated products to run the EVN pipeline following the steps described in the EVN Post-Processing Guide.
+The program runs the full post-process for a correlated EVN experiment, from retrieving the correlated
+products to run the EVN pipeline following the steps described in the EVN Post-Processing Guide.
 
 The user can also specify to run only some of the steps or to start the process from a given step
 (for those cases when the process has partially run previously). If the post-processing already run in teh past,
@@ -100,7 +90,6 @@ def main():
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
 
     args = parser.parse_args()
-
 
     exp = experiment.Experiment(args.expname, args.supsci)
     exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n" \
