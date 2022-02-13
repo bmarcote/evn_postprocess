@@ -21,6 +21,7 @@ from astropy import units as u
 from . import environment as env
 from . import dialog
 
+
 class Credentials(object):
     """Authentification for a given experiment. This class specifies two attributes:
         - username : str
@@ -42,7 +43,7 @@ class Credentials(object):
 
     def __iter__(self):
         for key in ('username', 'password'):
-                yield key, getattr(self, key)
+            yield key, getattr(self, key)
 
     def json(self):
         """Returns a dict with all attributes of the object.
@@ -51,11 +52,10 @@ class Credentials(object):
         human-readable output.
         """
         d = dict()
-        for key,val in self.__iter__():
-                d[key] = val
+        for key, val in self.__iter__():
+            d[key] = val
 
         return d
-
 
 
 class FlagWeight(object):
@@ -106,12 +106,10 @@ class FlagWeight(object):
         human-readable output.
         """
         d = dict()
-        for key,val in self.__iter__():
+        for key, val in self.__iter__():
             d[key] = val
 
         return d
-
-
 
 
 class SourceType(Enum):
@@ -161,14 +159,13 @@ class Source(object):
         human-readable output.
         """
         d = dict()
-        for key,val in self.__iter__():
+        for key, val in self.__iter__():
             if isinstance(val, SourceType):
                 d[key] = val.name
             else:
                 d[key] = val
 
         return d
-
 
 
 @dataclass
@@ -182,7 +179,6 @@ class Antenna:
     onebit: bool = False
     logfsfile: bool = False
     antabfsfile: bool = False
-
 
 
 class Antennas(object):
@@ -244,16 +240,15 @@ class Antennas(object):
 
     def __iter__(self):
         return self._antennas.__iter__()
+        # TODO: Why did I created the following code? Is it better?
+        # for ant in self._antennas:
+        #     yield ant
 
     def __reversed__(self):
         return self._antennas[::-1]
 
     def __contains__(self, key):
         return key in self.names
-
-    def __iter__(self):
-        for ant in self._antennas:
-            yield ant
 
     def json(self):
         """Returns a dict with all attributes of the object.
@@ -266,8 +261,6 @@ class Antennas(object):
             d['Antenna'] = ant.__dict__
 
         return d
-
-
 
 
 class Subbands(object):
@@ -332,7 +325,7 @@ class Subbands(object):
         human-readable output.
         """
         d = dict()
-        for key,val in self.__iter__():
+        for key, val in self.__iter__():
             if isinstance(val, u.Quantity):
                 d[key] = val.to(u.Hz).value
             elif isinstance(val, np.ndarray):
@@ -341,8 +334,6 @@ class Subbands(object):
                 d[key] = val
 
         return d
-
-
 
 
 class CorrelatorPass(object):
@@ -439,14 +430,14 @@ class CorrelatorPass(object):
         """
         self._freqsetup = a_subband
 
-    def __init__(self, lisfile: str, msfile: str, fitsidifile: str, pipeline: bool = True,
-                 antennas: Antennas = None, flagged_weights = None):
+    def __init__(self, lisfile: str, msfile: str, fitsidifile: str, pipeline: bool=True,
+                 antennas: Antennas=None, flagged_weights=None):
         self._lisfile = Path(lisfile)
         self._msfile = Path(msfile)
         self._fitsidifile = fitsidifile
         self._sources = None
         self._pipeline = pipeline
-        self._freqsetup = None # Must be an object with subbands, freqs, channels, pols.
+        self._freqsetup = None  # Must be an object with subbands, freqs, channels, pols.
         if antennas is None:
             self._antennas = Antennas()
         else:
@@ -466,7 +457,7 @@ class CorrelatorPass(object):
         human-readable output.
         """
         d = dict()
-        for key,val in self.__iter__():
+        for key, val in self.__iter__():
             if hasattr(val, 'json'):
                 d[key] = val.json()
             elif isinstance(val, Path):
@@ -477,9 +468,6 @@ class CorrelatorPass(object):
                 d[key] = val
 
         return d
-
-
-
 
 
 class Experiment(object):
@@ -619,7 +607,7 @@ class Experiment(object):
             if ',' in new_refant:
                 self._refant = [r.strip() for r in new_refant.split(',')]
             else:
-                self._refant = [new_refant,]
+                self._refant = [new_refant, ]
         else:
             raise ValueError(f"{new_refant} has an unrecognized type (string or list of strings expected)")
 
@@ -727,20 +715,18 @@ class Experiment(object):
         logpath = self.cwd / "logs"
         logpath.mkdir(parents=True, exist_ok=True)
         self._logs = {'dir': logpath, 'file': self.cwd / "processing.log"}
-        self._checklist = {} # TODO: add here by default all steps in the check list, with False value
+        self._checklist = {}  # TODO: add here by default all steps in the check list, with False value
         self._local_copy = self.cwd / f"{self.expname.lower()}.obj"
         self.parse_masterprojects()
         self._special_pars = {}
         self._last_step = None
         self._gui = None
 
-
-
     def get_setup_from_ms(self):
         """Obtains the time range, antennas, sources, and frequencies of the observation
         from all existing passes with MS files and incorporate them into the current object.
         """
-        for i,a_pass in enumerate(self.correlator_passes):
+        for i, a_pass in enumerate(self.correlator_passes):
             try:
                 with pt.table(a_pass.msfile.name, readonly=True, ack=False) as ms:
                     with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
@@ -761,7 +747,7 @@ class Experiment(object):
                     if self.refant is None:
                         for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
                             if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
-                                self.refant = [ant,]
+                                self.refant = [ant, ]
                                 break
 
                     with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
@@ -776,9 +762,6 @@ class Experiment(object):
                                                     ms_spw.getcol('TOTAL_BANDWIDTH')[0])
             except RuntimeError:
                 print(f"WARNING: {a_pass.msfile} not found.")
-
-
-
 
     def parse_expsum(self):
         """Parses the .expsum file associated to the experiment to get different
@@ -798,7 +781,7 @@ class Experiment(object):
                     self.email = email.split(')')[0].strip()
                 elif 'co-I information' in a_line:
                     # Typically it does not show the :
-                    name,email = a_line.replace('co-I information','').replace(':','').split('(')
+                    name, email = a_line.replace('co-I information', '').replace(':', '').split('(')
                     name = name.strip()
                     email = email.split(')')[0].strip()
                     if isinstance(self.piname, list):
@@ -850,18 +833,17 @@ class Experiment(object):
 
         self.sources = sources
 
-
     def parse_masterprojects(self):
         """Obtains the observing epoch from the MASTER_PROJECTS.LIS located in ccc.
         In case of being an e-EVN experiment, it will add that information to self.eEVN.
         """
         cmd = f"grep {self.expname} /ccs/var/log2vex/MASTER_PROJECTS.LIS"
         process = subprocess.Popen(["ssh", "jops@ccs", cmd], shell=False, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE)
+                                   stderr=subprocess.PIPE)
         output = process.communicate()[0].decode('utf-8')
         if process.returncode != 0:
-            raise ValueError(f"Errorcode {process.returncode} when reading MASTER_PROJECTS.LIS." \
-                    + f"\n{self.expname} is probably not in the EVN database.")
+            raise ValueError(f"Errorcode {process.returncode} when reading MASTER_PROJECTS.LIS."
+                             + f"\n{self.expname} is probably not in the EVN database.")
 
         if output.count('\n') == 2:
             # It is an e-EVN experiment!
@@ -887,9 +869,8 @@ class Experiment(object):
 
             self.obsdate = expline[1].strip()[2:]
         else:
-            raise ValueError(f"{self.expname} not found in (ccs) MASTER_PROJECTS.LIS" \
+            raise ValueError(f"{self.expname} not found in (ccs) MASTER_PROJECTS.LIS"
                              + "or server not reachable.")
-
 
     @property
     def vix(self):
@@ -899,13 +880,12 @@ class Experiment(object):
         vixfilepath = Path(f"{self.expname.lower()}.vix")
         ename = self.expname if self.eEVNname is None else self.eEVNname
         if not vixfilepath.exists():
-            cmd, output = env.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
+            cmd, _ = env.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
             self.log(f"scp jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix {self.expname.lower()}.vix")
             os.symlink(f"{ename.lower()}.vix", f"{self.expname}.vix")
             self.log(f"ln -s {ename.lower()}.vix {self.expname}.vix")
 
         return vixfilepath
-
 
     @property
     def expsum(self):
@@ -914,11 +894,10 @@ class Experiment(object):
         """
         expsumfilepath = self.cwd / f"{self.expname.lower()}.expsum"
         if not expsumfilepath.exists():
-            cmd, output = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.expsum", '.')
+            cmd, _ = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.expsum", '.')
             self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.expsum .")
 
         return expsumfilepath
-
 
     @property
     def piletter(self):
@@ -927,11 +906,10 @@ class Experiment(object):
         """
         piletterpath = self.cwd / f"{self.expname.lower()}.piletter"
         if not piletterpath.exists():
-            cmd, output = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.piletter", '.')
+            cmd, _ = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.piletter", '.')
             self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.piletter .")
 
         return piletterpath
-
 
     @property
     def logfile(self):
@@ -941,7 +919,6 @@ class Experiment(object):
                   of the experiment.
         """
         return self._logs
-
 
     def log(self, entry, timestamp=False):
         """Writes into the processing.log file a new entry.
@@ -954,35 +931,29 @@ class Experiment(object):
         with open(self.logfile['file'], 'a') as logfile:
             logfile.write(cmd)
 
-
     @property
     def checklist(self):
         return self._checklist
-
 
     def update_checklist(self, a_step, is_done=True):
         """Updates the step in the checklist and marks it as done or not (True/False, as specified in is_done)
         If a_step does not exist, it will raise a ValueError Exception.
         """
-        if not a_step in self._checklist:
+        if a_step not in self._checklist:
             raise ValueError(f"The step {a_step} is not present in the checklis of {self.expname}.")
 
         self._checklist[a_step] = is_done
-
 
     @property
     def feedback_page(self):
         """Returns the url link to the station feedback pages for the experiment.
         """
         return f"http://old.evlbi.org/session/{self.obsdatetime.strftime('%b%y').lower()}/" \
-               f"{self.expname.lower() if self.eEVNname is None else self.eEVNname.lower()}.html"
-
 
     def exists_local_copy(self):
         """Checks if there is a local copy of the Experiment object stored in a local file.
         """
         return self._local_copy.exists()
-
 
     def store(self, path=None):
         """Stores the current Experiment into a file in the indicated path. If not provided,
@@ -994,7 +965,6 @@ class Experiment(object):
         with open(self._local_copy, 'wb') as file:
             pickle.dump(self, file)
 
-
     def store_json(self, path=None):
         """Stores the current Experiment into a JSON file.
         If path not prvided, it will be '{expname.lower()}.json'.
@@ -1004,7 +974,6 @@ class Experiment(object):
 
         with open(self._local_copy, 'wb') as file:
             json.dump(self.json(), file, cls=ExpJsonEncoder, indent=4)
-
 
     def load(self, path=None):
         """Loads the current Experiment that was stored in a file in the indicated path. If path is None,
@@ -1018,12 +987,10 @@ class Experiment(object):
 
         return obj
 
-
     def __repr__(self, *args, **kwargs):
         rep = super().__repr__(*args, **kwargs)
         rep.replace("object", f"object ({self.expname})")
         return rep
-
 
     def __str__(self):
         return f"<Experiment {self.expname}>"
@@ -1042,7 +1009,7 @@ class Experiment(object):
         human-readable output.
         """
         d = dict()
-        for key,val in self.__iter__():
+        for key, val in self.__iter__():
             if hasattr(val, 'json'):
                 d[key] = val.json()
             elif isinstance(val, Path):
@@ -1057,7 +1024,7 @@ class Experiment(object):
                 d[key] = [v.strftime('%Y-%m-%d %H:%M:%S') for v in val]
             elif isinstance(val, dict):
                 d[key] = {}
-                for k,v in val:
+                for k, v in val:
                     if hasattr(v, 'json'):
                         d[key][k] = v.json()
                     elif hasattr(v, 'name'):
@@ -1069,9 +1036,7 @@ class Experiment(object):
 
         return d
 
-
-    #TODO: method to do a summary of the whole experiment
-
+    # TODO: method to do a summary of the whole experiment
 
 
 class ExpJsonEncoder(json.JSONEncoder):

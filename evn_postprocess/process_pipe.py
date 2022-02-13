@@ -5,16 +5,6 @@ verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 """
 
-import os
-import sys
-import glob
-import string
-import random
-import argparse
-import configparser
-import logging
-import subprocess
-from datetime import datetime
 from . import experiment
 from . import environment as env
 
@@ -34,7 +24,7 @@ def create_folders(exp):
     outdir = f"/jop83_0/pipe/out/{exp.expname.lower()}"
     for a_dir in (tmpdir, indir, outdir):
         if not env.remote_file_exists('pipe@jop83', a_dir):
-            output = env.ssh('pipe@jop83', f"mkdir -p {a_dir}")
+            env.ssh('pipe@jop83', f"mkdir -p {a_dir}")
             exp.log(f"mkdir -p {a_dir}")
 
 
@@ -42,15 +32,17 @@ def get_files_from_vlbeer(exp):
     """Retrieves the antabfs, log, and flag files that should be in vlbeer for the given experiment.
     """
     cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
-    scp = lambda ext : "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-                       f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}\*.{ext} ."
+    def scp(exp: str):
+        return "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+               f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}" + r"\*" + f".{ext} ."
+
     cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp('flag')]))
     exp.log(cmd)
     for ext in ('log', 'antabfs'):
         cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp(ext)]))
         exp.log(cmd)
         cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"ls {exp.expname.lower()}*{ext}"]))
-        the_files = [o for o in output.split('\n') if o != ''] # just to avoid trailing \n
+        the_files = [o for o in output.split('\n') if o != '']  # just to avoid trailing \n
         for a_file in the_files:
             ant = a_file.split('.')[0].replace(exp.expname.lower(), '').capitalize()
             if ext == 'log':
@@ -86,27 +78,27 @@ def run_antab_editor(exp):
     if env.remote_file_exists('pipe@jop83',
                     f"{cdtemp}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}*.antab"):
         print("Copying Antab file from {cdinp}.")
-        cmd, output = env.ssh('pipe@jop83', f"cp {cdtemp}/*.antab {cdinp}/")
+        cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp}/*.antab {cdinp}/")
         exp.log(cmd)
         if (exp.eEVNname is not None) and (exp.expname != exp.eEVNname):
             # We need to rename to the actual name
             for an_antab in env.ssh('pipe@jop83', f"{cdinp}/*.antab")[1].split('\n'):
                 if an_antab != '':
-                    env.ssh('pipe@jop83', f"mv {an_antab} " \
-                    f"{'/'.join([*an_antab.split('/')[:-1], an_antab.split('/')[-1].replace(exp.eEVNname, exp.expname)])}")
+                    env.ssh('pipe@jop83', f"mv {an_antab} "
+                f"{'/'.join([*an_antab.split('/')[:-1], an_antab.split('/')[-1].replace(exp.eEVNname, exp.expname)])}")
         return True
 
     if exp.eEVNname is not None:
-        print(f"This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}.\n" \
-              "Please run antab_editor.py manually to include all experiment associated to the run " \
+        print(f"This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}.\n"
+              "Please run antab_editor.py manually to include all experiment associated to the run "
               "(using the '-a' option).\n\nThen run the post-processing again.")
         # I fake it to be sucessful in the object to let it to run seemless in a following iteraction
         return None
 
     if len(exp.correlator_passes) == 2:
-        cmd, output = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py -l']))
+        cmd, _ = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py -l']))
     else:
-        cmd, output = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py']))
+        cmd, _ = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py']))
 
     print('\n\n\nRun antab_editor.py manually in pipe.')
     exp.log(cmd)
@@ -151,8 +143,6 @@ def create_input_file(exp):
     """
     # First copies the final uvflg and antab files to the input directory
     cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}/"
-    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}/"
-
     if env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.inp.txt"):
         return True
 
@@ -167,8 +157,8 @@ def create_input_file(exp):
 
     bpass = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.fringefinder])
     pcal = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.calibrator])
-    targets = ', '.join([s.name for s in exp.sources if (s.type is experiment.SourceType.target) or \
-                                                            (s.type is experiment.SourceType.other)])
+    targets = ', '.join([s.name for s in exp.sources if (s.type is experiment.SourceType.target) or
+                         (s.type is experiment.SourceType.other)])
     to_change = f"'experiment = n05c3' 'experiment = {exp.expname.lower()}' " \
                 f"'userno = 3602' 'userno = {userno}' " \
                 f"'refant = Ef, Mc, Nt' 'refant = {', '.join(exp.refant)}' " \
@@ -180,18 +170,22 @@ def create_input_file(exp):
     if len(exp.correlator_passes) > 2:
         to_change += "'#doprimarybeam = 1' 'doprimarybeam = 1'"
 
-    cmd, output = env.ssh('pipe@jop83',
-        "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()))
+    cmd, _ = env.ssh('pipe@jop83',
+                     "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()))
     exp.log(cmd, False)
-    cmd, output = env.ssh('pipe@jop83',
-         f"replace {to_change} -- /jop83_0/pipe/in/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt")
+    # TODO: Replace replace by sed
+    cmd, _ = env.ssh('pipe@jop83',
+                     f"replace {to_change} -- /jop83_0/pipe/in/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt")
     exp.log(cmd, False)
     if len(exp.correlator_passes) > 1:
-        cmd, output = env.ssh('pipe@jop83', "mv /jop83_0/pipe/in/{1}/{1}.inp.txt /jop83_0/pipe/in/{1}/{1}_1.inp.txt".format(exp.expname.lower()))
+        cmd, _ = env.ssh('pipe@jop83',
+                         "mv /jop83_0/pipe/in/{1}/{1}.inp.txt "
+                         "/jop83_0/pipe/in/{1}/{1}_1.inp.txt".format(exp.expname.lower()))
         exp.log(cmd, False)
         for i in range(2, len(exp.correlator_passes)+1):
-            cmd, output = env.ssh('pipe@jop83',
-                    "cp /jop83_0/pipe/in/{1}/{1}_1.inp.txt /jop83_0/pipe/in/{1}/{1}_{2}.inp.txt".format(exp.expname.lower(), i))
+            cmd, _ = env.ssh('pipe@jop83',
+                             "cp /jop83_0/pipe/in/{1}/{1}_1.inp.txt "
+                             "/jop83_0/pipe/in/{1}/{1}_{2}.inp.txt".format(exp.expname.lower(), i))
             exp.log(cmd, False)
 
     return True
@@ -207,15 +201,15 @@ def run_pipeline(exp):
     exp.last_step = 'pipeline'
     return None
     if len(exp.correlator_passes) > 1:
-        cmd, output = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}_1.inp.txt")
+        cmd, _ = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}_1.inp.txt")
     else:
-        cmd, output = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}.inp.txt")
+        cmd, _ = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}.inp.txt")
 
     exp.log(cmd, False)
     exp.log('# Pipeline finished.', True)
     if len(exp.correlator_passes) == 2:
         # TODO: implement line in the normal pipeline
-        cmd, output = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}_2.inp.txt")
+        cmd, _ = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}_2.inp.txt")
 
     return True
 
@@ -227,9 +221,9 @@ def comment_tasav_files(exp):
     """
     cdin = f"/jop83_0/pipe/in/{exp.expname.lower()}"
     cdout = f"/jop83_0/pipe/out/{exp.expname.lower()}"
-    if not (env.remote_file_exists('pipe@jop83', f"{cdout}/eb088\*.comment") and \
-           env.remote_file_exists('pipe@jop83', f"{cdin}/eb088\*.tasav.txt")):
-        cmd, output = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
+    if not (env.remote_file_exists('pipe@jop83', f"{cdout}/{exp.expname.lower()}" + r"\*.comment") and
+            env.remote_file_exists('pipe@jop83', f"{cdin}/{exp.expname.lower()}" + r"\*.tasav.txt")):
+        cmd, _ = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
         exp.log(cmd)
 
     return True
@@ -238,9 +232,9 @@ def comment_tasav_files(exp):
 def pipeline_feedback(exp):
     """Runs the feedback.pl script after the EVN Pipeline has run.
     """
-    cd= f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
-    cmd, output = env.ssh('pipe@jop83', f"{cd} && feedback.pl -exp '{exp.expname.lower()}' " \
-                  f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
+    cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
+    cmd, _ = env.ssh('pipe@jop83', f"{cd} && feedback.pl -exp '{exp.expname.lower()}' "
+                          f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
     exp.log(cmd)
     return True
 
@@ -249,25 +243,22 @@ def archive(exp):
     """Archives the EVN Pipeline results.
     """
     for f in ('in', 'out'):
-        cd= f"cd /jop83_0/pipe/{f}/{exp.expname.lower()}"
-        cmd, output = env.ssh('jops@jop83', f"{cd} && archive -pipe -e {exp.expname.lower()}_{exp.obsdate}", stdout=None)
+        cd = f"cd /jop83_0/pipe/{f}/{exp.expname.lower()}"
+        cmd, _ = env.ssh('jops@jop83', f"{cd} && archive -pipe -e {exp.expname.lower()}_{exp.obsdate}", stdout=None)
         exp.log(cmd)
 
     return True
 
 
-## Here there should be a dialog about checking pipeline results, do them manually...
+# Here there should be a dialog about checking pipeline results, do them manually...
 
 def ampcal(exp):
     """Runs the ampcal.sh script to incorporate the gain corrections into the Grafana database.
     """
-    cd= f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
-    cmd, output = env.ssh('pipe@jop83', f"{cd} && ampcal.sh")
+    cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
+    cmd, _ = env.ssh('pipe@jop83', f"{cd} && ampcal.sh")
     exp.log(cmd)
     return True
-
-
-
 
 
 def get_vlba_antab(exp):

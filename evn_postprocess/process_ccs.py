@@ -6,18 +6,8 @@ perform required changes in intermediate files.
 """
 
 import os
-import sys
 import glob
-import string
-import random
-import argparse
-import configparser
-import logging
-import subprocess
-from datetime import datetime
-from . import experiment
 from . import environment
-
 
 
 def lis_files_in_ccs(exp):
@@ -25,7 +15,7 @@ def lis_files_in_ccs(exp):
     """
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
     return environment.remote_file_exists('jops@ccs',
-                                      f"/ccs/expr/{eEVNname}/{eEVNname.lower()}*.lis")
+                                          f"/ccs/expr/{eEVNname}/{eEVNname.lower()}*.lis")
 
 
 def create_lis_files(exp):
@@ -35,7 +25,7 @@ def create_lis_files(exp):
     if not lis_files_in_ccs(exp):
         print("Creating lis file...")
         cmd = f"cd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}"
-        output = environment.ssh('jops@ccs', cmd)
+        environment.ssh('jops@ccs', cmd)
         exp.log(f"# In ccs:\ncd /ccs/expr/{eEVNname};/ccs/bin/make_lis -e {eEVNname}", False)
 
     return True
@@ -45,9 +35,9 @@ def get_lis_files(exp):
     """Retrieves all lis files available in ccs for this experiment.
     """
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
-    cmds, outputs = [], []
+    cmds = []
     if len(glob.glob(f"{eEVNname.lower()}*.lis")) == 0:
-        cmd, output = environment.scp(f"jops@ccs:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.lis", '.')
+        cmd, _ = environment.scp(f"jops@ccs:/ccs/expr/{eEVNname}/{eEVNname.lower()}*.lis", '.')
         exp.log(cmd, False)
 
     for a_lis in glob.glob("*.lis"):
