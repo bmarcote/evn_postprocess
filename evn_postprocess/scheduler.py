@@ -48,8 +48,7 @@ def preparing_lis_files(exp: experiment.Experiment):
     """Checks that the .lis file(s) already exists.
     Otherwise it creates it in ccs and copy it to the experiment folder.
     """
-    output = dispatcher(exp, (ccs.create_lis_files, ccs.get_lis_files, \
-                              eee.get_passes_from_lisfiles))
+    output = dispatcher(exp, (ccs.create_lis_files, ccs.get_lis_files, eee.get_passes_from_lisfiles))
     exp.store()
     return output
 
@@ -59,9 +58,9 @@ def first_manual_check(exp: experiment.Experiment):
     """
     output = env.check_lisfiles(exp)
     if not output:
-        temp = 'file','seems' if len(exp.correlator_passes) == 1 else 'files','seem'
+        temp = 'file', 'seems' if len(exp.correlator_passes) == 1 else 'files', 'seem'
         print(f"\n\n{'#'*10}\n# Stopping here...")
-        print(f"The .lis {temp[0]} for {exp.expname} {temp[1]} to have issues to " \
+        print(f"The .lis {temp[0]} for {exp.expname} {temp[1]} to have issues to "
               f"be solved manually.\n{'#'*10}\n")
 
     if exp.eEVNname is not None:
@@ -105,7 +104,7 @@ def ms_operations(exp: experiment.Experiment):
 def tconvert(exp: experiment.Experiment):
     output = dispatcher(exp, (eee.tconvert, eee.polconvert))
     if len(exp.antennas.polconvert) > 0:
-        #TODO: if polconvert runs, then create again the MS and run standardplots
+        # TODO: if polconvert runs, then create again the MS and run standardplots
         pass
     exp.last_step = 'tconvert'
     exp.store()

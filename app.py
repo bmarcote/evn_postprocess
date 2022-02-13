@@ -139,13 +139,13 @@ def main():
                 the_steps = step_keys[step_keys.index(args.steps):]
                 exp.log(f"Starting at the step '{args.steps}'.")
                 print(f"Starting at the step '{args.steps}'.")
-    except ValueError as e:
-        print("ERROR: more than two steps have been introduced.\n" \
+    except ValueError:
+        print("ERROR: more than two steps have been introduced.\n"
               "Only one or two options are expected.")
         traceback.print_exc()
         sys.exit(1)
-    except KeyError as e:
-        print("ERROR: the introduced step ({args.steps}) is not recognized.\n" \
+    except KeyError:
+        print("ERROR: the introduced step ({args.steps}) is not recognized.\n"
               "Run the program with '-h' to see the expected options")
         traceback.print_exc()
         sys.exit(1)
@@ -178,10 +178,7 @@ def main():
     print('\nThe post-processing has finished properly.')
 
 
-
-
 if __name__ == '__main__':
     main()
-
 
 

@@ -2,7 +2,6 @@
 import os
 import sys
 import subprocess
-from . import experiment
 from . import process_eee as eee
 from . import process_pipe as pipe
 
@@ -13,7 +12,7 @@ def scp(originpath, destpath):
     """
     print("\n\033[1m> " + f"scp {originpath} {destpath}" + "\033[0m")
     process = subprocess.call(["scp", originpath, destpath], shell=False,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if process != 0:
         raise ValueError(f"\nError code {process} when running scp {originpath} {destpath} in ccs.")
 
@@ -112,7 +111,7 @@ def copy_files(exp):
         exists.append(a_file.exists())
 
     if False in exists:
-        raise FileNotFoundError(f"The following files could not be found: " \
+        raise FileNotFoundError(f"The following files could not be found: "
                                 f"{','.join([f for f,b in zip(files, exists) if b])}")
 
     return True
@@ -125,7 +124,7 @@ def update_lis_file(lisfilename, oldexp, newexp):
     """
     with open(lisfilename, 'r') as lisfile:
         lisfilelines = lisfile.readlines()
-        for i,aline in enumerate(lisfilelines):
+        for i, aline in enumerate(lisfilelines):
             if aline[0] not in ('+', '-'):
                 # Replace the EXP (upper) entries
                 lisfilelines[i] = aline.replace(oldexp, newexp)
@@ -186,7 +185,7 @@ def check_lisfiles(exp):
         #      First scan = X
         #       {errors if any otherwise no extra lines}
         #      Last scan = Y
-        temp = [o for o in output.split('\n') if len(o) > 0] # removing any possible trailing empty line
+        temp = [o for o in output.split('\n') if len(o) > 0]  # removing any possible trailing empty line
         all_good = all_good and not (len(temp) > 2)
 
     return all_good
@@ -207,7 +206,7 @@ def update_pipelinable_passes(exp, pipelinable):
     """
     if isinstance(pipelinable, list):
         assert len(pipelinable) == len(exp.correlator_passes)
-        for i,is_pipelinable in enumerate(pipelinable):
+        for i, is_pipelinable in enumerate(pipelinable):
             assert isinstance(is_pipelinable, bool)
             exp.correlator_passes[i].pipeline = is_pipelinable
     elif isinstance(pipelinable, dict):
@@ -253,14 +252,15 @@ def extract_tail_standardplots_output(stdplt_output):
     return '\n'.join(last_lines[::-1])
 
 
-def archive(flag, experiment, rest_parameters):
+def archive(flag, exp, rest_parameters):
     """Runs the archive command with the flag and rest_parameters string for the given experiment object
     (metadata class).
     Flag can be -auth, -stnd, -fits,...
     """
     cmd, output = shell_command("archive.pl",
-            [flag, "-e", f"{experiment.expname.lower()}_{experiment.obsdate}", rest_parameters], shell=True)
-    experiment.log(cmd, '# '+'# '.join(output))
+                                [flag, "-e", f"{exp.expname.lower()}_{exp.obsdate}",
+                                 rest_parameters], shell=True)
+    exp.log(cmd, '# '+'# '.join(output))
     return cmd, output
 
 

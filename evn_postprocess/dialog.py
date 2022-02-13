@@ -3,7 +3,6 @@ import sys
 from . import experiment
 
 
-
 class Dialog(object, metaclass=abc.ABCMeta):
     """Abstract class that implements the basic functionallity for any
     User Interface required for the post-processing.
@@ -27,9 +26,6 @@ class Dialog(object, metaclass=abc.ABCMeta):
         raise NotImplementedError('users must define this function to use this base class')
 
 
-
-
-
 class Terminal(Dialog):
 
     def ask_for_antennas(self, exp, asking_text):
@@ -45,18 +41,17 @@ class Terminal(Dialog):
                     antennas = [ant.strip().capitalize() for ant in output.split(',' if ',' in output else ' ')]
                     for antenna in antennas:
                         if antenna not in exp.antennas.names:
-                            raise ValueError(f"Antenna {antenna} not recognized (not included " \
+                            raise ValueError(f"Antenna {antenna} not recognized (not included "
                                              f"in {', '.join(exp.antennas.names)})")
                 break
             except ValueError as e:
                 print(f'ValueError: {e}.')
                 continue
-            except KeyboardInterrupt as e:
+            except KeyboardInterrupt:
                 print('\nPipeline aborted !')
                 sys.exit(1)
 
         return antennas
-
 
     def askMSoperations(self, exp):
         """Dialog that requests the following parameters in order to process the MS
@@ -80,19 +75,19 @@ class Terminal(Dialog):
                 if 0.0 < threshold < 1.0:
                     break
                 else:
-                    print(f"The threshold needs to be a value within [0.0, 1.0).")
+                    print("The threshold needs to be a value within [0.0, 1.0).")
 
-            except ValueError as e:
+            except ValueError:
                 print(f'ValueError: could not convert string to float: {threshold}')
                 continue
 
-        polswap = self.ask_for_antennas(exp, "\n\033[1mAntennas for polswap (comma or space separated)\n" \
-                                             f"\033[0m(possible antennas are: {', '.join(exp.antennas.names)})" \
+        polswap = self.ask_for_antennas(exp, "\n\033[1mAntennas for polswap (comma or space separated)\n"
+                                             f"\033[0m(possible antennas are: {', '.join(exp.antennas.names)})"
                                              "\n\033[1m>\033[0m ")
         onebit = self.ask_for_antennas(exp, "\n\033[1mAntennas that recorded one-bit data:\n> \033[0m")
         polconvert = self.ask_for_antennas(exp, "\n\033[1mAntennas that requires PolConvert:\n> \033[0m")
 
-        for i,a_pass in enumerate(exp.correlator_passes):
+        for i in range(len(exp.correlator_passes)):
             exp.correlator_passes[i].flagged_weights = experiment.FlagWeight(threshold)
 
         for antenna in polswap:

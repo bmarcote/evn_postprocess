@@ -8,23 +8,16 @@ perform required changes in intermediate files.
 
 
 import os
-import sys
 import glob
 import string
 import random
-import argparse
 import traceback
 from pathlib import Path
-import configparser
-import logging
 import subprocess
-from datetime import datetime
 from . import dialog
 from . import experiment
-from . import environment #as env
-# from evn_postprocess import process_css as css
-# from evn_postprocess import process_eee as eee
-# from evn_postprocess import process_pipe as pipe
+from . import environment
+
 
 def create_folders(exp):
     """Creates the folder required for the post-processing of the experiment
@@ -45,7 +38,6 @@ def create_folders(exp):
     return True
 
 
-
 def get_passes_from_lisfiles(exp):
     """Gets all .lis files in the directory, which imply different correlator passes.
     Append this information to the current experiment (exp object),
@@ -54,10 +46,10 @@ def get_passes_from_lisfiles(exp):
     lisfiles = glob.glob(f"{exp.expname.lower()}*.lis")
     thereis_line = True if (len(lisfiles) == 2 and '_line' in ''.join(lisfiles)) else False
     passes = []
-    for i,a_lisfile in enumerate(lisfiles):
+    for i, a_lisfile in enumerate(lisfiles):
         with open(a_lisfile, 'r') as lisfile:
             for a_lisline in lisfile.readlines():
-                if '.ms' in a_lisline: # The header line
+                if '.ms' in a_lisline:  # The header line
                     # there is only one .ms input there
                     msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
                     # In case the output FITS IDI name has already been set
@@ -80,8 +72,8 @@ def get_passes_from_lisfiles(exp):
                     # Replaces the old *.UVF string in the .lis file with the FITS IDI
                     # file name to generate in this pass.
                     if '.UVF' in a_lisline:
-                        environment.shell_command('sed', ['-i',
-                            f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile], shell=True, bufsize=None)
+                        environment.shell_command('sed', ['-i', f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile],
+                                                  shell=True, bufsize=None)
 
     exp.correlator_passes = passes
     return True
@@ -92,10 +84,11 @@ def getdata(exp):
     inputs: exp : experiment.Experiment
     """
     for a_pass in exp.correlator_passes:
-        cmd,output = environment.shell_command("getdata.pl",
-                    ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
-                     "-lis", a_pass.lisfile.name], shell=True, stdout=None,
-                     stderr=subprocess.STDOUT, bufsize=0)
+        cmd, output = environment.shell_command("getdata.pl",
+                                                ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
+                                                 "-lis", a_pass.lisfile.name],
+                                                shell=True, stdout=None,
+                                                stderr=subprocess.STDOUT, bufsize=0)
         exp.log(cmd)
 
     return True
@@ -106,22 +99,24 @@ def j2ms2(exp):
     If the MS to produce already exists, then it will not generate it again.
     inputs: exp : experiment.Experiment
     """
-    for i,a_pass in enumerate(exp.correlator_passes):
+    for i, a_pass in enumerate(exp.correlator_passes):
         with open(a_pass.lisfile) as f:
-            outms = [a for a in f.readline().replace('\n','').split(' ') \
-                                 if (('.ms' in a) and ('.UVF' not in a))][0]
+            outms = [a for a in f.readline().replace('\n', '').split(' ')
+                     if (('.ms' in a) and ('.UVF' not in a))][0]
             exp.correlator_passes[i].msfile = outms
         if not os.path.isdir(outms):
             # print('Removing the pre-existing MS file {outms}')
             # cmd,output = environment.shell_command("rm", ["-rf", outms], shell=True)
             # exp.log(cmd)
             if 'j2ms2' in exp.special_params:
-                cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
-                    *exp.special_params['j2ms2']], shell=True, stdout=None,
-                    stderr=subprocess.STDOUT, bufsize=0)
+                cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
+                                                                  *exp.special_params['j2ms2']],
+                                                        shell=True, stdout=None,
+                                                        stderr=subprocess.STDOUT, bufsize=0)
             else:
-                cmd,output = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
-                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+                cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
+                                                        shell=True, stdout=None,
+                                                        stderr=subprocess.STDOUT, bufsize=0)
 
             exp.log(cmd, timestamp=True)
 
@@ -166,26 +161,26 @@ def standardplots(exp, do_weights=True):
                         if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
                             refant = ant
                             break
-                    raise ValueError("Couldn't find a good reference antenna for standardplots. " \
+                    raise ValueError("Couldn't find a good reference antenna for standardplots. "
                                      "Please specify it manually.")
                 counter += 1
                 if (counter == 1) and do_weights:
                     cmd, output = environment.shell_command("standardplots",
-                                      ["-weight", a_pass.msfile.name, refant, calsources],
-                                      stdout=None, stderr=subprocess.STDOUT)
+                                                            ["-weight", a_pass.msfile.name, refant, calsources],
+                                                            stdout=None, stderr=subprocess.STDOUT)
                 else:
                     cmd, output = environment.shell_command("standardplots",
-                                    [a_pass.msfile.name, refant, calsources],
-                                    stdout=None, stderr=subprocess.STDOUT)
+                                                            [a_pass.msfile.name, refant, calsources],
+                                                            stdout=None, stderr=subprocess.STDOUT)
 
                 exp.log(cmd)
                 # Runs again jplotter but only to retrieve the summary into the output
                 cmd, output = environment.shell_command("echo",
-                                  [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                                        [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
+                                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 outputs.append(output)
 
-        except Exception as e:
+        except Exception:
             print("WARNING: Standardplots reported an error.")
             traceback.print_exc()
             return False
@@ -221,11 +216,11 @@ def onebit(exp):
     if len(exp.antennas.onebit) > 0:
         for a_pass in exp.correlator_passes:
             cmd, output = environment.shell_command("scale1bit.py",
-                          [a_pass.msfile.name, ' '.join(exp.antennas.onebit)], shell=True,
-                          stdout=None, stderr=subprocess.STDOUT)
+                                                    [a_pass.msfile.name, ' '.join(exp.antennas.onebit)],
+                                                    shell=True, stdout=None, stderr=subprocess.STDOUT)
     elif environment.station_1bit_in_vix(exp.vix):
-        print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} " \
-              f"but no station specified to be corrected.\n\n")
+        print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} "
+              "but no station specified to be corrected.\n\n")
         return False
     return True
 
@@ -242,24 +237,24 @@ def polswap(exp):
     """
     if len(exp.antennas.polswap) > 0:
         for a_pass in exp.correlator_passes:
-                environment.shell_command("polswap.py", [a_pass.msfile.name, ','.join(exp.antennas.polswap)],
-                                          shell=True, stdout=None, stderr=subprocess.STDOUT)
+            environment.shell_command("polswap.py", [a_pass.msfile.name, ','.join(exp.antennas.polswap)],
+                                      shell=True, stdout=None, stderr=subprocess.STDOUT)
     return True
 
 
 def flag_weights(exp):
     for a_pass in exp.correlator_passes:
         print('\n\nThe following may take a while...')
-        cmd, output = environment.shell_command("flag_weights.py", [a_pass.msfile.name,
-                str(a_pass.flagged_weights.threshold)], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        cmd, output = environment.shell_command("flag_weights.py",
+                                                [a_pass.msfile.name, str(a_pass.flagged_weights.threshold)],
+                                                shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         exp.log(cmd+"\n# "+output.split('\r')[-1].replace('\n', '\n# ')+"\n")
         # Find the percentage of flagged data and stores it in exp
         str_end = '% data with non-zero'
         str_start = 'execution).'
         if '% data with non-zero weights' in output:
-            a_pass.flagged_weights.percentage = float(output[output.find(str_start) + \
-                                                  len(str_start):output.find(str_end)])
-
+            a_pass.flagged_weights.percentage = float(output[output.find(str_start) +
+                                                      len(str_start):output.find(str_end)])
     return True
 
 
@@ -329,7 +324,7 @@ def polconvert(exp):
         exp.last_step = 'polconvert'
         return None
     else:
-        exp.log(f"# PolConvert is not required.")
+        exp.log("# PolConvert is not required.")
         # dialog_text = "PolConvert is required.\n"
         # dialog_text += f"Please run it manually for {','.join(exp.polconvert_antennas)}."
         # dialog_text += "Once you are done (all FITS properly corrected), press Continue."
@@ -361,15 +356,12 @@ def post_polconvert(exp):
 
         exp.log("mkdir idi_ori")
         exp.log("mv *IDI? *IDI?? *IDI???  idi_ori/")
-        exp.log(f"zmv '(*).PCONVERT' '$1'")
+        exp.log("zmv '(*).PCONVERT' '$1'")
 
     exp.last_step = 'post_polconvert'
     # Create again a MS from these converted files so I can run standardplots over the corrected data
     # TODO: Doing it manually for now
     return None
-    return False
-
-
 
 
 def set_credentials_pipelet(exp):
@@ -382,7 +374,7 @@ def set_credentials_pipelet(exp):
         print(f"NOTE: {exp.expname} is an NME or test experiment.\nNo authentification will be set.")
     elif len(glob.glob("*_*.auth")) == 1:
         # Some credentials are already in place.
-        exp.set_credentials( *glob.glob("*_*.auth")[0].split('.')[0].split('_')  )
+        exp.set_credentials(*glob.glob("*_*.auth")[0].split('.')[0].split('_'))
         if not os.path.isfile(f"{exp.expname.lower()}.pipelet"):
             environment.shell_command("pipelet.py", [exp.expname.lower(), exp.supsci.lower()])
             exp.log(f"pipelet.py {exp.expname.lower()} {exp.supsci.lower()}")
@@ -393,8 +385,7 @@ def set_credentials_pipelet(exp):
         possible_char = string.digits + string.ascii_letters
         exp.set_credentials(username=exp.expname.lower(),
                             password="".join(random.sample(possible_char, 12)))
-        environment.shell_command("touch",
-                f"{exp.credentials.username}_{exp.credentials.password}.auth")
+        environment.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
         environment.shell_command("pipelet.py", [exp.expname.lower(), exp.supsci.lower()])
         exp.log(f"touch {exp.credentials.username}_{exp.credentials.password}.auth")
         exp.log(f"pipelet.py {exp.expname.lower()} {exp.supsci.lower()}")
@@ -425,7 +416,7 @@ def send_letters(exp):
     dialog.continue_dialog("Please update the PI letter if needed before continue.", f"{exp.expname} -- PI letter")
     environment.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")
     environment.shell_command("parsePIletter.py", ["-s", exp.obsdatetime.strftime("%b%y"),
-                                              f"{exp.expname.lower()}.piletter"])
+                                                   f"{exp.expname.lower()}.piletter"])
     print(f"Send the PI letter to {exp.piname.capitalize()}: {exp.email} (CC jops@jive.eu).")
     print(f"Send the pipe letter to {exp.piname.capitalize()}: {exp.email}.")
     if exp.expname[0] == 'N':
@@ -433,7 +424,6 @@ def send_letters(exp):
         print('Now it is time to write the NME Report. Good luck!')
     else:
         print('Experiment done!\nYou may have a coffee/tea now.')
-
 
 
 # def archive_piletter(exp):
