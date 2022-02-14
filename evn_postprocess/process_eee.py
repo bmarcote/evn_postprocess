@@ -150,7 +150,6 @@ def standardplots(exp, do_weights=True):
     # Then once all of them finish, open the plots and ask user.
     calsources = ','.join(exp.sources_stdplot)
     counter = 0
-    outputs = []
     for a_pass in exp.correlator_passes:
         try:
             if a_pass.pipeline:
@@ -165,11 +164,11 @@ def standardplots(exp, do_weights=True):
                                      "Please specify it manually.")
                 counter += 1
                 if (counter == 1) and do_weights:
-                    cmd, output = environment.shell_command("standardplots",
+                    cmd, _ = environment.shell_command("standardplots",
                                                             ["-weight", a_pass.msfile.name, refant, calsources],
                                                             stdout=None, stderr=subprocess.STDOUT)
                 else:
-                    cmd, output = environment.shell_command("standardplots",
+                    cmd, _ = environment.shell_command("standardplots",
                                                             [a_pass.msfile.name, refant, calsources],
                                                             stdout=None, stderr=subprocess.STDOUT)
 
@@ -178,15 +177,13 @@ def standardplots(exp, do_weights=True):
                 cmd, output = environment.shell_command("echo",
                                                         [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
                                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                outputs.append(output)
+                exp.log(environment.extract_tail_standardplots_output(output))
 
         except Exception:
             print("WARNING: Standardplots reported an error.")
             traceback.print_exc()
             return False
 
-    # # Get all plots done and show them in the best order:
-    exp.log(environment.extract_tail_standardplots_output(output))
     return True
 
 

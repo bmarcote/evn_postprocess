@@ -238,16 +238,15 @@ def extract_tail_standardplots_output(stdplt_output):
     the information provided by the "r" command.
     """
     last_lines = []
-    for an_output in stdplt_output:
-        for a_line in an_output.split('\n')[::-1]:
-            # All "r" output lines always start with those messages
-            # (listTimeRage: , listSources: , listAntennas: , listFreqs: ):
-            if 'list' in a_line:
-                last_lines.append(a_line)
-            elif 'ms: Current' in a_line:
-                # We are already done for this output
-                break
-        last_lines.append('\n')
+    for a_line in stdplt_output.split('\n')[::-1]:
+        # All "r" output lines always start with those messages
+        # (listTimeRage: , listSources: , listAntennas: , listFreqs: ):
+        if 'list' in a_line:
+            last_lines.append(a_line)
+        elif 'ms: Current' in a_line:
+            # We are already done for this output
+            break
+    last_lines.append('\n')
 
     return '\n'.join(last_lines[::-1])
 
