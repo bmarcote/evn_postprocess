@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#! /usr/bin/env python3
 """
 """
 import os
@@ -76,7 +76,7 @@ def main():
                  'postpipe': sch.after_pipeline,
                  'last': sch.finishing_experiment}
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
-                                    formatter_class=argparse.RawTextHelpFormatter)
+                                     formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('expname', type=str, help='Name of the EVN experiment (case-insensitive).')
     parser.add_argument('supsci', type=str, help='Surname of the EVN Support Scientist.')
     parser.add_argument('-r', '--refant', type=str, default=None, help='Reference antenna.')
@@ -92,7 +92,7 @@ def main():
     args = parser.parse_args()
 
     exp = experiment.Experiment(args.expname, args.supsci)
-    exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n" \
+    exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
             f"# Running on: {dt.today().strftime('%d %b %Y %H:%M')}\n")
 
     if args.gui == 'terminal' or args.gui is None:
@@ -171,7 +171,7 @@ def main():
                 raise RuntimeError(f"An error was found in {exp.expname} at the step {all_steps[a_step].__name__}")
             exp.last_step = a_step
             exp.store()
-    except sch.ManualInteractionRequired as e:
+    except sch.ManualInteractionRequired:
         print('\n\nStopped for manual interaction (see above). Re-run once you have done your duty.')
         return
 

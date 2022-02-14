@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#! /usr/bin/env python3
 """Script that runs interactive SFXC post-correlation steps at the pipe computer.
 It runs all steps although it requires user interaction to
 verify that all steps have been performed correctly and/or
@@ -32,6 +32,7 @@ def get_files_from_vlbeer(exp):
     """Retrieves the antabfs, log, and flag files that should be in vlbeer for the given experiment.
     """
     cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
+
     def scp(exp: str):
         return "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}" + r"\*" + f".{ext} ."
@@ -179,13 +180,13 @@ def create_input_file(exp):
     exp.log(cmd, False)
     if len(exp.correlator_passes) > 1:
         cmd, _ = env.ssh('pipe@jop83',
-                         "mv /jop83_0/pipe/in/{1}/{1}.inp.txt "
-                         "/jop83_0/pipe/in/{1}/{1}_1.inp.txt".format(exp.expname.lower()))
+                         "mv /jop83_0/pipe/in/{0}/{0}.inp.txt "
+                         "/jop83_0/pipe/in/{0}/{0}_1.inp.txt".format(exp.expname.lower()))
         exp.log(cmd, False)
         for i in range(2, len(exp.correlator_passes)+1):
             cmd, _ = env.ssh('pipe@jop83',
-                             "cp /jop83_0/pipe/in/{1}/{1}_1.inp.txt "
-                             "/jop83_0/pipe/in/{1}/{1}_{2}.inp.txt".format(exp.expname.lower(), i))
+                             "cp /jop83_0/pipe/in/{0}/{0}_1.inp.txt "
+                             "/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt".format(exp.expname.lower(), i))
             exp.log(cmd, False)
 
     return True
@@ -234,7 +235,7 @@ def pipeline_feedback(exp):
     """
     cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
     cmd, _ = env.ssh('pipe@jop83', f"{cd} && feedback.pl -exp '{exp.expname.lower()}' "
-                          f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
+                     f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
     exp.log(cmd)
     return True
 
@@ -265,7 +266,5 @@ def get_vlba_antab(exp):
     """If the experiment containts VLBA antennas, it retrieves the *cal.vlba file from @ccs.
     """
     pass
-
-
 
 

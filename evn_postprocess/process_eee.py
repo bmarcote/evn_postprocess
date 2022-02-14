@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#! /usr/bin/env python3
 """Script that runs interactive SFXC post-correlation steps at the eee computer.
 It runs all steps although it requires user interaction to
 verify that all steps have been performed correctly and/or
@@ -84,11 +84,11 @@ def getdata(exp):
     inputs: exp : experiment.Experiment
     """
     for a_pass in exp.correlator_passes:
-        cmd, output = environment.shell_command("getdata.pl",
-                                                ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
-                                                 "-lis", a_pass.lisfile.name],
-                                                shell=True, stdout=None,
-                                                stderr=subprocess.STDOUT, bufsize=0)
+        cmd, _ = environment.shell_command("getdata.pl",
+                                           ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
+                                            "-lis", a_pass.lisfile.name],
+                                           shell=True, stdout=None,
+                                           stderr=subprocess.STDOUT, bufsize=0)
         exp.log(cmd)
 
     return True
@@ -110,13 +110,13 @@ def j2ms2(exp):
             # exp.log(cmd)
             if 'j2ms2' in exp.special_params:
                 cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
-                                                                  *exp.special_params['j2ms2']],
-                                                        shell=True, stdout=None,
-                                                        stderr=subprocess.STDOUT, bufsize=0)
+                                                             *exp.special_params['j2ms2']],
+                                                   shell=True, stdout=None,
+                                                   stderr=subprocess.STDOUT, bufsize=0)
             else:
                 cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
-                                                        shell=True, stdout=None,
-                                                        stderr=subprocess.STDOUT, bufsize=0)
+                                                   shell=True, stdout=None,
+                                                   stderr=subprocess.STDOUT, bufsize=0)
 
             exp.log(cmd, timestamp=True)
 
@@ -215,9 +215,9 @@ def onebit(exp):
     # Sanity check
     if len(exp.antennas.onebit) > 0:
         for a_pass in exp.correlator_passes:
-            cmd, output = environment.shell_command("scale1bit.py",
-                                                    [a_pass.msfile.name, ' '.join(exp.antennas.onebit)],
-                                                    shell=True, stdout=None, stderr=subprocess.STDOUT)
+            environment.shell_command("scale1bit.py",
+                                      [a_pass.msfile.name, ' '.join(exp.antennas.onebit)],
+                                      shell=True, stdout=None, stderr=subprocess.STDOUT)
     elif environment.station_1bit_in_vix(exp.vix):
         print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} "
               "but no station specified to be corrected.\n\n")
@@ -270,7 +270,7 @@ def update_piletter(exp):
             for a_line in orifile.readlines():
                 tmp_line = a_line
                 if ('derived from the following EVN project code(s):' in tmp_line) and \
-                                                            (exp.expname[-1].isalpha()):
+                   (exp.expname[-1].isalpha()):
                     tmp_line = tmp_line.replace(exp.expname, exp.expname[:-1])
 
                 if ('***SuppSci:' not in tmp_line) and ('there is one***' not in tmp_line):
