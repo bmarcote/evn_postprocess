@@ -115,13 +115,13 @@ def create_uvflg(exp):
             cmd, output = env.ssh('pipe@jop83', ';'.join([cd, 'uvflgall.csh']))
             print(output)
             output_tail = []
-            for outline in output[::-1].split('\n'):
+            for outline in output.split('\n')[::-1]:
                 if 'line ' in outline:
                     break
                 output_tail.append(outline)
 
             exp.log(cmd + '\n# ' + ',\n'.join(output_tail[::-1]).replace('\n', '\n# '))
-            cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"cat *uvflgfs > {exp.expname.lower()}.uvflg"]))
+            cmd, _ = env.ssh('pipe@jop83', ';'.join([cd, f"cat *uvflgfs > {exp.expname.lower()}.uvflg"]))
             exp.log(cmd)
     else:
         cd = f"/jop83_0/pipe/in/{exp.supsci}/{exp.eEVNname.lower()}"
@@ -133,7 +133,7 @@ def create_uvflg(exp):
     cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}"
     cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}"
     if not env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.uvflg"):
-        cmd, output = env.ssh('pipe@jop83', f"cp {cdtemp}/*.uvflg {cdinp}/")
+        cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp}/*.uvflg {cdinp}/")
         exp.log(cmd)
 
     return True
