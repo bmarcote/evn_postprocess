@@ -12,7 +12,6 @@ import pickle
 import json
 import subprocess
 import datetime as dt
-import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 from pyrap import tables as pt
@@ -430,8 +429,8 @@ class CorrelatorPass(object):
         """
         self._freqsetup = a_subband
 
-    def __init__(self, lisfile: str, msfile: str, fitsidifile: str, pipeline: bool=True,
-                 antennas: Antennas=None, flagged_weights=None):
+    def __init__(self, lisfile: str, msfile: str, fitsidifile: str, pipeline: bool = True,
+                 antennas: Antennas = None, flagged_weights = None):
         self._lisfile = Path(lisfile)
         self._msfile = Path(msfile)
         self._fitsidifile = fitsidifile
@@ -880,7 +879,7 @@ class Experiment(object):
         vixfilepath = Path(f"{self.expname.lower()}.vix")
         ename = self.expname if self.eEVNname is None else self.eEVNname
         if not vixfilepath.exists():
-            cmd, _ = env.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
+            env.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
             self.log(f"scp jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix {self.expname.lower()}.vix")
             os.symlink(f"{ename.lower()}.vix", f"{self.expname}.vix")
             self.log(f"ln -s {ename.lower()}.vix {self.expname}.vix")
@@ -894,7 +893,7 @@ class Experiment(object):
         """
         expsumfilepath = self.cwd / f"{self.expname.lower()}.expsum"
         if not expsumfilepath.exists():
-            cmd, _ = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.expsum", '.')
+            env.scp(f"jops@jop83:piletters/{self.expname.lower()}.expsum", '.')
             self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.expsum .")
 
         return expsumfilepath
@@ -906,7 +905,7 @@ class Experiment(object):
         """
         piletterpath = self.cwd / f"{self.expname.lower()}.piletter"
         if not piletterpath.exists():
-            cmd, _ = env.scp(f"jops@jop83:piletters/{self.expname.lower()}.piletter", '.')
+            env.scp(f"jops@jop83:piletters/{self.expname.lower()}.piletter", '.')
             self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.piletter .")
 
         return piletterpath
@@ -948,7 +947,7 @@ class Experiment(object):
     def feedback_page(self):
         """Returns the url link to the station feedback pages for the experiment.
         """
-        return f"http://old.evlbi.org/session/{self.obsdatetime.strftime('%b%y').lower()}/" \
+        return f"http://old.evlbi.org/session/{self.obsdatetime.strftime('%b%y').lower()}/"
 
     def exists_local_copy(self):
         """Checks if there is a local copy of the Experiment object stored in a local file.
