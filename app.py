@@ -160,7 +160,7 @@ def main():
         exp.special_params = {'onebit': [ant.strip().capitalize() for ant in args.onebit(',')]}
 
     if args.j2ms2par is not None:
-        exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par(',')]}
+        exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par,split(',')]}
 
     # TODO: This is temporal, until the script works completely
     if not os.path.isfile('processing_manual.log'):
