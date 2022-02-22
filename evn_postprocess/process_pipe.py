@@ -33,14 +33,14 @@ def get_files_from_vlbeer(exp):
     """
     cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
 
-    def scp(exp: str):
+    def scp(exp, ext: str):
         return "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}" + r"\*" + f".{ext} ."
 
-    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp('flag')]))
+    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp(exp, 'flag')]))
     exp.log(cmd)
     for ext in ('log', 'antabfs'):
-        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp(ext)]))
+        cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp(exp, ext)]))
         exp.log(cmd)
         cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"ls {exp.expname.lower()}*{ext}"]))
         the_files = [o for o in output.split('\n') if o != '']  # just to avoid trailing \n

@@ -876,7 +876,7 @@ class Experiment(object):
         """Returns the (Path object) to the .vix file related to the experiment.
         If the file does not exist in the experiment dir (in eee), is retrieved from ccs.
         """
-        vixfilepath = Path(f"{self.expname.lower()}.vix")
+        vixfilepath = Path(f"{self.expname}.vix")
         ename = self.expname if self.eEVNname is None else self.eEVNname
         if not vixfilepath.exists():
             env.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
