@@ -289,10 +289,12 @@ def tconvert(exp):
         existing_files = glob.glob(f"{a_pass.fitsidifile}*")
         if len(existing_files) > 0:
             continue
-        environment.shell_command("tConvert", [a_pass.msfile.name, a_pass.fitsidifile],
-                                  stdout=None, stderr=subprocess.STDOUT)
+        # environment.shell_command("tConvert", [a_pass.msfile.name, a_pass.fitsidifile],
+        #                           stdout=None, stderr=subprocess.STDOUT)
+        # NOTE: This is a temporary use of the dev version taht includes the -v lisfile implementation
+        environment.shell_command("/home/verkout/src/jive-casa/build-issue-5/apps/tConvert/tConvert",
+                                  ["-v", a_pass.lisfile.name], stdout=None, stderr=subprocess.STDOUT)
     return True
-
 
 def polconvert(exp):
     """Checks if PolConvert is required for any antenna.
