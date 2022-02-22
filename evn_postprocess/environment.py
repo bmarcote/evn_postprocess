@@ -112,7 +112,7 @@ def copy_files(exp):
 
     if False in exists:
         raise FileNotFoundError(f"The following files could not be found: "
-                                f"{','.join([f for f,b in zip(files, exists) if b])}")
+                                f"{','.join([f.name for f, b in zip(files, exists) if b])}")
 
     return True
 
