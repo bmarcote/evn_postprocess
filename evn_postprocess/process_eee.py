@@ -145,9 +145,8 @@ def standardplots(exp, do_weights=True):
     """Runs the standardplots on the specified experiment using a reference antenna
     and sources to be picked for the auto- and cross-correlations.
     """
-    # TODO: to be fully rewritten
-    # To run for all correlator passes that will be pipelined.
-    # Then once all of them finish, open the plots and ask user.
+    # TODO: using a temp standardplot branch that pick the best SB automatically
+    stdplots_bin = '/data0/marcote/scripts/jiveplot_bmarcote/standardplots'  # otherwise just "standardplots"
     calsources = ','.join(exp.sources_stdplot)
     counter = 0
     for a_pass in exp.correlator_passes:
@@ -164,11 +163,11 @@ def standardplots(exp, do_weights=True):
                                      "Please specify it manually.")
                 counter += 1
                 if (counter == 1) and do_weights:
-                    cmd, _ = environment.shell_command("standardplots",
+                    cmd, _ = environment.shell_command(stdplots_bin,
                                                             ["-weight", a_pass.msfile.name, refant, calsources],
                                                             stdout=None, stderr=subprocess.STDOUT)
                 else:
-                    cmd, _ = environment.shell_command("standardplots",
+                    cmd, _ = environment.shell_command(stdplots_bin,
                                                             [a_pass.msfile.name, refant, calsources],
                                                             stdout=None, stderr=subprocess.STDOUT)
 
