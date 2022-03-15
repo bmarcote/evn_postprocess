@@ -153,8 +153,8 @@ def pipeline(exp: experiment.Experiment):
 
 def after_pipeline(exp: experiment.Experiment):
     # TODO: authentification for pipeline results
-    # output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
-    output = dispatcher(exp, (pipe.comment_tasav_files, pipe.archive))
+    output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
+    # output = dispatcher(exp, (pipe.comment_tasav_files, pipe.archive))
     exp.last_step = 'postpipe'
     exp.store()
     print('\n\nNow check manually the Pipeline results in the browser.')
@@ -162,6 +162,12 @@ def after_pipeline(exp: experiment.Experiment):
     print('Re-run me only once you are happy with the final results and you have archived them again.')
     return output
 
+def archive_pipe(exp: experiment.Experiment):
+    output = dispatcher(exp, (pipe.archive,))
+    exp.last_step = 'archivepipe'
+    exp.store()
+    raise ManualInteractionRequired('You should check now the archived pipeline results.')
+    return output
 
 def finishing_experiment(exp: experiment.Experiment):
     pipe.ampcal(exp)
