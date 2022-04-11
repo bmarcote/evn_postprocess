@@ -818,6 +818,8 @@ class Experiment(object):
                             srctype = SourceType.calibrator
                         elif srctype == 'fringefinder':
                             srctype = SourceType.fringefinder
+                        elif srctype == 'calibrator':
+                            srctype = SourceType.fringefinder
                         else:
                             srctype = SourceType.other
 
