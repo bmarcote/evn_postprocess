@@ -79,7 +79,7 @@ def main():
                  'last': sch.finishing_experiment}
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
                                      formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-e' '--expname', type=str, default=None,
+    parser.add_argument('-e', '--expname', type=str, default=None,
                         help='Name of the EVN experiment (case-insensitive).')
     parser.add_argument('-jss', '--supsci', type=str, default=None, help='Surname of the EVN Support Scientist.')
     parser.add_argument('-r', '--refant', type=str, default=None, help='Reference antenna.')
@@ -96,7 +96,7 @@ def main():
 
     if args.expname is None:
         args.expname = Path.cwd().name
-        print(f"Assuming the experiment code is {args.expname}.\n")
+        print(f"\nAssuming the experiment code is {args.expname}.")
 
     if args.supsci is None:
         args.supsci = Path.cwd().parent.name
