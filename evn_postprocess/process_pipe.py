@@ -171,22 +171,22 @@ def create_input_file(exp):
     if len(exp.correlator_passes) > 2:
         to_change += "'#doprimarybeam = 1' 'doprimarybeam = 1'"
 
-    cmd, _ = env.ssh('pipe@jop83',
-                     "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()))
+    cmd = env.ssh('pipe@jop83',
+                  "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()))
     exp.log(cmd, False)
     # TODO: Replace replace by sed
-    cmd, _ = env.ssh('pipe@jop83',
-                     f"replace {to_change} -- /jop83_0/pipe/in/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt")
+    cmd = env.ssh('pipe@jop83',
+                  f"replace {to_change} -- /jop83_0/pipe/in/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt")
     exp.log(cmd, False)
     if len(exp.correlator_passes) > 1:
-        cmd, _ = env.ssh('pipe@jop83',
-                         "mv /jop83_0/pipe/in/{0}/{0}.inp.txt "
-                         "/jop83_0/pipe/in/{0}/{0}_1.inp.txt".format(exp.expname.lower()))
+        cmd = env.ssh('pipe@jop83',
+                      "mv /jop83_0/pipe/in/{0}/{0}.inp.txt "
+                      "/jop83_0/pipe/in/{0}/{0}_1.inp.txt".format(exp.expname.lower()))
         exp.log(cmd, False)
         for i in range(2, len(exp.correlator_passes)+1):
-            cmd, _ = env.ssh('pipe@jop83',
-                             "cp /jop83_0/pipe/in/{0}/{0}_1.inp.txt "
-                             "/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt".format(exp.expname.lower(), i))
+            cmd = env.ssh('pipe@jop83',
+                          "cp /jop83_0/pipe/in/{0}/{0}_1.inp.txt "
+                          "/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt".format(exp.expname.lower(), i))
             exp.log(cmd, False)
 
     return True
@@ -202,15 +202,15 @@ def run_pipeline(exp):
     exp.last_step = 'pipeline'
     return None
     if len(exp.correlator_passes) > 1:
-        cmd, _ = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}_1.inp.txt")
+        cmd = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}_1.inp.txt")
     else:
-        cmd, _ = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}.inp.txt")
+        cmd = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}.inp.txt")
 
     exp.log(cmd, False)
     exp.log('# Pipeline finished.', True)
     if len(exp.correlator_passes) == 2:
         # TODO: implement line in the normal pipeline
-        cmd, _ = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}_2.inp.txt")
+        cmd = env.ssh('pipe@jop83', f"{cd};EVN.py {exp.expname.lower()}_2.inp.txt")
 
     return True
 
@@ -224,7 +224,7 @@ def comment_tasav_files(exp):
     cdout = f"/jop83_0/pipe/out/{exp.expname.lower()}"
     if not (env.remote_file_exists('pipe@jop83', f"{cdout}/{exp.expname.lower()}" + r"\*.comment") and
             env.remote_file_exists('pipe@jop83', f"{cdin}/{exp.expname.lower()}" + r"\*.tasav.txt")):
-        cmd, _ = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
+        cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
         exp.log(cmd)
 
     return True
@@ -234,7 +234,7 @@ def pipeline_feedback(exp):
     """Runs the feedback.pl script after the EVN Pipeline has run.
     """
     cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
-    cmd, _ = env.ssh('pipe@jop83', f"{cd} && feedback.pl -exp '{exp.expname.lower()}' "
+    cmd = env.ssh('pipe@jop83', f"{cd} && /aps3/Pypeline/feedback.pl -exp '{exp.expname.lower()}' "
                      f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
     exp.log(cmd)
     return True
@@ -245,7 +245,8 @@ def archive(exp):
     """
     for f in ('in', 'out'):
         cd = f"cd /jop83_0/pipe/{f}/{exp.expname.lower()}"
-        cmd, _ = env.ssh('jops@jop83', f"{cd} && archive -pipe -e {exp.expname.lower()}_{exp.obsdate}", stdout=None)
+        cmd = env.ssh('jops@jop83', f"{cd} && /export/jive/jops/bin/archive/user/archive.pl -pipe -e "
+                                       f"{exp.expname.lower()}_{exp.obsdate}", stdout=None)
         exp.log(cmd)
 
     return True
@@ -257,7 +258,7 @@ def ampcal(exp):
     """Runs the ampcal.sh script to incorporate the gain corrections into the Grafana database.
     """
     cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
-    cmd, _ = env.ssh('pipe@jop83', f"{cd} && ampcal.sh")
+    cmd = env.ssh('pipe@jop83', f"{cd} && ampcal.sh")
     exp.log(cmd)
     return True
 

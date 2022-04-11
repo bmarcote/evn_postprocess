@@ -181,6 +181,7 @@ def standardplots(exp, do_weights=True):
 
         except Exception:
             print("WARNING: Standardplots reported an error.")
+            # TODO: these tracebacks should be one level above (in app.py)
             traceback.print_exc()
             return False
 
@@ -194,6 +195,9 @@ def open_standardplot_files(exp):
     for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
         standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
     # standardplots = glob.glob(f"{exp.expname.lower()}*.ps")
+
+    if len(standardplots) == 0:
+        raise FileNotFoundError(f"Standardplots for {exp.expname} not found but expected.")
 
     try:
         for a_plot in standardplots:
@@ -305,7 +309,7 @@ def polconvert(exp):
             exp.log("cp ~/polconvert/polconvert_inputs.ini ./polconvert_inputs.ini")
             environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.ini', './polconvert_inputs.ini'],
                                       shell=True, stdout=None)
-            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDIXXX/g'",
+            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDI*/g'",
                                       polconv_inp.name], shell=True, bufsize=None, stdout=None)
             environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI*/{exp.expname.lower()}_1_1.IDI*/g'",
                                       polconv_inp.name], shell=True, bufsize=None, stdout=None)
