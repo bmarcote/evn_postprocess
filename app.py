@@ -77,10 +77,11 @@ def main():
                  'last': sch.finishing_experiment}
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
                                      formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('expname', type=str, help='Name of the EVN experiment (case-insensitive).')
-    parser.add_argument('supsci', type=str, help='Surname of the EVN Support Scientist.')
+    parser.add_argument('-e' '--expname', type=str, default=None,
+                        help='Name of the EVN experiment (case-insensitive).')
+    parser.add_argument('-jss', '--supsci', type=str, default=None, help='Surname of the EVN Support Scientist.')
     parser.add_argument('-r', '--refant', type=str, default=None, help='Reference antenna.')
-    parser.add_argument('-s', '--calsources', type=str, default=None, help=help_calsources)
+    parser.add_argument('-cal', '--calsources', type=str, default=None, help=help_calsources)
     parser.add_argument('--onebit', type=str, default=None,
                         help='Antennas recording at 1 bit (comma-separated)')
     parser.add_argument('--steps', type=str, default=None, help=help_steps)
@@ -90,6 +91,14 @@ def main():
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
 
     args = parser.parse_args()
+
+    if args.expname is None:
+        args.expname = Path.cwd().name
+        print(f"Assuming the experiment code is {args.expname}.\n")
+
+    if args.supsci is None:
+        args.supsci = Path.cwd().parent.name
+        print(f"Assuming the Support Scientist is {args.supsci}.\n")
 
     exp = experiment.Experiment(args.expname, args.supsci)
     exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
