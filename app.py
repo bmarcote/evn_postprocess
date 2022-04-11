@@ -44,6 +44,7 @@ The available steps are:
     - pipeinputs : Prepares a draft input file for the pipeline and recovers all needed files.
     - pipeline : Runs the EVN Pipeline for all correlated passes.
     - postpipe : Runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
+    - archivepipe : Archives the Pipeline results.
     - last : Asks to update the PI letter, and sends it and pipeletter. Also runs parsePIletter.py.
 
 """
@@ -74,6 +75,7 @@ def main():
                  'pipeinputs': sch.getting_pipeline_files,
                  'pipeline': sch.pipeline,
                  'postpipe': sch.after_pipeline,
+                 'archivepipe': sch.archive_pipe,
                  'last': sch.finishing_experiment}
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
                                      formatter_class=argparse.RawTextHelpFormatter)
@@ -169,7 +171,7 @@ def main():
         exp.special_params = {'onebit': [ant.strip().capitalize() for ant in args.onebit(',')]}
 
     if args.j2ms2par is not None:
-        exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par,split(',')]}
+        exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
 
     # TODO: This is temporal, until the script works completely
     if not os.path.isfile('processing_manual.log'):
