@@ -242,7 +242,7 @@ def extract_tail_standardplots_output(stdplt_output):
         # All "r" output lines always start with those messages
         # (listTimeRage: , listSources: , listAntennas: , listFreqs: ):
         if 'list' in a_line:
-            last_lines.append(a_line)
+            last_lines.append(f"# {a_line}")
         elif 'ms: Current' in a_line:
             # We are already done for this output
             break
