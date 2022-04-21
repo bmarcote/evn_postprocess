@@ -11,18 +11,14 @@ from . import environment as env
 
 def create_folders(exp):
     """Creates the folder required for the post-processing of the experiment
-    - @eee: /data0/{supportsci}/{exp.upper()}
-
-    Inputs
-        - expname: str
-            Experiment name (case insensitive).
-        - supsci: str
-            Surname of the assigned support scientist.
+    - @eee: /data0/{exp.supsci}/{exp.upper()}
     """
-    tmpdir = f"/jop83_0/pipe/in/{exp.supsci.lower()}/{exp.expname.lower()}"
-    indir = f"/jop83_0/pipe/in/{exp.expname.lower()}"
-    outdir = f"/jop83_0/pipe/out/{exp.expname.lower()}"
-    for a_dir in (tmpdir, indir, outdir):
+    dirs = [f"/jop83_0/pipe/in/{exp.expname.lower()}",
+            f"/jop83_0/pipe/out/{exp.expname.lower()}"]
+    if (exp.eEVNname is None) or (exp.eEVNname == exp.expname):
+        dirs.append(f"/jop83_0/pipe/in/{exp.supsci.lower()}/{exp.expname.lower()}")
+
+    for a_dir in dirs:
         if not env.remote_file_exists('pipe@jop83', a_dir):
             env.ssh('pipe@jop83', f"mkdir -p {a_dir}")
             exp.log(f"mkdir -p {a_dir}")
