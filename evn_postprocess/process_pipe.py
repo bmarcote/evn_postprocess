@@ -160,24 +160,26 @@ def create_input_file(exp):
     pcal = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.calibrator])
     targets = ', '.join([s.name for s in exp.sources if (s.type is experiment.SourceType.target) or
                          (s.type is experiment.SourceType.other)])
-    to_change = f"'experiment = n05c3' 'experiment = {exp.expname.lower()}' " \
-                f"'userno = 3602' 'userno = {userno}' " \
-                f"'refant = Ef, Mc, Nt' 'refant = {', '.join(exp.refant)}' " \
-                f"'plotref = Ef' 'plotref = {', '.join(exp.refant)}' " \
-                f"'bpass = 3C345, 3C454.3' 'bpass = {bpass}' " \
-                f"'phaseref = 3C454.3' '# SOURCES THAT MAY BE INCLUDED: {pcal}\nphaseref = ' " \
-                f"'target = J2254+1341' '# SOURCES THAT MAY BE INCLUDED: {targets}\ntarget = ' "
+    to_change = [["experiment = n05c3", f"experiment = {exp.expname.lower()}"],
+                  ["userno = 3602", f"userno = {userno}"],
+                  ["refant = Ef, Mc, Nt", f"refant = {', '.join(exp.refant)}"],
+                  ["plotref = Ef", f"plotref = {', '.join(exp.refant)}"],
+                  ["bpass = 3C345, 3C454.3", f"bpass = {bpass}"],
+                  ["phaseref = 3C454.3", f"# SOURCES THAT MAY BE INCLUDED: {pcal}"+"\nphaseref = "],
+                  ["target = J2254+1341", f"# SOURCES THAT MAY BE INCLUDED: {targets}"+"\ntarget = "]]
 
     if len(exp.correlator_passes) > 2:
-        to_change += "'#doprimarybeam = 1' 'doprimarybeam = 1'"
+        to_change += ["#doprimarybeam = 1", "doprimarybeam = 1"]
 
     cmd = env.ssh('pipe@jop83',
-                  "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()))
+                  "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()),
+                  shell=True)
     exp.log(cmd, False)
     # TODO: Replace replace by sed
-    cmd = env.ssh('pipe@jop83',
-                  f"replace {to_change} -- /jop83_0/pipe/in/{exp.expname.lower()}/{exp.expname.lower()}.inp.txt")
-    exp.log(cmd, False)
+    for a_change in to_change:
+        cmd = env.ssh('pipe@jop83', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
+                                    f"{'/jop83_0/pipe/in/{0}/{0}.inp.txt'.format(exp.expname.lower())}")
+        exp.log(cmd, False)
     if len(exp.correlator_passes) > 1:
         cmd = env.ssh('pipe@jop83',
                       "mv /jop83_0/pipe/in/{0}/{0}.inp.txt "
@@ -190,6 +192,9 @@ def create_input_file(exp):
             exp.log(cmd, False)
 
     return True
+
+
+
 
 
 def run_pipeline(exp):
