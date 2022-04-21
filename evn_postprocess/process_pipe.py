@@ -74,12 +74,12 @@ def run_antab_editor(exp):
 
     if env.remote_file_exists('pipe@jop83',
                     f"{cdtemp}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}*.antab"):
-        print("Copying Antab file from {cdinp}.")
+        print("Copying Antab file from {cdtemp} to {cdinp}.")
         cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp}/*.antab {cdinp}/")
         exp.log(cmd)
         if (exp.eEVNname is not None) and (exp.expname != exp.eEVNname):
             # We need to rename to the actual name
-            for an_antab in env.ssh('pipe@jop83', f"{cdinp}/*.antab")[1].split('\n'):
+            for an_antab in env.ssh('pipe@jop83', f"ls {cdinp}/*.antab")[1].split('\n'):
                 if an_antab != '':
                     env.ssh('pipe@jop83', f"mv {an_antab} "
                 f"{'/'.join([*an_antab.split('/')[:-1], an_antab.split('/')[-1].replace(exp.eEVNname, exp.expname)])}")
