@@ -47,9 +47,12 @@ def get_lis_files(exp):
     if eEVNname != exp.expname:
         for a_lis in glob.glob("*.lis"):
             # Modify the references for eEVNname to expname inside the lis files
-            environment.update_lis_file(a_lis, eEVNname, exp.expname)
-            cmds.append(f" Expname updated from {eEVNname} to {exp.expname} in {a_lis}.")
-            exp.log(f" Expname updated from {eEVNname} to {exp.expname} in {a_lis}.")
+            # if it has not been done yet
+            if exp.expname.lower() not in a_lis:
+                environment.update_lis_file(a_lis, eEVNname, exp.expname)
+                cmds.append(f" Expname updated from {eEVNname} to {exp.expname} in {a_lis}.")
+                exp.log(f" Expname updated from {eEVNname} to {exp.expname} in {a_lis}.")
+
             os.rename(a_lis, a_lis.replace(eEVNname.lower(), exp.expname.lower()))
             cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), exp.expname.lower())}")
             exp.log(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), exp.expname.lower())}")

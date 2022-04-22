@@ -73,7 +73,7 @@ def main():
                  'archive': sch.archive,
                  'antab': sch.antab_editor,
                  'pipeinputs': sch.getting_pipeline_files,
-                 'pipeline': sch.pipeline,
+                 'pipeline': sch.pipeline,   # TODO:  sch.protect_archive_data
                  'postpipe': sch.after_pipeline,
                  'archivepipe': sch.archive_pipe,
                  'last': sch.finishing_experiment}

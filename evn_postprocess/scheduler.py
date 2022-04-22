@@ -24,7 +24,7 @@ def dispatcher(exp: experiment.Experiment, functions):
             if (output := a_step(exp)) is None:
                 raise ManualInteractionRequired(f"Stopping for manual intervention at {a_step.__name__}.")
             elif not output:
-                raise RuntimeError(f"The following function did not run properly for {exp.expname}: {a_step.__name__}.")
+                raise RuntimeError(f"The function {a_step.__name__} did not run properly for {exp.expname}.")
     # except RuntimeError: # Not handled, raised to above
     finally:
         exp.store()
@@ -62,12 +62,14 @@ def first_manual_check(exp: experiment.Experiment):
         print(f"\n\n{'#'*10}\n# Stopping here...")
         print(f"The .lis {temp[0]} for {exp.expname} {temp[1]} to have issues to "
               f"be solved manually.\n{'#'*10}\n")
+        print("Note that if you change the name of the .lis file, you will need to re-run the step 'lisfile'.")
 
     if exp.eEVNname is not None:
         print(f"\n\n{exp.expname} is part of an e-EVN run. Please edit manually the lis file now.")
         exp.last_step = 'checklis'
         output = None
         exp.store()
+        print("Note that if you change the name of the .lis file, you will need to re-run the step 'lisfile'.")
         raise ManualInteractionRequired('The lis file needs to be manually edited.')
 
     return output
@@ -142,6 +144,19 @@ def getting_pipeline_files(exp: experiment.Experiment):
     exp.last_step = 'pipeinputs'
     exp.store()
     return output
+
+
+def protect_archive_data(exp: experiment.Experiment):
+    """Opens a web browser to the authentification page for EVN experiments
+    """
+    if len([s.name for s in exp.sources if s.protected]) > 0:
+        print("\n\nYou now need to protect the archived data.")
+        print("Open http://archive.jive.nl/scripts/pipe/admin.php")
+        print(f"And protect the following sources: {', '.join([s.name for s in exp.sources if s.protected])}")
+    else:
+        print("No sources require protection.")
+
+    return None
 
 
 def pipeline(exp: experiment.Experiment):
