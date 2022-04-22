@@ -191,8 +191,6 @@ def create_input_file(exp):
 
 
 
-
-
 def run_pipeline(exp):
     """Runs the EVN Pipeline
     """
@@ -267,6 +265,7 @@ def ampcal(exp):
 def get_vlba_antab(exp):
     """If the experiment containts VLBA antennas, it retrieves the *cal.vlba file from @ccs.
     """
+    # TODO: for VLBA experiments
     pass
 
 

@@ -75,8 +75,7 @@ def main():
                  'pipeinputs': sch.getting_pipeline_files,
                  'pipeline': sch.pipeline,   # TODO:  sch.protect_archive_data
                  'postpipe': sch.after_pipeline,
-                 'archivepipe': sch.archive_pipe,
-                 'last': sch.finishing_experiment}
+                 'last': sch.final_steps}
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
                                      formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-e', '--expname', type=str, default=None,
