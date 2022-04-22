@@ -176,7 +176,7 @@ def after_pipeline(exp: experiment.Experiment):
     print('You may need to re-run the pipeline if you want to improve the results.')
     print('Re-run me only once you are happy with the final results and you have archived them again.')
     print('And once you have updated the PI letter.')
-    return output
+    return None if output else output
 
 
 def final_steps(exp: experiment.Experiment):
