@@ -153,10 +153,11 @@ def protect_archive_data(exp: experiment.Experiment):
         print("\n\nYou now need to protect the archived data.")
         print("Open http://archive.jive.nl/scripts/pipe/admin.php")
         print(f"And protect the following sources: {', '.join([s.name for s in exp.sources if s.protected])}")
+        raise ManualInteractionRequired('')
     else:
         print("No sources require protection.")
 
-    return None
+    return True
 
 
 def pipeline(exp: experiment.Experiment):
@@ -176,7 +177,10 @@ def after_pipeline(exp: experiment.Experiment):
     print('You may need to re-run the pipeline if you want to improve the results.')
     print('Re-run me only once you are happy with the final results and you have archived them again.')
     print('And once you have updated the PI letter.')
-    return None if output else output
+    if output:
+        raise ManualInteractionRequired('')
+
+    return output
 
 
 def final_steps(exp: experiment.Experiment):
