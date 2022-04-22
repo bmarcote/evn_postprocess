@@ -44,8 +44,7 @@ The available steps are:
     - pipeinputs : Prepares a draft input file for the pipeline and recovers all needed files.
     - pipeline : Runs the EVN Pipeline for all correlated passes.
     - postpipe : Runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
-    - archivepipe : Archives the Pipeline results.
-    - last : Asks to update the PI letter, and sends it and pipeletter. Also runs parsePIletter.py.
+    - last : Appends Tsys/GC and re-archive FITS-IDI and the PI letter. Asks to conduct the last post-processing steps.
 
 """
 

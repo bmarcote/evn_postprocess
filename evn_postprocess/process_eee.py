@@ -429,7 +429,7 @@ def append_antab(exp):
     appended.
     """
     if len(glob.glob("*.antab")) == 0:
-        environment.shell_command("append_antab_idi,py", shell=True)
+        environment.shell_command("append_antab_idi.py", shell=True, stdout=None)
         exp.log('append_antab_idi.py')
         environment.archive("-fits", exp, "*IDI*")
 
@@ -445,7 +445,7 @@ def send_letters(exp):
     # environment.shell_command("parsePIletter.py", ["-s", exp.obsdatetime.strftime("%b%y"),
     #                                                f"{exp.expname.lower()}.piletter"])
     #TODO: what if there are co-pis
-    print("\033[1mSend the letters to the PI.\033[0m")
+    print("\n\n\033[1mSend the letters to the PI.\033[0m")
     print(f"Send the PI letter to {exp.piname.capitalize()}: {exp.email} (CC jops@jive.eu).")
     print(f"Send the pipe letter to {exp.piname.capitalize()}: {exp.email}.")
     return True
@@ -454,7 +454,7 @@ def send_letters(exp):
 def antenna_feedback(exp):
     print("\n\nNow it is also time to bookkeep the issues that you may have seen in the antennas.\n")
     print(f"Update the (Grafana) database with the technical issues that antennas did not raise at:")
-    print(f"http://archive.jive.nl/scripts/getfeed.php?exp={exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}\n")
+    print(f"http://archive.jive.nl/scripts/getfeed.php?exp={exp.expname.upper()}_{exp.obsdate}\n")
     print("Also go to the JIVE RedMine to write down the relevant issues with particular antennas:")
     print("https://jrm.jive.nl/projects/science-support/news\n\n")
 
