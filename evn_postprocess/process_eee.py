@@ -324,7 +324,7 @@ def polconvert(exp):
         print("> polconvert.py  polconvert_inputs.ini")
         print("\n\n\033[1mOnce PolConvert has run, re-run me.\033[0m\n\n")
         # Keep the following as it will require a manual interaction
-        exp.last_step = 'polconvert'
+        exp.last_step = 'tconvert'
         return None
     else:
         exp.log("# PolConvert is not required.")
@@ -409,6 +409,21 @@ def archive(exp):
 
     environment.archive("-stnd", exp, "*ps.gz")
     environment.archive("-fits", exp, "*IDI*")
+    return True
+
+
+def append_antab(exp):
+    """Appends the Tsys and GC information from the experiment ANTAB file into the FITS-IDI files.
+    It will also re-archive the files.
+
+    If the ANTAB file is already present in the directory, it will assume that the information was already
+    appended.
+    """
+    if len(glob.glob("*.antab")) == 0:
+        environment.shell_command("append_antab_idi,py", shell=True)
+        exp.log('append_antab_idi.py')
+        environment.archive("-fits", exp, "*IDI*")
+
     return True
 
 
