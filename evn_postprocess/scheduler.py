@@ -175,25 +175,15 @@ def after_pipeline(exp: experiment.Experiment):
     print('\n\nNow check manually the Pipeline results in the browser.')
     print('You may need to re-run the pipeline if you want to improve the results.')
     print('Re-run me only once you are happy with the final results and you have archived them again.')
+    print('And once you have updated the PI letter.')
     return output
 
-def archive_pipe(exp: experiment.Experiment):
-    output = dispatcher(exp, (pipe.archive,))
-    exp.last_step = 'archivepipe'
-    exp.store()
-    raise ManualInteractionRequired('You should check now the archived pipeline results.')
-    return output
 
-def finishing_experiment(exp: experiment.Experiment):
-    pipe.ampcal(exp)
+def final_steps(exp: experiment.Experiment):
+    output = dispatcher(exp, (eee.append_antab, pipe.ampcal, eee.send_letters, eee.antenna_feedback, eee.nme_report))
     exp.last_step = 'last'
     exp.store()
-    return True
-
-
-
-
-
+    return output
 
 
 

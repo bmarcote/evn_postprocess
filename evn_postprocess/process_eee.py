@@ -360,6 +360,15 @@ def post_polconvert(exp):
         exp.log("mkdir idi_ori")
         exp.log("mv *IDI? *IDI?? *IDI???  idi_ori/")
         exp.log("zmv '(*).PCONVERT' '$1'")
+        # Imports the standard message into the PI letter
+        with open(f"{exp.expname.lower()}.piletter", 'a') as piletter:
+            s = f"the antenna{'s' if len(exp.antennas.polconvert) > 1 else ''} {', '.join(exp.antennas.polconvert)}"
+            piletter.write("\n- Note that " + s + " originally observed linear polarizations, " \
+                           "which were transformed to circular ones during post-processing using the " \
+                           "PolConvert program (Martí-Vidal, et al. 2016, A&A,587, A143). " \
+                           "Thanks to this correction, you can automatically recover the absolute EVPA " \
+                           f"value when using {', '.join(exp.antennas.polconvert)} as reference station " \
+                           "during fringe-fitting.")
 
     exp.last_step = 'post_polconvert'
     # Create again a MS from these converted files so I can run standardplots over the corrected data
@@ -431,18 +440,33 @@ def send_letters(exp):
     """Remembers you to update the PI letter and send it , and the pipeletter, to the PIs.
     Finally, it runs parsePIletter.
     """
-    dialog.continue_dialog("Please update the PI letter if needed before continue.", f"{exp.expname} -- PI letter")
+    # dialog.continue_dialog("Please update the PI letter if needed before continue.", f"{exp.expname} -- PI letter")
     environment.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")
-    environment.shell_command("parsePIletter.py", ["-s", exp.obsdatetime.strftime("%b%y"),
-                                                   f"{exp.expname.lower()}.piletter"])
+    # environment.shell_command("parsePIletter.py", ["-s", exp.obsdatetime.strftime("%b%y"),
+    #                                                f"{exp.expname.lower()}.piletter"])
+    #TODO: what if there are co-pis
+    print("\033[1mSend the letters to the PI.\033[0m")
     print(f"Send the PI letter to {exp.piname.capitalize()}: {exp.email} (CC jops@jive.eu).")
     print(f"Send the pipe letter to {exp.piname.capitalize()}: {exp.email}.")
+    return True
+
+
+def antenna_feedback(exp):
+    print("\n\nNow it is also time to bookkeep the issues that you may have seen in the antennas.\n")
+    print(f"Update the (Grafana) database with the technical issues that antennas did not raise at:")
+    print(f"http://archive.jive.nl/scripts/getfeed.php?exp={exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}\n")
+    print("Also go to the JIVE RedMine to write down the relevant issues with particular antennas:")
+    print("https://jrm.jive.nl/projects/science-support/news\n\n")
+
+
+def nme_report(exp):
     if exp.expname[0] == 'N':
         # This is a NME.
         print('Now it is time to write the NME Report. Good luck!')
     else:
         print('Experiment done!\nYou may have a coffee/tea now.')
 
+    return True
 
 # def archive_piletter(exp):
 #     """(Re-)archive the PI letter.
