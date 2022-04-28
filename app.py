@@ -89,6 +89,8 @@ def main():
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:).')
     parser.add_argument('--gui', type=str, default=None, help=help_gui)
+    parser.add_argument('--last', default=False, action='store_true',
+                        help='Returns the last step conducted in a previous run.')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
 
     args = parser.parse_args()
@@ -123,6 +125,10 @@ def main():
     if exp.exists_local_copy():
         print('Restoring stored information from a previous run.')
         exp = exp.load()
+
+    if args.last:
+        print("\n\n" + f"The last step that run for this experiment was {exp.last_step}.")
+        sys.exit(0)
 
     try:
         step_keys = list(all_steps.keys())
