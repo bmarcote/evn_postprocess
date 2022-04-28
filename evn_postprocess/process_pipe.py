@@ -148,7 +148,7 @@ def create_input_file(exp):
         cmd, output = env.ssh('pipe@jop83', 'give_me_next_userno.sh')
         if (output is None) or (output.replace('\n', '').strip() == ''):
             raise ValueError('Did not get any output from give_me_next_userno.sh in pipe')
-        userno = output
+        userno = output.replace('\n', '')
     else:
         userno = 'XXXXX'
 
@@ -169,12 +169,12 @@ def create_input_file(exp):
 
     cmd = env.ssh('pipe@jop83',
                   "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()),
-                  shell=True)
+                  shell=False)
     exp.log(cmd, False)
     # TODO: Replace replace by sed
     for a_change in to_change:
         cmd = env.ssh('pipe@jop83', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
-                                    f"{'/jop83_0/pipe/in/{0}/{0}.inp.txt'.format(exp.expname.lower())}")
+                                    f"{'/jop83_0/pipe/in/{0}/{0}.inp.txt'.format(exp.expname.lower())}", shell=False)
         exp.log(cmd, False)
     if len(exp.correlator_passes) > 1:
         cmd = env.ssh('pipe@jop83',
