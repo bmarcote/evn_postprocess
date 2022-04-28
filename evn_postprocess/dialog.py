@@ -84,7 +84,7 @@ class Terminal(Dialog):
         polswap = self.ask_for_antennas(exp, "\n\033[1mAntennas for polswap (comma or space separated)\n"
                                              f"\033[0m(possible antennas are: {', '.join(exp.antennas.names)})"
                                              "\n\033[1m>\033[0m ")
-        if environment.station_1bit_in_vix(exp.vexfile):
+        if environment.station_1bit_in_vix(exp.vix):
             onebit = self.ask_for_antennas(exp, "\n\033[1mAntennas that recorded one-bit data:\n> \033[0m")
         else:
             onebit = []
