@@ -432,6 +432,8 @@ def append_antab(exp):
         environment.shell_command("append_antab_idi.py", shell=True, stdout=None)
         exp.log('append_antab_idi.py')
         environment.archive("-fits", exp, "*IDI*")
+    else:
+        print("ANTAB information already appended into the FITS-IDI files.")
 
     return True
 
