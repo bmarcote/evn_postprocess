@@ -1051,7 +1051,8 @@ class Experiment(object):
         rprint(f"PI: [italic]{self.piname} ({self.email})[/italic]")
         rprint(f"Password: [italic]{self.credentials.password}[/italic]")
         rprint(f"Sup. Sci: [italic]{self.supsci}[/italic]")
-        rprint(f"Last run step: [italic]{self.last_step}[/italic]", sep="\n\n")
+        rprint(f"Last run step: [italic]{self.last_step}[/italic]")
+        print("\n")
         rprint("[bold]SETUP[/bold]")
         # loop over passes
         for i,a_pass in enumerate(self.correlator_passes):
@@ -1061,15 +1062,17 @@ class Experiment(object):
             rprint(f"Frequency: {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
                    f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz")
             rprint(f"{a_pass.freqsetup.n_subbands} x {a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands")
-            rprint(f"{a_pass.freqsetup.channels} channels each.", sep="\n\n")
-            rprint(f"lisfile: [italic]{a_pass.lisfile}[/italic]")
+            rprint(f"{a_pass.freqsetup.channels} channels each.")
+            rprint(f"lisfile: [italic]{a_pass.lisfile}[/italic]", sep="\n\n")
 
+        print("\n")
         rprint("[bold]SOURCES[/bold]")
         for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
                                  (SourceType.fringefinder, SourceType.target, SourceType.calibrator)):
             src = [s for s in self.sources if s.type is src_type]
-            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]{', '.join(src)}[/italic]")
+            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]{', '.join(src.name)}[/italic]")
 
+        print("\n")
         rprint("[bold]ANTENNAS[/bold]")
         ant_str = []
         for ant in self.antennas:
