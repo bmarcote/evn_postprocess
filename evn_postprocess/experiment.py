@@ -1070,7 +1070,7 @@ class Experiment(object):
         for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
                                  (SourceType.fringefinder, SourceType.target, SourceType.calibrator)):
             src = [s for s in self.sources if s.type is src_type]
-            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]{', '.join(src.name)}[/italic]")
+            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]{', '.join([s.name for s in src])}[/italic]")
 
         print("\n")
         rprint("[bold]ANTENNAS[/bold]")
