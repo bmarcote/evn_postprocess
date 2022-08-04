@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pyrap import tables as pt
 from enum import Enum
 from astropy import units as u
+from rich import print as rprint
 from . import environment as env
 from . import dialog
 
@@ -1037,7 +1038,62 @@ class Experiment(object):
 
         return d
 
-    # TODO: method to do a summary of the whole experiment
+    def print(self):
+        """Pretty print of the full experiment.
+        """
+        print('\n\n')
+        rprint(f"[bold red]Experiment {self.expname.upper()}[/bold red].", sep="\n\n")
+        rprint(f"Obs. date: [italic]{self.obsdatetime.strftime('%D-%M-%Y')} "
+               f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])}[/italic]")
+        if self.eEVNname is not None:
+            rprint(f"e-EVN run: [italic]{self.eEVNname}[/italic]")
+
+        rprint(f"PI: [italic]{self.piname} ({self.email})[/italic]")
+        rprint(f"Password: [italic]{self.credentials.password}[/italic]")
+        rprint(f"Sup. Sci: [italic]{self.supsci}[/italic]")
+        rprint(f"Last run step: [italic]{self.last_step}[/italic]")
+        rprint("[bold]SETUP[/bold]")
+        # loop over passes
+        for i,a_pass in enumerate(self.correlator_passes):
+            if len(self.correlator_passes) > 1:
+                rprint(f"[bold]Correlator pass #{i}[/bold]")
+
+            rprint(f"{a_pass.freqsetup.frequencies[0,0]}-{a_pass.freqsetup.frequencies[-1,-1]} GHz")
+            rprint(f"{a_pass.freqsetup.n_subbands} x {a_pass.freqsetup.bandwidth.to(u.MHz).value}-MHz subbands")
+            rprint(f"{a_pass.freqsetup.channels} channels each.", sep="\n\n")
+            rprint(f"lisfile: [italic]{a_pass.lisfile}[/italic]")
+
+        rprint("[bold]SOURCES[/bold]")
+        for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
+                                 (SourceType.fringefinder, SourceType.target, SourceType.calibrator)):
+            src = [s for s in self.sources if s.type is src_type]
+            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]{', '.join(src)}[/italic]")
+
+        rprint("[bold]ANTENNAS[/bold]")
+        ant_str = []
+        for ant in self.antennas:
+            if ant.observed:
+                ant_str.append(ant.name)
+            else:
+                ant_str.append(f"[red]ant.name[/red]")
+
+        rprint(f"[italic]{', '.join(ant_str)}[/italic]")
+        if len(self.antennas.polswap) > 0:
+            rprint(f"Polswapped antennas: [italic]{', '.join(self.antennas.polswap)}[/italic]")
+
+        if len(self.antennas.polconvert) > 0:
+            rprint(f"Polconverted antennas: [italic]{', '.join(self.antennas.polconvert)}[/italic]")
+
+        if len(self.antennas.onebit) > 0:
+            rprint(f"Onebit antennas: [italic]{', '.join(self.antennas.onebit)}[/italic]")
+
+        missing_logs = [a.name for a in self.antennas if not a.logfsfile]
+        if len(missing_logs) > 0:
+            rprint(f"Missing log files: [italic]{', '.join(missing_logs)}[/italic]")
+
+        missing_antabs = [a.name for a in self.antennas if not a.antabfsfile]
+        if len(self.antennas.polswap) > 0:
+            rprint(f"Missing ANTAB files: [italic]{', '.join(missing_antabs)}[/italic]")
 
 
 class ExpJsonEncoder(json.JSONEncoder):
