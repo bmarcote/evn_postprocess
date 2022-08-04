@@ -1051,15 +1051,16 @@ class Experiment(object):
         rprint(f"PI: [italic]{self.piname} ({self.email})[/italic]")
         rprint(f"Password: [italic]{self.credentials.password}[/italic]")
         rprint(f"Sup. Sci: [italic]{self.supsci}[/italic]")
-        rprint(f"Last run step: [italic]{self.last_step}[/italic]")
+        rprint(f"Last run step: [italic]{self.last_step}[/italic]", sep="\n\n")
         rprint("[bold]SETUP[/bold]")
         # loop over passes
         for i,a_pass in enumerate(self.correlator_passes):
             if len(self.correlator_passes) > 1:
                 rprint(f"[bold]Correlator pass #{i}[/bold]")
 
-            rprint(f"{a_pass.freqsetup.frequencies[0,0]}-{a_pass.freqsetup.frequencies[-1,-1]} GHz")
-            rprint(f"{a_pass.freqsetup.n_subbands} x {a_pass.freqsetup.bandwidth.to(u.MHz).value}-MHz subbands")
+            rprint(f"Frequency: {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
+                   f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz")
+            rprint(f"{a_pass.freqsetup.n_subbands} x {a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands")
             rprint(f"{a_pass.freqsetup.channels} channels each.", sep="\n\n")
             rprint(f"lisfile: [italic]{a_pass.lisfile}[/italic]")
 
