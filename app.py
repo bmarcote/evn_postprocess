@@ -5,6 +5,7 @@ import os
 import sys
 import argparse
 import traceback
+import rich
 from pathlib import Path
 from datetime import datetime as dt
 # from inspect import signature  # WHAT?  to know how many parameters has each function
@@ -13,8 +14,6 @@ from evn_postprocess.evn_postprocess import scheduler as sch
 from evn_postprocess.evn_postprocess import dialog
 from evn_postprocess.evn_postprocess import environment as env
 
-
-# Rename the file to __main__.py. Then it can be executed by python -m evn_postprocess
 
 __version__ = 0.5
 __prog__ = 'evn_postprocess.py'
@@ -88,6 +87,8 @@ def main():
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:).')
     parser.add_argument('--gui', type=str, default=None, help=help_gui)
+    parser.add_argument('--info', default=False, action='store_true',
+                        help='Returns the metadata from the experiment (all is known to the moment to me).')
     parser.add_argument('--last', default=False, action='store_true',
                         help='Returns the last step conducted in a previous run.')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
@@ -127,6 +128,10 @@ def main():
 
     if args.last:
         print("\n\n" + f"The last step that run for this experiment was {exp.last_step}.")
+        sys.exit(0)
+
+    if args.info:
+        exp.print()
         sys.exit(0)
 
     try:

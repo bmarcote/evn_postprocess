@@ -7,3 +7,4 @@ python-casacore
 requests
 scipy
 six
+rich
