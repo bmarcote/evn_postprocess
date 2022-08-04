@@ -1043,15 +1043,15 @@ class Experiment(object):
         """
         print('\n\n')
         rprint(f"[bold red]Experiment {self.expname.upper()}[/bold red].", sep="\n\n")
-        rprint(f"Obs. date: [italic]{self.obsdatetime.strftime('%D-%M-%Y')} "
-               f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])}[/italic]")
+        rprint(f"[dim]Obs. date[/dim]: {self.obsdatetime.strftime('%d-%m-%Y')} "
+               f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])}")
         if self.eEVNname is not None:
-            rprint(f"e-EVN run: [italic]{self.eEVNname}[/italic]")
+            rprint(f"[dim]e-EVN run[/dim]: {self.eEVNname}")
 
-        rprint(f"PI: [italic]{self.piname} ({self.email})[/italic]")
-        rprint(f"Password: [italic]{self.credentials.password}[/italic]")
-        rprint(f"Sup. Sci: [italic]{self.supsci}[/italic]")
-        rprint(f"Last run step: [italic]{self.last_step}[/italic]")
+        rprint(f"[dim]PI[/dim]: {self.piname} ({self.email})")
+        rprint(f"[dim]Password[/dim]: {self.credentials.password}")
+        rprint(f"[dim]Sup. Sci[/dim]: {self.supsci}")
+        rprint(f"[dim]Last run step[/dim]: {self.last_step}")
         print("\n")
         rprint("[bold]SETUP[/bold]")
         # loop over passes
@@ -1079,9 +1079,9 @@ class Experiment(object):
             if ant.observed:
                 ant_str.append(ant.name)
             else:
-                ant_str.append(f"[red]ant.name[/red]")
+                ant_str.append(f"[bold red]ant.name[/bold red]")
 
-        rprint(f"[italic]{', '.join(ant_str)}[/italic]")
+        rprint(f"{', '.join(ant_str)}")
         if len(self.antennas.polswap) > 0:
             rprint(f"Polswapped antennas: [italic]{', '.join(self.antennas.polswap)}[/italic]")
 
@@ -1096,8 +1096,10 @@ class Experiment(object):
             rprint(f"Missing log files: [italic]{', '.join(missing_logs)}[/italic]")
 
         missing_antabs = [a.name for a in self.antennas if not a.antabfsfile]
-        if len(self.antennas.polswap) > 0:
+        if len(missing_antabs) > 0:
             rprint(f"Missing ANTAB files: [italic]{', '.join(missing_antabs)}[/italic]")
+
+        print("\n")
 
 
 class ExpJsonEncoder(json.JSONEncoder):
