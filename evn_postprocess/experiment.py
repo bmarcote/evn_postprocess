@@ -1043,8 +1043,8 @@ class Experiment(object):
         """
         print('\n\n')
         rprint(f"[bold red]Experiment {self.expname.upper()}[/bold red].", sep="\n\n")
-        rprint(f"[dim]Obs. date[/dim]: {self.obsdatetime.strftime('%d-%m-%Y')} "
-               f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])}")
+        rprint(f"[dim]Obs. date[/dim]: {self.obsdatetime.strftime('%d/%m/%Y')} "
+               f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC")
         if self.eEVNname is not None:
             rprint(f"[dim]e-EVN run[/dim]: {self.eEVNname}")
 
