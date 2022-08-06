@@ -952,6 +952,11 @@ class Experiment(object):
         """
         return f"http://old.evlbi.org/session/{self.obsdatetime.strftime('%b%y').lower()}/"
 
+    def archive_page(self):
+        """Returns the url link to the EVN Archive pages for the experiment.
+        """
+        return f"http://archive.jive.nl/scripts/arch.php?exp={self.expname.upper()}"
+
     def exists_local_copy(self):
         """Checks if there is a local copy of the Experiment object stored in a local file.
         """
