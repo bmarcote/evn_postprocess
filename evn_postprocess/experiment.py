@@ -18,6 +18,7 @@ from pyrap import tables as pt
 from enum import Enum
 from astropy import units as u
 from rich import print as rprint
+import blessed
 from . import environment as env
 from . import dialog
 
@@ -1100,6 +1101,77 @@ class Experiment(object):
             rprint(f"Missing ANTAB files: [italic]{', '.join(missing_antabs)}[/italic]")
 
         print("\n")
+
+    def print_blessed(self):
+        """Blessed print of the full experiment.
+        """
+        term = blessed.Terminal()
+        with term.fullscreen(), term.cbreak():
+            print(term.darkolivegreen(f"EVN Post-processing of {self.expname.upper()}"))
+            print(f"{term.bright_black('Obs date:')} {self.obsdatetime.strftime('%d/%m/%Y')} "
+                  f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC")
+            if self.eEVNname is not None:
+                print(f"{term.bright_black('From e-EVN run:')} {self.eEVNname}")
+
+            print(f"{term.bright_black('P.I.:')} {self.piname} ({self.email})")
+            print(f"{term.bright_black('Sup. Sci:')} {self.supsci}")
+            print(f"{term.bright_black('Password:')} {self.credentials.password}")
+            print(f"{term.bright_black('Links:')} " \
+                  f"{term.link(self.feedback_page, 'Station Feedback Link')} " \
+                  f"{term.link(self.archive_page, 'Archive Link')}")
+            print(f"{term.bright_black('Last run step:')} {self.last_step}")
+            print("\n")
+            print(f"{term.bold_green('SETUP')}")
+            # loop over passes
+            for i,a_pass in enumerate(self.correlator_passes):
+                if len(self.correlator_passes) > 1:
+                    s = f"Correlator pass #{i}"
+                    print(f"{term.bold(s)}")
+
+                print(f"{term.bright_black('Frequency:')} {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
+                      f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz. "
+                      f"{a_pass.freqsetup.n_subbands} x {a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. "
+                      f"{a_pass.freqsetup.channels} channels each.")
+                print(f"{term.bright_black('lisfile:')} {a_pass.lisfile}")
+
+            print("\n")
+            print(f"{term.bold_green('SOURCES')}")
+            for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
+                                     (SourceType.fringefinder, SourceType.target, SourceType.calibrator)):
+                src = [s for s in self.sources if s.type is src_type]
+                key = f"{name}{'' if len(src) == 1 else 's'}:"
+                print(f"{term.bright_black(key)} {', '.join([s.name for s in src])}")
+
+            print("\n")
+            print(f"{term.bold_green('ANTENNAS')}")
+            ant_str = []
+            for ant in self.antennas:
+                if ant.observed:
+                    ant_str.append(ant.name)
+                else:
+                    ant_str.append(f"{term.red(ant.name)}")
+
+            print(f"{', '.join(ant_str)}")
+            if len(self.antennas.polswap) > 0:
+                print(f"{term.bright_black('Polswapped antennas:')} {', '.join(self.antennas.polswap)}")
+
+            if len(self.antennas.polconvert) > 0:
+                print(f"{term.bright_black('Polconverted antennas:')} {', '.join(self.antennas.polconvert)}")
+
+            if len(self.antennas.onebit) > 0:
+                print(f"{term.bright_black('Onebit antennas:')} {', '.join(self.antennas.onebit)}")
+
+            missing_logs = [a.name for a in self.antennas if not a.logfsfile]
+            if len(missing_logs) > 0:
+                print(f"{term.bright_black('Missing log files:')} {', '.join(missing_logs)}")
+
+            missing_antabs = [a.name for a in self.antennas if not a.antabfsfile]
+            if len(missing_antabs) > 0:
+                print(f"{term.bright_black('Missing ANTAB files:')} {', '.join(missing_antabs)}")
+
+            print(term.move_y(term.height - 5) + term.center('press any key to continue (or Q to cancel)').rstrip())
+            term.inkey()
+
 
 
 class ExpJsonEncoder(json.JSONEncoder):

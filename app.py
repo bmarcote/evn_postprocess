@@ -131,7 +131,7 @@ def main():
         sys.exit(0)
 
     if args.info:
-        exp.print()
+        exp.print_blessed()
         sys.exit(0)
 
     try:
