@@ -953,6 +953,7 @@ class Experiment(object):
         """
         return f"http://old.evlbi.org/session/{self.obsdatetime.strftime('%b%y').lower()}/"
 
+    @property
     def archive_page(self):
         """Returns the url link to the EVN Archive pages for the experiment.
         """
