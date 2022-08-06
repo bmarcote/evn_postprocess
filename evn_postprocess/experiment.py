@@ -951,7 +951,7 @@ class Experiment(object):
     def feedback_page(self):
         """Returns the url link to the station feedback pages for the experiment.
         """
-        return f"http://old.evlbi.org/session/{self.obsdatetime.strftime('%b%y').lower()}/"
+        return f"http://old.evlbi.org/session/{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.html"
 
     @property
     def archive_page(self):
