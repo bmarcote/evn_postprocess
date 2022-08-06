@@ -78,7 +78,8 @@ def first_manual_check(exp: experiment.Experiment):
 def creating_ms(exp: experiment.Experiment):
     """Steps from retrieving the cor files to create the MS and standardplots
     """
-    output = dispatcher(exp, (eee.getdata, eee.j2ms2, eee.update_ms_expname, eee.get_metadata_from_ms))
+    output = dispatcher(exp, (eee.getdata, eee.j2ms2, eee.update_ms_expname, eee.get_metadata_from_ms,
+                              eee.print_exp))
     exp.last_step = 'ms'
     exp.store()
     return output
