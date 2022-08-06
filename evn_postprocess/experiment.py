@@ -7,6 +7,7 @@ This also keeps track of the steps that have been condducted in the post-process
 resumed, or restarted.
 """
 import os
+import sys
 import numpy as np
 import pickle
 import json
@@ -1190,7 +1191,11 @@ class Experiment(object):
 
             print(f"{term.bright_black('Reference Antenna:')} {', '.join(self.refant)}")
             print(term.move_y(term.height - 5) + term.center('press any key to continue (or Q to cancel)').rstrip())
-            term.inkey()
+            val = term.inkey()
+            if val.strip() == 'q':
+                return False
+
+            return True
 
 
 
