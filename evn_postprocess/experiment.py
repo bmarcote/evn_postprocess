@@ -1113,7 +1113,8 @@ class Experiment(object):
         """
         term = blessed.Terminal()
         with term.fullscreen(), term.cbreak():
-            print(term.darkolivegreen(f"EVN Post-processing of {self.expname.upper()}"))
+            print(term.center(term.red(f"EVN Post-processing of {self.expname.upper()}")))
+            print('\n')
             print(f"{term.bright_black('Obs date:')} {self.obsdatetime.strftime('%d/%m/%Y')} "
                   f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC")
             if self.eEVNname is not None:
@@ -1121,11 +1122,17 @@ class Experiment(object):
 
             print(f"{term.bright_black('P.I.:')} {self.piname} ({self.email})")
             print(f"{term.bright_black('Sup. Sci:')} {self.supsci}")
-            print(f"{term.bright_black('Password:')} {self.credentials.password}")
-            print(f"{term.bright_black('Links:')} " \
-                  f"{term.link(self.feedback_page, 'Station Feedback Link')} " \
-                  f"{term.link(self.archive_page, 'Archive Link')}")
+            print(f"{term.bright_black('Station Feedback Link:')} " \
+                  f"{term.link(self.feedback_page, self.feedback_page)} ")
+            print(f"{term.bright_black('EVN Archive Link:')} " \
+                  f"{term.link(self.archive_page, self.archive_page)}")
+            print(f"{term.bright_black('Protection Link:')} " \
+                  f"{term.link('http://archive.jive.nl/scripts/pipe/admin.php', 'http://archive.jive.nl/scripts/pipe/admin.php')}")
             print(f"{term.bright_black('Last run step:')} {self.last_step}")
+            print("\n")
+            print(f"{term.bold_green('CREDENTIALS')}")
+            print(f"{term.bright_black('Username:')} {self.credentials.username}")
+            print(f"{term.bright_black('Password:')} {self.credentials.password}")
             print("\n")
             print(f"{term.bold_green('SETUP')}")
             # loop over passes
@@ -1135,7 +1142,8 @@ class Experiment(object):
                     print(f"{term.bold(s)}")
 
                 print(f"{term.bright_black('Frequency:')} {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
-                      f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz. "
+                      f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz. ")
+                print(f"{term.bright_black('Bandwidth:')} "
                       f"{a_pass.freqsetup.n_subbands} x {a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. "
                       f"{a_pass.freqsetup.channels} channels each.")
                 print(f"{term.bright_black('lisfile:')} {a_pass.lisfile}")
@@ -1146,7 +1154,9 @@ class Experiment(object):
                                      (SourceType.fringefinder, SourceType.target, SourceType.calibrator)):
                 src = [s for s in self.sources if s.type is src_type]
                 key = f"{name}{'' if len(src) == 1 else 's'}:"
-                print(f"{term.bright_black(key)} {', '.join([s.name for s in src])}")
+                print(f"{term.bright_black(key)} " \
+                      f"{', '.join([s.name+term.red('*') if s.protected else s.name for s in src])}")
+            print(term.bright_black(f"\n Sources with {term.red('*')} denote the ones that need to be protected."))
 
             print("\n")
             print(f"{term.bold_green('ANTENNAS')}")
