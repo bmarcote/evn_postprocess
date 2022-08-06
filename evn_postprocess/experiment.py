@@ -1156,7 +1156,10 @@ class Experiment(object):
                 key = f"{name}{'' if len(src) == 1 else 's'}:"
                 print(f"{term.bright_black(key)} " \
                       f"{', '.join([s.name+term.red('*') if s.protected else s.name for s in src])}")
-            print(term.bright_black(f"\n Sources with {term.red('*')} denote the ones that need to be protected."))
+            print(term.bright_black(f"\n Sources with {term.red('*')} denote the ones that need to be protected.\n"))
+
+            print(f"{term.bright_black('Sources to standardplot:')} "
+                  f"{', '.join(self.sources_stdplot)}")
 
             print("\n")
             print(f"{term.bold_green('ANTENNAS')}")
@@ -1185,6 +1188,7 @@ class Experiment(object):
             if len(missing_antabs) > 0:
                 print(f"{term.bright_black('Missing ANTAB files:')} {', '.join(missing_antabs)}")
 
+            print(f"{term.bright_black('Reference Antenna:')} {', '.join(self.refant)}")
             print(term.move_y(term.height - 5) + term.center('press any key to continue (or Q to cancel)').rstrip())
             term.inkey()
 
