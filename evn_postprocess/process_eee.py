@@ -114,9 +114,15 @@ def j2ms2(exp):
                                                    shell=True, stdout=None,
                                                    stderr=subprocess.STDOUT, bufsize=0)
             else:
-                cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
-                                                   shell=True, stdout=None,
-                                                   stderr=subprocess.STDOUT, bufsize=0)
+                if self.eEVNname is None:
+                    cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
+                                                                 "fo:nosquash_source_table"],
+                                                       shell=True, stdout=None,
+                                                       stderr=subprocess.STDOUT, bufsize=0)
+                else:
+                    cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
+                                                       shell=True, stdout=None,
+                                                       stderr=subprocess.STDOUT, bufsize=0)
 
             exp.log(cmd, timestamp=True)
 
