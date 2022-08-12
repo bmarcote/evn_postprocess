@@ -951,7 +951,21 @@ class Experiment(object):
     def feedback_page(self):
         """Returns the url link to the station feedback pages for the experiment.
         """
-        return f"http://old.evlbi.org/session/{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.html"
+        if self.eEVNname is not None:
+            return f" -- No associated feedback pages --"
+
+        # Folling back the month to the standard session: feb, jun, or oct:
+        if self.obsdatetime.month // 10 > 0:
+            sess_month = 'oct'
+        elif self.obsdatetime.month // 6 > 0:
+            sess_month = 'jun'
+        elif self.obsdatetime.month // 2 > 0:
+            sess_month = 'feb'
+        else:
+            raise ValueError(f"Experiment {self.expname} not part of e-EVN but outside a session (run in Jan)?")
+
+        return "http://old.evlbi.org/session/" \
+               f"{sess_month}{self.obsdatetime.strftime('%y').lower()}/{self.expname.lower()}.html"
 
     @property
     def archive_page(self):
