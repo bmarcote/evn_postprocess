@@ -1,4 +1,5 @@
-
+from rich import print as rprint
+from rich.markdown import Markdown
 from . import experiment
 from . import environment as env
 from . import process_ccs as ccs
@@ -59,17 +60,20 @@ def first_manual_check(exp: experiment.Experiment):
     output = env.check_lisfiles(exp)
     if not output:
         temp = 'file', 'seems' if len(exp.correlator_passes) == 1 else 'files', 'seem'
-        print(f"\n\n{'#'*10}\n# Stopping here...")
-        print(f"The .lis {temp[0]} for {exp.expname} {temp[1]} to have issues to "
+        rprint(f"\n\n[bold red]{'#'*50}[/bold red]\n[center red]...Stopping here...[/center red]\n")
+        print(f"The .lis {temp[0]} for {exp.expname} {temp[1]} has issues to "
               f"be solved manually.\n{'#'*10}\n")
-        print("Note that if you change the name of the .lis file, you will need to re-run the step 'lisfile'.")
+        rprint("[bold]NOTE[/bold]: if you change the name of the .lis file, "
+               "you will need to re-run the step 'lisfile' (with [dim]postprocess --steps lisfile[/dim]).")
 
     if exp.eEVNname is not None:
-        print(f"\n\n{exp.expname} is part of an e-EVN run. Please edit manually the lis file now.")
+        rprint(f"\n\n[bold red]{exp.expname} is part of an e-EVN run. "
+               "Please edit manually the lis file now.[/bold red]")
         exp.last_step = 'checklis'
         output = None
         exp.store()
-        print("Note that if you change the name of the .lis file, you will need to re-run the step 'lisfile'.")
+        rprint("[bold]NOTE[/bold]: if you change the name of the .lis file, "
+               "you will need to re-run the step 'lisfile' (with [dim]postprocess --steps lisfile[/dim]).")
         raise ManualInteractionRequired('The lis file needs to be manually edited.')
 
     return output
@@ -78,7 +82,8 @@ def first_manual_check(exp: experiment.Experiment):
 def creating_ms(exp: experiment.Experiment):
     """Steps from retrieving the cor files to create the MS and standardplots
     """
-    output = dispatcher(exp, (eee.getdata, eee.j2ms2, eee.update_ms_expname, eee.get_metadata_from_ms, eee.print_exp))
+    output = dispatcher(exp, (eee.getdata, eee.j2ms2, eee.update_ms_expname, eee.get_metadata_from_ms,
+                              eee.print_exp))
     exp.last_step = 'ms'
     exp.store()
     return output
@@ -150,12 +155,12 @@ def protect_archive_data(exp: experiment.Experiment):
     """Opens a web browser to the authentification page for EVN experiments
     """
     if len([s.name for s in exp.sources if s.protected]) > 0:
-        print("\n\nYou now need to protect the archived data.")
-        print("Open http://archive.jive.nl/scripts/pipe/admin.php")
+        rprint("[center][bold red]You now need to protect the archived data[/bold red][/center]")
+        rprint("Open http://archive.jive.nl/scripts/pipe/admin.php")
         print(f"And protect the following sources: {', '.join([s.name for s in exp.sources if s.protected])}")
         raise ManualInteractionRequired('')
     else:
-        print("No sources require protection.")
+        rprint("\n\n[green]No sources require protection.[/green]\n\n")
 
     return True
 
@@ -171,10 +176,14 @@ def after_pipeline(exp: experiment.Experiment):
     output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
     exp.last_step = 'postpipe'
     exp.store()
-    print('\n\nNow check manually the Pipeline results in the browser.')
-    print('You may need to re-run the pipeline if you want to improve the results.')
-    print('Re-run me only once you are happy with the final results and you have archived them again.')
-    print('And once you have updated the PI letter.')
+    rprint('\n\n[bold green][center]Now check manually the Pipeline results in the browser:[/center][/bold green]')
+    rprint(f"[center]{exp.archive_page}[/center]\n")
+    rprint(Markdown("""[green]If you are happy with the results:[/green]
+    1. Update the PI letter manually.
+    2. Run me (`postprocess`) again.
+[green]If you are **not** happy with the results:[/green]
+    1. Re-run the pipeline manually (after modifying the needed input files).
+    2. Run me again with `postprocess --steps postpipe`.[/green]\n"""))
     if output:
         raise ManualInteractionRequired('')
 

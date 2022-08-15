@@ -5,6 +5,7 @@ verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 """
 
+from rich import print as rprint
 from . import experiment
 from . import environment as env
 
@@ -161,8 +162,8 @@ def create_input_file(exp):
                   ["refant = Ef, Mc, Nt", f"refant = {', '.join(exp.refant)}"],
                   ["plotref = Ef", f"plotref = {', '.join(exp.refant)}"],
                   ["bpass = 3C345, 3C454.3", f"bpass = {bpass}"],
-                  ["phaseref = 3C454.3", f"# SOURCES THAT MAY BE INCLUDED: {pcal}"+"\nphaseref = "],
-                  ["target = J2254+1341", f"# SOURCES THAT MAY BE INCLUDED: {targets}"+"\ntarget = "]]
+                  ["phaseref = 3C454.3", f"phaseref = {pcal}  # VERIFY THIS MANUALLY"],
+                  ["target = J2254+1341", f"target = {targets}  # VERIFY THIS MANUALLY"]]
 
     if len(exp.correlator_passes) > 2:
         to_change += ["#doprimarybeam = 1", "doprimarybeam = 1"]
@@ -196,8 +197,8 @@ def run_pipeline(exp):
     """
     exp.log('# Running the pipeline...', True)
     cd = f"cd /jop83_0/pipe/in/{exp.expname.lower()}"
+    rprint('\n\n\n[bold red]Modify the input file for the pipeline and run it manually[/bold red]')
     # TODO:
-    print('\n\n\n\033[1mModify the input file for the pipeline and run it manually\033[0m')
     exp.last_step = 'pipeline'
     return None
     if len(exp.correlator_passes) > 1:
