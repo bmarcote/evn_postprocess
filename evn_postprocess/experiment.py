@@ -1124,6 +1124,105 @@ class Experiment(object):
         print("\n")
 
     def print_blessed(self):
+        """Pretty print of the full experiment with all available data.
+        """
+        term = blessed.Terminal()
+        with term.fullscreen(), term.cbreak():
+            s = term.center(term.red_on_gray(f"EVN Post-processing of {self.expname.upper()}") + '\n')
+            s += term.bright_black('Obs date: ') + self.obsdatetime.strftime('%d/%m/%Y') + '\n'
+            s += f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"
+            if self.eEVNname is not None:
+                s += term.bright_black('From e-EVN run: ') + self.eEVNname + '\n'
+
+            s += term.bright_black('P.I.: ') + f"{self.piname} ({self.email})\n"
+            s += term.bright_black('Sup. Sci: ') + self.supsci + '\n'
+            s += term.bright_black('Station Feedback Link: ') + \
+                  term.link(self.feedback_page, self.feedback_page) + '\n'
+            s += term.bright_black('EVN Archive Link: ') + \
+                  term.link(self.archive_page, self.archive_page) + '\n'
+            s += term.bright_black('Protection Link: ') +\
+                 term.link('http://archive.jive.nl/scripts/pipe/admin.php',
+                           'http://archive.jive.nl/scripts/pipe/admin.php') + '\n'
+            s += term.bright_black('Last run step: ') + self.last_step + '\n\n'
+            s += term.bold_green('CREDENTIALS')
+            s += term.bright_black('Username: ') + self.credentials.username + '\n'
+            s += term.bright_black('Password: ') + self.credentials.password + '\n\n'
+            s += term.bold_green('SETUP')
+
+            # loop over passes
+            for i,a_pass in enumerate(self.correlator_passes):
+                if len(self.correlator_passes) > 1:
+                    s += term.bold(f"Correlator pass #{i}")
+
+                s += term.bright_black('Frequency: ') + \
+                     f"{a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
+                     f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz." + '\n'
+                s += term.bright_black('Bandwidth: ') + \
+                     f"{a_pass.freqsetup.n_subbands} x " \
+                     f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. " \
+                     f"{a_pass.freqsetup.channels} channels each." + '\n'
+                s += term.bright_black('lisfile: ') + a_pass.lisfile + '\n\n'
+
+            s += term.bold_green('SOURCES')
+            for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
+                                     (SourceType.fringefinder, SourceType.target, SourceType.calibrator)):
+                src = [s for s in self.sources if s.type is src_type]
+                key = f"{name}{'' if len(src) == 1 else 's'}:"
+                s += term.bright_black(key) + \
+                     f"{', '.join([s.name+term.red('*') if s.protected else s.name for s in src])}"
+            s += term.bright_black(f"\n Sources with {term.red('*')} denote the ones that need to be protected.\n")
+
+            s += term.bright_black('Sources to standardplot: ') + f"{', '.join(self.sources_stdplot)}\n"
+            s += term.bold_green('ANTENNAS')
+            ant_str = []
+            for ant in self.antennas:
+                if ant.observed:
+                    ant_str.append(ant.name)
+                else:
+                    ant_str.append(f"{term.red(ant.name)}")
+
+            s += f"{', '.join(ant_str)}"
+            if len(self.antennas.polswap) > 0:
+                s += term.bright_black('Polswapped antennas: ') +  f"{', '.join(self.antennas.polswap)}\n"
+
+            if len(self.antennas.polconvert) > 0:
+                s += term.bright_black('Polconverted antennas: ') + f"{', '.join(self.antennas.polconvert)}\n"
+
+            if len(self.antennas.onebit) > 0:
+                s += term.bright_black('Onebit antennas: ') + f"{', '.join(self.antennas.onebit)}\n"
+
+            missing_logs = [a.name for a in self.antennas if not a.logfsfile]
+            if len(missing_logs) > 0:
+                s += term.bright_black('Missing log files: ') + f"{', '.join(missing_logs)}\n"
+
+            missing_antabs = [a.name for a in self.antennas if not a.antabfsfile]
+            if len(missing_antabs) > 0:
+                s += term.bright_black('Missing ANTAB files: ') + f"{', '.join(missing_antabs)}\n"
+
+            s += term.bright_black('Reference Antenna:') + f"{', '.join(self.refant)}\n"
+            s_final = term.wrap(s, width=term.width)
+
+            def print_all(ss):
+                print(ss)
+                print(term.move_y(term.height - 3) + \
+                      term.center(term.on_bright_black('press any key to continue (or Q to cancel)')).rstrip())
+                return term.inkey().strip()
+
+            # Fitting the terminal
+            i, i_width = 0, term.height - 5
+            while i + i_width <= len(s_final):
+                if print_all(s[i:i + i_width]).lower() == 'q':
+                    return False
+                i += i_width
+
+            if i < len(s_final):
+                if print_all(s[i:]).lower() == 'q':
+                    return False
+
+            return True
+
+
+    def print_blessed2(self):
         """Blessed print of the full experiment.
         """
         term = blessed.Terminal()
