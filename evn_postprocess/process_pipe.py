@@ -87,9 +87,9 @@ def run_antab_editor(exp):
         return True
 
     if exp.eEVNname is not None:
-        print(f"This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}.\n"
+        rprint(f"[bold red]This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}.\n"
               "Please run antab_editor.py manually to include all experiment associated to the run "
-              "(using the '-a' option).\n\nThen run the post-processing again.")
+              "(using the '-a' option).\n\nThen run the post-processing again.[/bold red]")
         # I fake it to be sucessful in the object to let it to run seemless in a following iteraction
         return None
 
@@ -98,7 +98,7 @@ def run_antab_editor(exp):
     else:
         cmd, _ = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py']))
 
-    print('\n\n\nRun antab_editor.py manually in pipe.')
+    rprint('\n\n\n[bold red]Run antab_editor.py manually in pipe.[/bold red]')
     exp.log(cmd)
     return None
 
@@ -123,7 +123,8 @@ def create_uvflg(exp):
     else:
         cd = f"/jop83_0/pipe/in/{exp.supsci}/{exp.eEVNname.lower()}"
         if not env.remote_file_exists('pipe@jop83', f"{cd}/{exp.eEVNname.lower()}.uvflg"):
-            print(f"You first need to process the original experiment in this e-EVN run ({exp.eEVNname}).")
+            rprint(f"[bold red]You first need to process the original experiment "
+                   f"in this e-EVN run ({exp.eEVNname}).[/bold red]")
             print("Once you have created the .uvflg file for such expeirment I will be able to run by myself.")
             return None
 
