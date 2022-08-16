@@ -15,12 +15,14 @@ from evn_postprocess.evn_postprocess import dialog
 from evn_postprocess.evn_postprocess import environment as env
 
 
-__version__ = 0.5
-__prog__ = 'evn_postprocess.py'
-usage = "%(prog)s  [-h]  <experiment_name>  <support_scientist>\n"
+__version__ = 0.8
+__prog__ = 'postprocess'
+usage = "%(prog)s  [-h] [options]\n"
 description = """Post-processing of EVN experiments.
-The program runs the full post-process for a correlated EVN experiment, from retrieving the correlated
-products to run the EVN pipeline following the steps described in the EVN Post-Processing Guide.
+The program runs the full post-processing for a correlated EVN experiment until distribution, following the steps described in the EVN Post-Processing Guide.
+
+The program would retrieve the experiment code from the current working directory, and the associated Support Scientist from the parent directory. Otherwise they need to be specified manually.
+
 
 The user can also specify to run only some of the steps or to start the process from a given step
 (for those cases when the process has partially run previously). If the post-processing already run in teh past,
@@ -53,6 +55,12 @@ help_steps = 'Specify the step to start the post-processing (if you want to star
              'check with -h the available steps. If two steps are provided (comma-separated ' \
              'without spaces), then it will run the steps from the first to the second one.'
 
+help_edit = """You can edit some of the parameters of the experiment with the pair '--edit param value'.
+The following parameters are allowed:
+
+    - refant: change the reference antenna
+    - calsour: change the sources used for standardplots. If more than one, they must be comma-separated and with no spaces.
+"""
 help_gui = 'Type of GUI to use for interactions with the user:\n' \
            '- "terminal" (default): it uses the basic prompt in the terminal.\n' \
            '- "tui": uses the Terminal-based User Interface.\n' \
@@ -79,18 +87,20 @@ def main():
     parser.add_argument('-e', '--expname', type=str, default=None,
                         help='Name of the EVN experiment (case-insensitive).')
     parser.add_argument('-jss', '--supsci', type=str, default=None, help='Surname of the EVN Support Scientist.')
-    parser.add_argument('-r', '--refant', type=str, default=None, help='Reference antenna.')
-    parser.add_argument('-cal', '--calsources', type=str, default=None, help=help_calsources)
-    parser.add_argument('--onebit', type=str, default=None,
-                        help='Antennas recording at 1 bit (comma-separated)')
-    parser.add_argument('--steps', type=str, default=None, help=help_steps)
-    parser.add_argument('--j2ms2par', type=str, default=None,
-                        help='Additional attributes for j2ms2 (like the fo:).')
-    parser.add_argument('--gui', type=str, default=None, help=help_gui)
     parser.add_argument('--info', default=False, action='store_true',
-                        help='Returns the metadata from the experiment (all is known to the moment to me).')
+                        help='Returns the metadata from the experiment (all what is known to this moment to me).')
     parser.add_argument('--last', default=False, action='store_true',
                         help='Returns the last step conducted in a previous run.')
+    parser.add_argument('--step', type=str, default=None, help=help_steps)
+    parser.add_argument('--edit', type=str, nargs=2, default=None, help=help_edit)
+    # parser.add_argument('-r', '--refant', type=str, default=None, help='Reference antenna.')
+    parser.add_argument('-cal', '--calsources', type=str, default=None, help=help_calsources)
+    parser.add_argument('--edit', type=str, default=None, help=help_gui)
+    parser.add_argument('--j2ms2par', type=str, default=None,
+                        help='Additional attributes for j2ms2 (like the fo:).')
+    # parser.add_argument('--gui', type=str, default=None, help=help_gui)
+    parser.add_argument('--onebit', type=str, default=None,
+                        help='Antennas recording at 1 bit (comma-separated)')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
 
     args = parser.parse_args()
@@ -107,15 +117,15 @@ def main():
     exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
             f"# Running on: {dt.today().strftime('%d %b %Y %H:%M')}\n")
 
-    if args.gui == 'terminal' or args.gui is None:
-        exp.gui = dialog.Terminal()
-    elif args.gui.lower() == 'tui':
-        raise NotImplementedError("'tui' option not implemented yet.")
-    elif args.gui.lower() == 'gui':
-        raise NotImplementedError("'gui' option not implemented yet.")
-    else:
-        print(f"gui option not recognized. Expecting 'terminal', 'tui', or 'gui'. Obtained {args.gui}")
-        sys.exit(1)
+    # if args.gui == 'terminal' or args.gui is None:
+    #     exp.gui = dialog.Terminal()
+    # elif args.gui.lower() == 'tui':
+    #     raise NotImplementedError("'tui' option not implemented yet.")
+    # elif args.gui.lower() == 'gui':
+    #     raise NotImplementedError("'gui' option not implemented yet.")
+    # else:
+    #     print(f"gui option not recognized. Expecting 'terminal', 'tui', or 'gui'. Obtained {args.gui}")
+    #     sys.exit(1)
 
     if exp.cwd != Path.cwd():
         os.chdir(exp.cwd)
@@ -133,6 +143,25 @@ def main():
     if args.info:
         exp.print_blessed()
         sys.exit(0)
+
+    if args.edit is not None:
+        edit_param = args.edit[0].strip()
+        if edit_param == 'refant':
+            exp.refant = args.edit[1].strip().capitalize()
+        elif edit_param == 'calsour':
+            exp.sources_stdplot = [cs.strip() for cs in args.edit[1].split(',')]
+        elif edit_param == 'onebit':
+            exp.special_params = {'onebit': [ant.strip().capitalize() for ant in args.edit[1].split(',')]}
+        elif edit_param == 'polswap':
+            for ant in args.edit[1].split(','):
+                exp.antennas[ant].polswap = True
+        elif edit_param == 'polconvert':
+            for ant in args.edit[1].split(','):
+                exp.antennas[ant].polconvert = True
+        sys.exit(0)
+
+    if args.j2ms2par is not None:
+        exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
 
     try:
         step_keys = list(all_steps.keys())
@@ -169,18 +198,6 @@ def main():
               "Run the program with '-h' to see the expected options")
         traceback.print_exc()
         sys.exit(1)
-
-    if args.refant is not None:
-        exp.refant = args.refant
-
-    if args.calsources is not None:
-        exp.sources_stdplot = [cs.strip() for cs in args.calsources.split(',')]
-
-    if args.onebit is not None:
-        exp.special_params = {'onebit': [ant.strip().capitalize() for ant in args.onebit(',')]}
-
-    if args.j2ms2par is not None:
-        exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
 
     # TODO: This is temporal, until the script works completely
     if not os.path.isfile('processing_manual.log'):

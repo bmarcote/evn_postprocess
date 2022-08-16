@@ -23,6 +23,21 @@ import blessed
 from . import environment as env
 from . import dialog
 
+def chunkert(f, l, cs, verbose=True):
+    while f<l:
+        n = min(cs, l-f)
+        yield (f, n)
+        f = f + n
+
+percent = lambda x, y: (float(x)/float(y))*100.0
+
+def cli_progress_bar(current_val, end_val, bar_length=40):
+        percent = current_val/end_val
+        hashes = '#'*int(round(percent*bar_length))
+        spaces = ' '*(bar_length-len(hashes))
+        sys.stdout.write("\rProgress: [{0}] {1}%".format(hashes+spaces, int(round(percent*100))))
+        sys.stdout.flush()
+
 
 class Credentials(object):
     """Authentification for a given experiment. This class specifies two attributes:
@@ -744,6 +759,17 @@ class Experiment(object):
                             else:
                                 ant = Antenna(name=ant_name, observed=True)
                                 self.antennas.add(ant)
+
+                    print('\nReading the MS to find the missing antennas...')
+                    for (start, nrow) in chunkert(0, len(ms), 5000):
+                        ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
+                        ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
+                        msdata = ms.getcol('DATA', startrow=start, nrow=nrow)
+                        cli_progress_bar(start, len(ms), bar_length=40)
+
+                    for antenna,antenna_name in enumerate(self.antennas.names):
+                        cond = np.where((ants1 == antenna) & (ants2 == antenna))
+                        self.antennas[antenna_name].observed = (abs(msdata[cond]) < 1e-6).all()
 
                     # Takes the predefined "best" antennas as reference
                     if self.refant is None:
