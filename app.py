@@ -23,43 +23,52 @@ The program runs the full post-processing for a correlated EVN experiment until 
 
 The program would retrieve the experiment code from the current working directory, and the associated Support Scientist from the parent directory. Otherwise they need to be specified manually.
 
-
 The user can also specify to run only some of the steps or to start the process from a given step
 (for those cases when the process has partially run previously). If the post-processing already run in teh past,
 it will automatically continue from the last successful step that run.
 
+"""
+
+help_calsources = 'Calibrator sources to use in standardplots (comma-separated, no spaces). ' \
+                  'If not provided, it will pick the fringefinders found in the .expsum file.'
+help_steps = """Specify the step to start the post-processing (if you want to start it mid-way),
+check with -h the available steps. If two steps are provided (comma-separated
+without spaces), then it will run the steps from the first to the second one.
 The available steps are:
 
-    - setting_up : Sets up the experiment, creates the required folders in @eee and @pipe, and copy the
-                   already-existing files (.expsum, .vix, etc).
+    - setting_up : Sets up the experiment, creates the required folders in @eee and @pipe,
+                   and copy the already-existing files (.expsum, .vix, etc).
     - lisfile : Produces a .lis file in @ccs and copies them to @eee.
     - checklis : Checks the existing .lis files and asks the user some parameters to continue.
     - ms : Gets the data for all available .lis files and runs j2ms2 to produce MS files.
     - plots : Runs standardplots.
     - msops : Runs the full MS operations like ysfocus, polswap, flag_weights, etc.
     - tconvert : Runs tConvert on all available MS files, and runs polConvert is required.
-    - post_polconvert : if polConvert did run, then renames the new *.PCONVERT files and do standardplots on them.
-    - archive : Sets the credentials for the experiment, create the pipe letter and archive all the data.
-    - antab : Retrieves the .antab file to be used in the pipeline. If it was not generated, Opens antab_editor.py.
+    - post_polconvert : if polConvert did run, then this steps renames the new *.PCONVERT
+                        files and do standardplots on them.
+    - archive : Sets the credentials for the experiment,
+                create the pipe letter and archive all the data.
+    - antab : Retrieves the .antab file to be used in the pipeline.
+              If it was not generated, Opens antab_editor.py.
               Needs to run again once you have run antab_editor.py manually.
     - pipeinputs : Prepares a draft input file for the pipeline and recovers all needed files.
     - pipeline : Runs the EVN Pipeline for all correlated passes.
-    - postpipe : Runs all steps to be done after the pipeline: creates tasav, comment files, feedback.pl
-    - last : Appends Tsys/GC and re-archive FITS-IDI and the PI letter. Asks to conduct the last post-processing steps.
-
+    - postpipe : Runs all steps to be done after the pipeline:
+                 creates tasav, comment files, feedback.pl
+    - last : Appends Tsys/GC and re-archive FITS-IDI and the PI letter.
+             Asks to conduct the last post-processing steps.
 """
 
-help_calsources = 'Calibrator sources to use in standardplots (comma-separated, no spaces). ' \
-                  'If not provided, it will pick the fringefinders found in the .expsum file.'
-help_steps = 'Specify the step to start the post-processing (if you want to start it mid-way), ' \
-             'check with -h the available steps. If two steps are provided (comma-separated ' \
-             'without spaces), then it will run the steps from the first to the second one.'
-
-help_edit = """You can edit some of the parameters of the experiment with the pair '--edit param value'.
+help_edit = """You can edit some of the parameters of the experiment.
+Note that if you assign the values before they are read from the processing
+normal tasks they may be overwriten.
 The following parameters are allowed:
-
-    - refant: change the reference antenna
-    - calsour: change the sources used for standardplots. If more than one, they must be comma-separated and with no spaces.
+    - refant : change the reference antenna(s).
+    - calsour : change the sources used for standardplots.
+                If more than one, they must be comma-separated and with no spaces.
+    - polconvert : marks the antennas to be pol converted.
+    - polswap : marks the antennas to be pol swapped.
+    - onebit :  marks the antennas to be corrected because they observed with one bit.
 """
 help_gui = 'Type of GUI to use for interactions with the user:\n' \
            '- "terminal" (default): it uses the basic prompt in the terminal.\n' \
@@ -92,15 +101,10 @@ def main():
     parser.add_argument('--last', default=False, action='store_true',
                         help='Returns the last step conducted in a previous run.')
     parser.add_argument('--step', type=str, default=None, help=help_steps)
-    parser.add_argument('--edit', type=str, nargs=2, default=None, help=help_edit)
-    # parser.add_argument('-r', '--refant', type=str, default=None, help='Reference antenna.')
-    parser.add_argument('-cal', '--calsources', type=str, default=None, help=help_calsources)
-    parser.add_argument('--edit', type=str, default=None, help=help_gui)
+    parser.add_argument('--edit', type=str, nargs=2, default=None, help=help_edit, metavar=('PARAM', 'VALUE'))
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:).')
     # parser.add_argument('--gui', type=str, default=None, help=help_gui)
-    parser.add_argument('--onebit', type=str, default=None,
-                        help='Antennas recording at 1 bit (comma-separated)')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
 
     args = parser.parse_args()
