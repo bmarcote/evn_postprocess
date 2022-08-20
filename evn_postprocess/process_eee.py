@@ -14,6 +14,8 @@ import random
 import traceback
 from pathlib import Path
 import subprocess
+from rich import print as rprint
+from rich.markdown import Markdown
 from . import dialog
 from . import experiment
 from . import environment
@@ -114,7 +116,7 @@ def j2ms2(exp):
                                                    shell=True, stdout=None,
                                                    stderr=subprocess.STDOUT, bufsize=0)
             else:
-                if self.eEVNname is None:
+                if exp.eEVNname is None:
                     cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
                                                                  "fo:nosquash_source_table"],
                                                        shell=True, stdout=None,
@@ -462,31 +464,31 @@ def send_letters(exp):
     """Remembers you to update the PI letter and send it , and the pipeletter, to the PIs.
     Finally, it runs parsePIletter.
     """
-    # dialog.continue_dialog("Please update the PI letter if needed before continue.", f"{exp.expname} -- PI letter")
     environment.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")
-    # environment.shell_command("parsePIletter.py", ["-s", exp.obsdatetime.strftime("%b%y"),
-    #                                                f"{exp.expname.lower()}.piletter"])
     #TODO: what if there are co-pis
-    print("\n\n\033[1mSend the letters to the PI.\033[0m")
-    print(f"Send the PI letter to {exp.piname.capitalize()}: {exp.email} (CC jops@jive.eu).")
-    print(f"Send the pipe letter to {exp.piname.capitalize()}: {exp.email}.")
+    print("\n\n\n")
+    rprint("[center][bold red] --- Send the PI letter --- [/bold red][/center]")
+    rprint(f"[green]Send the file [bold]{exp.expname.lower()}.piletter_auth[/bold] to")
+    rprint(f"{exp.piname.capitalize()}: {exp.email} (CC jops@jive.eu)[/green]")
     return True
 
 
 def antenna_feedback(exp):
-    print("\n\nNow it is also time to bookkeep the issues that you may have seen in the antennas.\n")
-    print(f"Update the (Grafana) database with the technical issues that antennas did not raise at:")
-    print(f"http://archive.jive.nl/scripts/getfeed.php?exp={exp.expname.upper()}_{exp.obsdate}\n")
-    print("Also go to the JIVE RedMine to write down the relevant issues with particular antennas:")
-    print("https://jrm.jive.nl/projects/science-support/news\n\n")
+    rprint("\n[center][bold red] --- Also update the database with the observed issues --- [/bold red][/center]")
+    rprint("[bold]Now it is also time to bookkeep the issues that you may have seen in the antennas at[/bold]")
+    rprint(f"http://archive.jive.nl/scripts/getfeed.php?exp={exp.expname.upper()}_{exp.obsdate}\n")
+    rprint("[bold]Also go to the JIVE RedMine to write down the relevant issues with particular antennas[/bold]:")
+    rprint("https://jrm.jive.nl/projects/science-support/news\n\n")
+    return True
 
 
 def nme_report(exp):
     if exp.expname[0] == 'N':
         # This is a NME.
-        print('Now it is time to write the NME Report. Good luck!')
+        rprint("[center][bold red]Now it is time to write the NME Report... Good luck![/bold red][/center]")
     else:
-        print('Experiment done!\nYou may have a coffee/tea now.')
+        rprint("[center][bold]Experiment done![/bold][/center]\n")
+        print("You may have a coffee/tea after finishing the last tasks!")
 
     return True
 
