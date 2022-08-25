@@ -5,8 +5,6 @@ verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 
 """
-
-
 import os
 import glob
 import string
@@ -398,8 +396,8 @@ def post_polconvert(exp):
     return None
 
 
-def set_credentials_pipelet(exp):
-    """Sets the credentials for the given experiment and creates the .pipelet file.
+def set_credentials(exp):
+    """Sets the credentials for the given experiment.
     In case of an NME or test, it does not set any credential.
     Otherwise, it will take the credentials from a .auth file if already exists,
     or creates such file iwth a new password.
@@ -409,9 +407,6 @@ def set_credentials_pipelet(exp):
     elif len(glob.glob("*_*.auth")) == 1:
         # Some credentials are already in place.
         exp.set_credentials(*glob.glob("*_*.auth")[0].split('.')[0].split('_'))
-        if not os.path.isfile(f"{exp.expname.lower()}.pipelet"):
-            environment.shell_command("pipelet.py", [exp.expname.lower(), exp.supsci.lower()])
-            exp.log(f"pipelet.py {exp.expname.lower()} {exp.supsci.lower()}")
 
     elif len(glob.glob("*_*.auth")) > 1:
         raise ValueError("More than one .auth file found in the directory.")
@@ -420,11 +415,19 @@ def set_credentials_pipelet(exp):
         exp.set_credentials(username=exp.expname.lower(),
                             password="".join(random.sample(possible_char, 12)))
         environment.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
-        environment.shell_command("pipelet.py", [exp.expname.lower(), exp.supsci.lower()])
         exp.log(f"touch {exp.credentials.username}_{exp.credentials.password}.auth")
-        exp.log(f"pipelet.py {exp.expname.lower()} {exp.supsci.lower()}")
 
     return True
+
+
+def create_pipelet(exp):
+    """Makes a copy of the PI letter including the credentials to download the experiment.
+    If there are no credentials for the experiment (unprotected ones, like the NMEs), then it does
+    not create any file.
+    If the file exists, it will be overwritten.
+    """
+    environment.shell_command("pipelet.py", [exp.expname.lower(), exp.supsci.lower()])
+    exp.log(f"pipelet.py {exp.expname.lower()} {exp.supsci.lower()}")
 
 
 def archive(exp):
@@ -491,13 +494,3 @@ def nme_report(exp):
         print("You may have a coffee/tea after finishing the last tasks!")
 
     return True
-
-# def archive_piletter(exp):
-#     """(Re-)archive the PI letter.
-#     """
-#     environment.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")
-
-# print('Everything is archived. Please continue manually in pipe.\n')
-# Work at eee done!!
-
-
