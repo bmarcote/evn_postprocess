@@ -122,7 +122,7 @@ def main():
             f"# Running on: {dt.today().strftime('%d %b %Y %H:%M')}\n")
 
     # if args.gui == 'terminal' or args.gui is None:
-    #     exp.gui = dialog.Terminal()
+    exp.gui = dialog.Terminal()
     # elif args.gui.lower() == 'tui':
     #     raise NotImplementedError("'tui' option not implemented yet.")
     # elif args.gui.lower() == 'gui':
@@ -169,36 +169,36 @@ def main():
 
     try:
         step_keys = list(all_steps.keys())
-        if (exp.last_step is None) and (args.steps is None):
+        if (exp.last_step is None) and (args.step is None):
             the_steps = step_keys
-        elif (exp.last_step is not None) and (args.steps is None):
+        elif (exp.last_step is not None) and (args.step is None):
             the_steps = step_keys[step_keys.index(exp.last_step)+1:]
             exp.log(f"Starting after the last sucessful step from a previous run ('{exp.last_step}').", False)
             print(f"Starting after the last sucessful step from a previous run ('{exp.last_step}').")
         else:
-            if ',' in args.steps:
-                if args.steps.count(',') > 1:
+            if ',' in args.step:
+                if args.step.count(',') > 1:
                     raise ValueError
-                args.steps = args.steps.split(',')
-                for a_step in args.steps:
+                args.step = args.step.split(',')
+                for a_step in args.step:
                     if a_step not in all_steps:
                         raise KeyError
-                the_steps = step_keys[step_keys.index(args.steps[0]):step_keys.index(args.steps[1])]
+                the_steps = step_keys[step_keys.index(args.step[0]):step_keys.index(args.step[1])]
                 exp.log(f"Running only the following steps: {', '.join(the_steps)}.", False)
                 print(f"Running only the following steps: {', '.join(the_steps)}.")
             else:
-                if args.steps not in all_steps:
+                if args.step not in all_steps:
                     raise KeyError
-                the_steps = step_keys[step_keys.index(args.steps):]
-                exp.log(f"Starting at the step '{args.steps}'.")
-                print(f"Starting at the step '{args.steps}'.")
+                the_steps = step_keys[step_keys.index(args.step):]
+                exp.log(f"Starting at the step '{args.step}'.")
+                print(f"Starting at the step '{args.step}'.")
     except ValueError:
         print("ERROR: more than two steps have been introduced.\n"
               "Only one or two options are expected.")
         traceback.print_exc()
         sys.exit(1)
     except KeyError:
-        print("ERROR: the introduced step ({args.steps}) is not recognized.\n"
+        print("ERROR: the introduced step ({args.step}) is not recognized.\n"
               "Run the program with '-h' to see the expected options")
         traceback.print_exc()
         sys.exit(1)
