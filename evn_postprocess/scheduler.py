@@ -37,7 +37,7 @@ def setting_up_environment(exp: experiment.Experiment):
     """Sets up the environment for the post-processing of the experiment.
     This implies to create the
     """
-    output = dispatcher(exp, (env.create_all_dirs, env.copy_files, eee.set_credentials_pipelet))
+    output = dispatcher(exp, (env.create_all_dirs, env.copy_files, eee.set_credentials))
     exp.parse_expsum()
     output = dispatcher(exp, (pipe.get_files_from_vlbeer, ))
     exp.store()
@@ -191,7 +191,8 @@ def after_pipeline(exp: experiment.Experiment):
 
 
 def final_steps(exp: experiment.Experiment):
-    output = dispatcher(exp, (eee.append_antab, pipe.ampcal, eee.send_letters, eee.antenna_feedback, eee.nme_report))
+    output = dispatcher(exp, (eee.append_antab, pipe.ampcal, eee.create_pipelet, eee.send_letters, 
+                              eee.antenna_feedback, eee.nme_report))
     exp.last_step = 'last'
     exp.store()
     return output
