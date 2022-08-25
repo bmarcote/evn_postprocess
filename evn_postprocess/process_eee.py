@@ -468,8 +468,8 @@ def send_letters(exp):
     #TODO: what if there are co-pis
     print("\n\n\n")
     rprint("[center][bold red] --- Send the PI letter --- [/bold red][/center]")
-    rprint(f"[green]Send the file [bold]{exp.expname.lower()}.piletter_auth[/bold] to")
-    rprint(f"{exp.piname.capitalize()}: {exp.email} (CC jops@jive.eu)[/green]")
+    rprint(f"[green]Send the file [bold]{exp.expname.lower()}.piletter_auth[/bold] to " \
+           f"{exp.piname.capitalize()}: {exp.email} (with copy to jops@jive.eu).[/green]")
     return True
 
 
