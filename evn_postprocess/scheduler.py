@@ -1,5 +1,4 @@
 from rich import print as rprint
-from rich.markdown import Markdown
 from . import experiment
 from . import environment as env
 from . import process_ccs as ccs
@@ -177,13 +176,14 @@ def after_pipeline(exp: experiment.Experiment):
     exp.last_step = 'postpipe'
     exp.store()
     rprint('\n\n[bold green][center]Now check manually the Pipeline results in the browser:[/center][/bold green]')
-    rprint(f"[center]{exp.archive_page}[/center]\n")
-    rprint(Markdown("""[green]If you are happy with the results:[/green]
-    1. Update the PI letter manually.
-    2. Run me (`postprocess`) again.
-[green]If you are **not** happy with the results:[/green]
-    1. Re-run the pipeline manually (after modifying the needed input files).
-    2. Run me again with `postprocess --steps postpipe`.[/green]\n"""))
+    rprint(f"{exp.archive_page}\n")
+    rprint("[red]Protect the results if you haven't done it yet at http://archive.jive.nl/scripts/pipe/admin.php[/red]\n")
+    rprint("[bold green]If you are happy with the results:[/bold green]")
+    rprint("[green]    1. Update the PI letter manually.[/green]")
+    rprint("[green]    2. Run me (`postprocess`) again.[/green]\n")
+    rprint("[bold green]If you are NOT happy with the results:[/bold green]")
+    rprint("[green]    1. Re-run the pipeline manually (after modifying the needed input files).[/green]")
+    rprint("[green]    2. Run me again with `postprocess --steps postpipe`.[/green]\n")
     if output:
         raise ManualInteractionRequired('')
 
