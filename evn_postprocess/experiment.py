@@ -197,6 +197,7 @@ class Antenna:
     onebit: bool = False
     logfsfile: bool = False
     antabfsfile: bool = False
+    opacity: bool = False  # if data have opacity correction in the ANTAB file
 
 
 class Antennas(object):
@@ -247,6 +248,10 @@ class Antennas(object):
     @property
     def antabfsfile(self):
         return [a.name for a in self._antennas if a.antabfsfile]
+
+    @property
+    def opacity(self):
+        return [a.name for a in self._antennas if a.opacity]
 
     def __len__(self):
         return len(self._antennas)
