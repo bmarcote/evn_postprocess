@@ -191,7 +191,6 @@ class Antenna:
     scheduled: bool = True
     observed: bool = False
     subbands: list = []
-    # reference: bool = False
     polswap: bool = False
     polconvert: bool = False
     onebit: bool = False
@@ -224,8 +223,13 @@ class Antennas(object):
     def observed(self):
         return [a.name for a in self._antennas if a.observed]
 
-    # def reference(self):
-    #     return [a.name for a in self._antennas if a.reference]
+    @property
+    def subbands(self):
+        d = {}
+        for ant in self._antennas:
+            d[ant.name] = ant.subbands
+
+        return d
 
     @property
     def polswap(self):
@@ -775,16 +779,26 @@ class Experiment(object):
                                 ant = Antenna(name=ant_name, observed=True)
                                 self.antennas.add(ant)
 
+                    with pt.table(ms.getkeyword('DATA_DESCRIPTION'), readonly=True, ack=False) as ms_spws:
+                        spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
+
                     print('\nReading the MS to find the missing antennas...')
                     for (start, nrow) in chunkert(0, len(ms), 5000):
                         ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
                         ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
+                        spws = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
                         msdata = ms.getcol('DATA', startrow=start, nrow=nrow)
                         cli_progress_bar(start, len(ms), bar_length=40)
 
-                    for antenna,antenna_name in enumerate(self.antennas.names):
-                        cond = np.where((ants1 == antenna) & (ants2 == antenna))
-                        self.antennas[antenna_name].observed = not (abs(msdata[cond]) < 1e-6).all()
+                        for antenna,antenna_name in enumerate(self.antennas.names):
+                            for spw in spw_names:
+                                cond = np.where((ants1 == antenna) & (ants2 == antenna) & (spws == spw))
+                                if not (abs(msdata[cond]) < 1e-6).all():
+                                    if spw not in self.antennas[antenna_name].subbands:
+                                        self.antennas[antenna_name].subbands.add(spw)
+
+                    for antenna in self.antennas.names:
+                        self.antennas[antenna].observed = len(self.antennas[antenna].subbands) > 0
 
                     # Takes the predefined "best" antennas as reference
                     if self.refant is None:
