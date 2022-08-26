@@ -760,15 +760,14 @@ class Experiment(object):
         from all existing passes with MS files and incorporate them into the current object.
         """
         for i, a_pass in enumerate(self.correlator_passes):
+            a_pass.antennas = Antennas()
             try:
                 with pt.table(a_pass.msfile.name, readonly=True, ack=False) as ms:
                     with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
-                        for ant_name in ms_ant.getcol('NAME'):
-                            if ant_name in a_pass.antennas.names:
-                                self._passes[i].antennas[ant_name].observed = True
-                            else:
-                                ant = Antenna(name=ant_name, observed=True)
-                                self._passes[i].antennas.add(ant)
+                        antenna_col = ms_ant.getcol('NAME')
+                        for ant_name in antenna_col:
+                            ant = Antenna(name=ant_name, observed=True)
+                            a_pass.antennas.add(ant)
 
                             if ant_name.capitalize() in self.antennas.names:
                                 self.antennas[ant_name.capitalize()].observed = True
@@ -788,9 +787,9 @@ class Experiment(object):
                         msdata = ms.getcol('DATA', startrow=start, nrow=nrow)
                         cli_progress_bar(start, len(ms), bar_length=40)
 
-                        for antenna,antenna_name in enumerate(self.antennas.names):
+                        for ant_i,antenna_name in enumerate(antenna_col):
                             for spw in spw_names:
-                                cond = np.where((ants1 == antenna) & (ants2 == antenna) & (spws == spw))
+                                cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
                                 if not (abs(msdata[cond]) < 1e-5).all():
                                     ant_subband[antenna_name].add(spw)
 
@@ -819,7 +818,8 @@ class Experiment(object):
                 print(f"WARNING: {a_pass.msfile} not found.")
 
         for antenna_name in self.antennas.names:
-            self.antennas[antenna_name].observed = any([cp.antennas[antenna_name].observed for cp in self.correlator_passes])
+            self.antennas[antenna_name].observed = any([cp.antennas[antenna_name].observed \
+                                                        for cp in self.correlator_passes])
 
     def parse_expsum(self):
         """Parses the .expsum file associated to the experiment to get different
