@@ -48,6 +48,7 @@ def get_files_from_vlbeer(exp):
             elif ext == 'antabfs':
                 exp.antennas[ant].antabfsfile = True
 
+
     exp.log(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
     if len(set(exp.antennas.names)-set(exp.antennas.logfsfile)) > 0:
         exp.log(f"# Missing files for: {', '.join((set(exp.antennas.names)-set(exp.antennas.logfsfile)).intersection(set(exp.antennas.observed)))}\n")
@@ -60,6 +61,15 @@ def get_files_from_vlbeer(exp):
     else:
         exp.log("# No missing antab files for any station that observed.\n")
 
+    # In case of high-freq observations, some stations added the "opacity_corrected" flag to the POLY=
+    # line, against any standard... Let's remove it so antab_editor (later) can work fine.
+    cmd, output = env.ssh('pipe@jop83',
+        f"grep -l ,opacity_corrected /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}*.antabfs")
+    the_files = [o for o in output.split('\n') if o != '']  # just to avoid trailing \n
+    for a_file in the_files:
+        cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/,opacity_corrected//g' " \
+                                       f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}/{a_file}", shell=False)
+        exp.log(cmd)
     return True
 
 
@@ -95,10 +105,11 @@ def run_antab_editor(exp):
 
     if len(exp.correlator_passes) == 2:
         cmd, _ = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py -l']))
+        rprint('\n\n\n[bold red]Run `antab_editor.py -l` manually in pipe.[/bold red]')
     else:
         cmd, _ = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py']))
+        rprint('\n\n\n[bold red]Run antab_editor.py manually in pipe.[/bold red]')
 
-    rprint('\n\n\n[bold red]Run antab_editor.py manually in pipe.[/bold red]')
     exp.log(cmd)
     return None
 
@@ -173,7 +184,6 @@ def create_input_file(exp):
                   "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()),
                   shell=False)
     exp.log(cmd, False)
-    # TODO: Replace replace by sed
     for a_change in to_change:
         cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
                                     f"{'/jop83_0/pipe/in/{0}/{0}.inp.txt'.format(exp.expname.lower())}", shell=False)
