@@ -50,15 +50,15 @@ def get_files_from_vlbeer(exp):
 
     exp.log(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
     if len(set(exp.antennas.names)-set(exp.antennas.logfsfile)) > 0:
-        exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.logfsfile))}\n")
+        exp.log(f"# Missing files for: {', '.join((set(exp.antennas.names)-set(exp.antennas.logfsfile)).intersection(set(exp.antennas.observed)))}\n")
     else:
-        exp.log("# No missing log files for any station.\n")
+        exp.log("# No missing log files for any station that observed.\n")
 
     exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}")
     if len(set(exp.antennas.names)-set(exp.antennas.antabfsfile)) > 0:
-        exp.log(f"# Missing files for: {', '.join(set(exp.antennas.names)-set(exp.antennas.antabfsfile))}\n")
+        exp.log(f"# Missing files for: {', '.join((set(exp.antennas.names)-set(exp.antennas.antabfsfile)).intersection(set(exp.antennas.observed)))}\n")
     else:
-        exp.log("# No missing antab files for any station.\n")
+        exp.log("# No missing antab files for any station that observed.\n")
 
     return True
 
@@ -169,22 +169,22 @@ def create_input_file(exp):
     if len(exp.correlator_passes) > 2:
         to_change += ["#doprimarybeam = 1", "doprimarybeam = 1"]
 
-    cmd = env.ssh('pipe@jop83',
+    cmd, _ = env.ssh('pipe@jop83',
                   "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()),
                   shell=False)
     exp.log(cmd, False)
     # TODO: Replace replace by sed
     for a_change in to_change:
-        cmd = env.ssh('pipe@jop83', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
+        cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
                                     f"{'/jop83_0/pipe/in/{0}/{0}.inp.txt'.format(exp.expname.lower())}", shell=False)
         exp.log(cmd, False)
     if len(exp.correlator_passes) > 1:
-        cmd = env.ssh('pipe@jop83',
+        cmd, _ = env.ssh('pipe@jop83',
                       "mv /jop83_0/pipe/in/{0}/{0}.inp.txt "
                       "/jop83_0/pipe/in/{0}/{0}_1.inp.txt".format(exp.expname.lower()))
         exp.log(cmd, False)
         for i in range(2, len(exp.correlator_passes)+1):
-            cmd = env.ssh('pipe@jop83',
+            cmd, _ = env.ssh('pipe@jop83',
                           "cp /jop83_0/pipe/in/{0}/{0}_1.inp.txt "
                           "/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt".format(exp.expname.lower(), i))
             exp.log(cmd, False)

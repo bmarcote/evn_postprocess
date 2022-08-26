@@ -15,6 +15,7 @@ import subprocess
 import datetime as dt
 from pathlib import Path
 from dataclasses import dataclass
+from collections import defaultdict
 from pyrap import tables as pt
 from enum import Enum
 from astropy import units as u
@@ -190,7 +191,7 @@ class Antenna:
     name: str
     scheduled: bool = True
     observed: bool = False
-    subbands: list = []
+    subbands: tuple = ()
     polswap: bool = False
     polconvert: bool = False
     onebit: bool = False
@@ -225,11 +226,7 @@ class Antennas(object):
 
     @property
     def subbands(self):
-        d = {}
-        for ant in self._antennas:
-            d[ant.name] = ant.subbands
-
-        return d
+        return [a.subbands for a in self._antennas if a.observed]
 
     @property
     def polswap(self):
@@ -284,7 +281,7 @@ class Antennas(object):
             s += f"1-bit data: {','.join(self.onebit)}\n "
 
         return f"Antennas([{','.join(self.names)}])\n Scheduled: {','.join(self.scheduled)}\n " \
-                "Observed: {','.join(self.observed)}\n " + s
+               f"Observed: {','.join(self.observed)}\n " + s
 
     def json(self):
         """Returns a dict with all attributes of the object.
@@ -739,7 +736,7 @@ class Experiment(object):
         self._email = None
         self._supsci = support_scientist.lower()
         self._obsdate = None
-        self._refant = None
+        self._refant = []
         self._src_stdplot = None
         # Attributes not known until the MS file is created
         self._startime = None
@@ -782,6 +779,7 @@ class Experiment(object):
                     with pt.table(ms.getkeyword('DATA_DESCRIPTION'), readonly=True, ack=False) as ms_spws:
                         spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
 
+                    ant_subband = defaultdict(set)
                     print('\nReading the MS to find the missing antennas...')
                     for (start, nrow) in chunkert(0, len(ms), 5000):
                         ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
@@ -793,12 +791,12 @@ class Experiment(object):
                         for antenna,antenna_name in enumerate(self.antennas.names):
                             for spw in spw_names:
                                 cond = np.where((ants1 == antenna) & (ants2 == antenna) & (spws == spw))
-                                if not (abs(msdata[cond]) < 1e-6).all():
-                                    if spw not in self.antennas[antenna_name].subbands:
-                                        self.antennas[antenna_name].subbands.add(spw)
+                                if not (abs(msdata[cond]) < 1e-5).all():
+                                    ant_subband[antenna_name].add(spw)
 
-                    for antenna in self.antennas.names:
-                        self.antennas[antenna].observed = len(self.antennas[antenna].subbands) > 0
+                    for antenna_name in self.antennas.names:
+                        a_pass.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
+                        a_pass.antennas[antenna_name].observed = len(a_pass.antennas[antenna_name].subbands) > 0
 
                     # Takes the predefined "best" antennas as reference
                     if self.refant is None:
@@ -819,6 +817,9 @@ class Experiment(object):
                                                     ms_spw.getcol('TOTAL_BANDWIDTH')[0])
             except RuntimeError:
                 print(f"WARNING: {a_pass.msfile} not found.")
+
+        for antenna_name in self.antennas.names:
+            self.antennas[antenna_name].observed = any([cp.antennas[antenna_name].observed for cp in self.correlator_passes])
 
     def parse_expsum(self):
         """Parses the .expsum file associated to the experiment to get different
@@ -1233,8 +1234,10 @@ class Experiment(object):
             s += term.bright_black('Observed antennas: ') + \
                  f"{', '.join([ant.name for ant in self.antennas if ant.observed])}\n"
             missing_ants = [ant.name for ant in self.antennas if not ant.observed]
-            s += term.bright_black('Missing antennas: ') + \
+            s += term.bright_black('Did not observe: ') + \
                  f"{', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}\n\n"
+            s += term.bright_black('Reference Antenna: ') + f"{', '.join([r.capitalize() for r in self.refant])}\n"
+
             if len(self.antennas.polswap) > 0:
                 s += term.bright_black('Polswapped antennas: ') +  f"{', '.join(self.antennas.polswap)}\n"
 
@@ -1244,15 +1247,29 @@ class Experiment(object):
             if len(self.antennas.onebit) > 0:
                 s += term.bright_black('Onebit antennas: ') + f"{', '.join(self.antennas.onebit)}\n"
 
-            missing_logs = [a.name for a in self.antennas if not a.logfsfile]
-            if len(missing_logs) > 0:
-                s += term.bright_black('Missing log files: ') + f"{', '.join(missing_logs)}\n"
+            missing_logs = [a.name for a in self.antennas if (not a.logfsfile) and a.observed]
+            s += term.bright_black('Missing log files: ') + \
+                 f"{', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}\n"
 
-            missing_antabs = [a.name for a in self.antennas if not a.antabfsfile]
-            if len(missing_antabs) > 0:
-                s += term.bright_black('Missing ANTAB files: ') + f"{', '.join(missing_antabs)}\n"
+            missing_antabs = [a.name for a in self.antennas if (not a.antabfsfile) and a.observed]
+            s += term.bright_black('Missing ANTAB files: ') + \
+                 f"{', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"
 
-            s += term.bright_black('Reference Antenna: ') + f"{', '.join([r.capitalize() for r in self.refant])}\n"
+            # In case of antennas not observing the full bandwidth (this may be per correlator pass)
+            ss = ""
+            if len(set([cp.freqsetup.n_subbands for cp in self.correlator_passes])) == 1:
+                for antenna in self.correlator_passes[0].antennas:
+                    if 0 < len(antenna.subbands) < self.correlator_passes[0].freqsetup.n_subbands:
+                        ss += f"    {antenna.name}: {antenna.subbands}\n"
+            else:
+                for antenna in self.correlator_passes[0].antennas:
+                    for i,a_pass in enumerate(self.correlator_passes):
+                        if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
+                            ss += f"    {antenna.name}: {antenna.subbands} (in correlator pass {a_pass.lisfile})\n"
+
+            if ss != "":
+                s += term.bright_black('Antennas with smaller bandwidth:\n') + ss
+
             s_final = term.wrap(s, width=term.width)
 
             def print_all(ss):

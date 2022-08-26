@@ -296,6 +296,26 @@ def update_piletter(exp):
 
                     destfile.write(tmp_line)
 
+                if 'Further remarks:' in tmp_line:
+                    destfile.write(tmp_line + '\n')
+                    if len(exp.antennas.polconvert) > 0:
+                        destfile.write(f"")
+
+                    ants_bw = []
+                    if len(set([cp.freqsetup.n_subbands for cp in exp.correlator_passes])) == 1:
+                        for antenna in exp.correlator_passes[0].antennas:
+                            if 0 < len(antenna.subbands) < exp.correlator_passes[0].freqsetup.n_subbands:
+                                ants_bw.append(f"{antenna.name} (subbands {min(antenna.subbands)}-{max(antenna.subbands)})")
+                    else:
+                        for antenna in exp.correlator_passes[0].antennas:
+                            for i,a_pass in enumerate(exp.correlator_passes):
+                                if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
+                                    ants_bw.append(f"{antenna.name} (subbands {min(antenna.subbands)}-{max(antenna.subbands)} "
+                                                   f"in correlator pass #{i})")
+                    # if len(ant_bw) > 0:
+                        
+
+
     os.rename(f"{exp.expname.lower()}.piletter~", f"{exp.expname.lower()}.piletter")
     return True
 
