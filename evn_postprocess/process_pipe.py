@@ -70,6 +70,8 @@ def get_files_from_vlbeer(exp):
         cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/,opacity_corrected//g' " \
                                        f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}/{a_file}", shell=False)
         exp.log(cmd)
+        antenna = a_file.split('/')[-1].replace('.antabfs', '').replace(exp.expname.lower(), '').capitalize()
+        exp.antennas[antenna].opacity = True
     return True
 
 

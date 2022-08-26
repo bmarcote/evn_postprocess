@@ -296,7 +296,7 @@ def update_piletter(exp):
                         tmp_line = tmp_line.replace('***percent flagged***', f"{flaggeddata:.2}")
 
                     destfile.write(tmp_line)
-                    if 'Further remarks:' not in tmp_line:
+                    if 'Further remarks:' in tmp_line:
                         if len(exp.antennas.polconvert) > 0:
                             destfile.write("\n")
                             if len(exp.antennas.polconvert) > 1:
@@ -328,12 +328,21 @@ def update_piletter(exp):
                                                 f"(in correlator pass #{i})")
 
                         if len(ants_bw) > 0:
-                            s = "\n- Note that "
+                            s = "- Note that "
                             for ant in ants_bw:
                                 s += f"{ant} only observed subbands {' and '.join(ants_bw[ant])}, and "
 
                             s += "due to their local bandwidth limitations.\n"
                             destfile.write(s)
+
+                        s = "- Note that the data from the antenna"
+                        s_end = " have been corrected for opacity in the Tsys/Gain Curve measurements."
+                        if len(exp.antennas.corrected) > 1:
+                            s += f"s {', '.join(exp.antennas.corrected[:-1])} and {exp.antennas.corrected[-1]}"
+                            destfile.write(s + s_end)
+                        elif len(exp.antennas.corrected) == 1:
+                            s += f" {exp.antennas.corrected[0]}"
+                            destfile.write(s + s_end)
 
     os.rename(f"{exp.expname.lower()}.piletter~", f"{exp.expname.lower()}.piletter")
     return True
