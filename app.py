@@ -151,6 +151,7 @@ def main():
     if args.edit is not None:
         edit_param = args.edit[0].strip()
         if edit_param == 'refant':
+            print(args.edit[0], args.edit[1])
             exp.refant = args.edit[1].strip().capitalize()
         elif edit_param == 'calsour':
             exp.sources_stdplot = [cs.strip() for cs in args.edit[1].split(',')]
@@ -162,6 +163,8 @@ def main():
         elif edit_param == 'polconvert':
             for ant in args.edit[1].split(','):
                 exp.antennas[ant].polconvert = True
+
+        exp.store()
         sys.exit(0)
 
     if args.j2ms2par is not None:
