@@ -23,7 +23,7 @@ import blessed
 from . import environment as env
 from . import dialog
 
-def chunkert(f, l, cs, verbose=True):
+def chunkert(f, l, cs):
     while f<l:
         n = min(cs, l-f)
         yield (f, n)
@@ -448,7 +448,7 @@ class CorrelatorPass(object):
         self._freqsetup = a_subband
 
     def __init__(self, lisfile: str, msfile: str, fitsidifile: str, pipeline: bool = True,
-                 antennas: Antennas = None, flagged_weights = None):
+                 antennas = None, flagged_weights = None):
         self._lisfile = Path(lisfile)
         self._msfile = Path(msfile)
         self._fitsidifile = fitsidifile
@@ -769,7 +769,7 @@ class Experiment(object):
 
                     for antenna,antenna_name in enumerate(self.antennas.names):
                         cond = np.where((ants1 == antenna) & (ants2 == antenna))
-                        self.antennas[antenna_name].observed = (abs(msdata[cond]) < 1e-6).all()
+                        self.antennas[antenna_name].observed = not (abs(msdata[cond]) < 1e-6).all()
 
                     # Takes the predefined "best" antennas as reference
                     if self.refant is None:
