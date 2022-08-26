@@ -190,6 +190,7 @@ class Antenna:
     name: str
     scheduled: bool = True
     observed: bool = False
+    subbands: list = []
     # reference: bool = False
     polswap: bool = False
     polconvert: bool = False
@@ -266,6 +267,20 @@ class Antennas(object):
 
     def __contains__(self, key):
         return key in self.names
+
+    def __str__(self):
+        s = ""
+        if len(self.polswap) > 0:
+            s += f"PolSwapped: {','.join(self.polswap)}\n "
+
+        if len(self.polconvert) > 0:
+            s += f"PolConverted: {','.join(self.polconvert)}\n "
+
+        if len(self.onebit) > 0:
+            s += f"1-bit data: {','.join(self.onebit)}\n "
+
+        return f"Antennas([{','.join(self.names)}])\n Scheduled: {','.join(self.scheduled)}\n " \
+                "Observed: {','.join(self.observed)}\n " + s
 
     def json(self):
         """Returns a dict with all attributes of the object.
