@@ -291,49 +291,49 @@ def update_piletter(exp):
                 if ('***SuppSci:' not in tmp_line) and ('there is one***' not in tmp_line):
                     if '***weight cutoff***' in tmp_line:
                         tmp_line = tmp_line.replace('***weight cutoff***', f"{weightthreshold:.2}")
+
                     if '***percent flagged***' in tmp_line:
                         tmp_line = tmp_line.replace('***percent flagged***', f"{flaggeddata:.2}")
 
                     destfile.write(tmp_line)
+                    if 'Further remarks:' not in tmp_line:
+                        if len(exp.antennas.polconvert) > 0:
+                            destfile.write("\n")
+                            if len(exp.antennas.polconvert) > 1:
+                                s = f"s {', '.join(exp.antennas.polconvert[:-1])} and {exp.antennas.polconvert[-1]} "
+                            else:
+                                s = f" {exp.antennas.polconvert[0]} "
 
-                if 'Further remarks:' in tmp_line:
-                    destfile.write(tmp_line)
-                    if len(exp.antennas.polconvert) > 0:
-                        destfile.write("\n")
-                        if len(exp.antennas.polconvert) > 1:
-                            s = f"s {', '.join(exp.antennas.polconvert[:-1])} and {exp.antennas.polconvert[-1]} "
+                            destfile.write(f"- Note that the antenna{s} originally observed linear polarizations, "
+                                           "which were transformed to circular ones during post-processing using the "
+                                           "PolConvert program (Martí-Vidal, et al. 2016, A&A,587, A143). Thanks to "
+                                           "this correction, you can automatically recover the absolute EVPA value "
+                                           "when using the antenna as reference station during fringe-fitting.\n")
+
+                        ants_bw = {}
+                        if len(set([cp.freqsetup.n_subbands for cp in exp.correlator_passes])) == 1:
+                            for antenna in exp.correlator_passes[0].antennas:
+                                if 0 < len(antenna.subbands) < exp.correlator_passes[0].freqsetup.n_subbands:
+                                    ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1}"]
                         else:
-                            s = f" {exp.antennas.polconvert[0]} "
+                            for antenna in exp.correlator_passes[0].antennas:
+                                for i,a_pass in enumerate(exp.correlator_passes):
+                                    if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
+                                        if antenna.name not in ants_bw:
+                                            ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1} "
+                                                                     f"(in correlator pass #{i})"]
+                                        else:
+                                            ants_bw[antenna.name].append( \
+                                                f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1} "
+                                                f"(in correlator pass #{i})")
 
-                        destfile.write(f"- Note that the antenna{s} originally observed linear polarizations, "
-                                       "which were transformed to circular ones during post-processing using the "
-                                       "PolConvert program (Martí-Vidal, et al. 2016, A&A,587, A143). Thanks to "
-                                       "this correction, you can automatically recover the absolute EVPA value "
-                                       "when using the antenna as reference station during fringe-fitting.\n")
+                        if len(ants_bw) > 0:
+                            s = "\n- Note that "
+                            for ant in ants_bw:
+                                s += f"{ant} only observed subbands {' and '.join(ants_bw[ant])}, and "
 
-                    ants_bw = {}
-                    if len(set([cp.freqsetup.n_subbands for cp in exp.correlator_passes])) == 1:
-                        for antenna in exp.correlator_passes[0].antennas:
-                            if 0 < len(antenna.subbands) < exp.correlator_passes[0].freqsetup.n_subbands:
-                                ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1}"]
-                    else:
-                        for antenna in exp.correlator_passes[0].antennas:
-                            for i,a_pass in enumerate(exp.correlator_passes):
-                                if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
-                                    if antenna.name not in ants_bw:
-                                        ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1} "
-                                                                 f"(in correlator pass #{i})"]
-                                    else:
-                                        ants_bw[antenna.name].append(f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1} "
-                                                                 f"(in correlator pass #{i})")
-
-                    if len(ants_bw) > 0:
-                        s = "\n- Note that "
-                        for ant in ant_bw:
-                            s += f"{ant} only observed subbands {' and '.join(ant_bw[ant])}, "
-
-                        s += "due to their local bandwidth limitations.\n"
-                        destfile.write(s)
+                            s += "due to their local bandwidth limitations.\n"
+                            destfile.write(s)
 
     os.rename(f"{exp.expname.lower()}.piletter~", f"{exp.expname.lower()}.piletter")
     return True
