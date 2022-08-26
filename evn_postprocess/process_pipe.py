@@ -179,6 +179,9 @@ def create_input_file(exp):
                   ["phaseref = 3C454.3", f"phaseref = {pcal}  # VERIFY THIS MANUALLY"],
                   ["target = J2254+1341", f"target = {targets}  # VERIFY THIS MANUALLY"]]
 
+    if len(pcal) == 0:  # no phase-referencing experiment
+        to_change += ["#solint = 0", "solint = 2"]
+
     if len(exp.correlator_passes) > 2:
         to_change += ["#doprimarybeam = 1", "doprimarybeam = 1"]
 
