@@ -118,8 +118,6 @@ def main():
         print(f"Assuming the Support Scientist is {args.supsci}.\n")
 
     exp = experiment.Experiment(args.expname, args.supsci)
-    exp.log(f"\n\n\n{'#'*10}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
-            f"# Running on: {dt.today().strftime('%d %b %Y %H:%M')}\n")
 
     # if args.gui == 'terminal' or args.gui is None:
     exp.gui = dialog.Terminal()
@@ -131,11 +129,6 @@ def main():
     #     print(f"gui option not recognized. Expecting 'terminal', 'tui', or 'gui'. Obtained {args.gui}")
     #     sys.exit(1)
 
-    if exp.cwd != Path.cwd():
-        os.chdir(exp.cwd)
-        exp.log(f"# Moved to the experiment folder\ncd{exp.cwd}", timestamp=False)
-
-    # -n  parameter so it can ignore all the previous steps
     if exp.exists_local_copy():
         print('Restoring stored information from a previous run.')
         exp = exp.load()
@@ -167,6 +160,8 @@ def main():
     if args.j2ms2par is not None:
         exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
 
+    exp.log(f"\n\n\n{'#'*37}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
+            f"# Running on {dt.today().strftime('%d %b %Y %H:%M')} by {exp.supsci}.\n")
     try:
         step_keys = list(all_steps.keys())
         if (exp.last_step is None) and (args.step is None):
