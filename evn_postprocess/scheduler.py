@@ -191,7 +191,7 @@ def after_pipeline(exp: experiment.Experiment):
 
 
 def final_steps(exp: experiment.Experiment):
-    output = dispatcher(exp, (eee.append_antab, pipe.ampcal, eee.create_pipelet, eee.send_letters, 
+    output = dispatcher(exp, (eee.append_antab, pipe.ampcal, eee.create_pipelet, eee.send_letters,
                               eee.antenna_feedback, eee.nme_report))
     exp.last_step = 'last'
     exp.store()

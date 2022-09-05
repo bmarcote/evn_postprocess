@@ -803,7 +803,7 @@ class Experiment(object):
                         a_pass.antennas[antenna_name].observed = len(a_pass.antennas[antenna_name].subbands) > 0
 
                     # Takes the predefined "best" antennas as reference
-                    if self.refant is None:
+                    if len(self.refant) == 0:
                         for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
                             if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
                                 self.refant = [ant, ]
