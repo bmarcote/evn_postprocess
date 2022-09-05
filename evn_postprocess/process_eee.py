@@ -305,7 +305,7 @@ def update_piletter(exp):
                                 s = f" {exp.antennas.polconvert[0]} "
 
                             destfile.write(f"- Note that the antenna{s} originally observed linear polarizations, "
-                                           "which were transformed to circular ones during post-processing using the "
+                                           "which were transformed to circular ones during post-processing via the "
                                            "PolConvert program (Martí-Vidal, et al. 2016, A&A,587, A143). Thanks to "
                                            "this correction, you can automatically recover the absolute EVPA value "
                                            "when using the antenna as reference station during fringe-fitting.\n")
@@ -320,7 +320,8 @@ def update_piletter(exp):
                                 for i,a_pass in enumerate(exp.correlator_passes):
                                     if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
                                         if antenna.name not in ants_bw:
-                                            ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1} "
+                                            ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-"
+                                                                     f"{max(antenna.subbands)+1} "
                                                                      f"(in correlator pass #{i})"]
                                         else:
                                             ants_bw[antenna.name].append( \
@@ -337,11 +338,11 @@ def update_piletter(exp):
 
                         s = "- Note that the data from the antenna"
                         s_end = " have been corrected for opacity in the Tsys/Gain Curve measurements."
-                        if len(exp.antennas.corrected) > 1:
-                            s += f"s {', '.join(exp.antennas.corrected[:-1])} and {exp.antennas.corrected[-1]}"
+                        if len(exp.antennas.opacity) > 1:
+                            s += f"s {', '.join(exp.antennas.opacity[:-1])} and {exp.antennas.opacity[-1]}"
                             destfile.write(s + s_end)
-                        elif len(exp.antennas.corrected) == 1:
-                            s += f" {exp.antennas.corrected[0]}"
+                        elif len(exp.antennas.opacity) == 1:
+                            s += f" {exp.antennas.opacity[0]}"
                             destfile.write(s + s_end)
 
     os.rename(f"{exp.expname.lower()}.piletter~", f"{exp.expname.lower()}.piletter")
