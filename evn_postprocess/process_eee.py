@@ -476,6 +476,7 @@ def create_pipelet(exp):
     """
     environment.shell_command("pipelet.py", [exp.expname.lower(), exp.supsci.lower()])
     exp.log(f"pipelet.py {exp.expname.lower()} {exp.supsci.lower()}")
+    return True
 
 
 def archive(exp):
