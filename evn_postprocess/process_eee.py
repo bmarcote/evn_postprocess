@@ -409,38 +409,60 @@ def post_polconvert(exp):
     if len(glob.glob('*IDI*.PCONVERT')) == 0:
         # Files would be expected but then let's assume the user already renamed them
         return True
+
+    idi_ori = Path(exp.cwd / 'idi_ori/')
+    idi_ori.mkdir(exist_ok=True)
+    for an_idi in Path(exp.cwd).glob('*IDI*'):
+        if '.PCONVERT' not in an_idi.name:
+            an_idi.rename(idi_ori / an_idi.name)
+
+    for an_idi in Path(exp.cwd).glob('*IDI*.PCONVERT'):
+        an_idi.rename(an_idi.name.replace('.PCONVERT', ''))
+
+    exp.log("mkdir idi_ori")
+    exp.log("mv *IDI *IDI? *IDI?? *IDI???  idi_ori/")
+    exp.log("zmv '(*).PCONVERT' '$1'")
+    # Imports the standard message into the PI letter
+    with open(f"{exp.expname.lower()}.piletter", 'a') as piletter:
+        if len(exp.antennas.polconvert) == 1:
+            s1 = exp.antennas.polconvert[0]
+            s2 = f"the antenna {s1}"
+        else:
+            s1 = f"{', '.join(exp.antennas.polconvert[:-1])} and {exp.antennas.polconvert[-1]}"
+            s2 = f"the antennas {s1}"
+
+        piletter.write("\n- Note that " + s2 + " originally observed linear polarizations, " \
+                       "which were transformed to circular ones during post-processing using the " \
+                       "PolConvert program (Martí-Vidal, et al. 2016, A&A,587, A143). " \
+                       "Thanks to this correction, you can automatically recover the absolute EVPA " \
+                       f"value when using {s1.replace(' and ', ' or ')} as reference station " \
+                       "during fringe-fitting.")
+
+    # Creates a new MS with the PolConverted-data in order to plot it to check if the conversion run properly
+    cmd, _ = environment.shell_command("idi2ms.py", ['--delete',
+                                            f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
+                                            f"'{exp.expname.lower()}_1_1.IDI*'"])
+    if exp.refant is not None:
+        refant = exp.refant[0] if len(exp.refant) == 1 else f"({'|'.join(exp.refant)})"
     else:
-        idi_ori = Path(exp.cwd / 'idi_ori/')
-        idi_ori.mkdir(exist_ok=True)
-        for an_idi in Path(exp.cwd).glob('*IDI*'):
-            if '.PCONVERT' not in an_idi.name:
-                an_idi.rename(idi_ori / an_idi.name)
+        for ant in ('EF', 'O8', 'YS', 'MC', 'GB', 'AT', 'PT'):
+            if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
+                refant = ant
+                break
+        raise ValueError("Could not find a good reference antenna for standardplots. Please specify it manually")
+                 
+    cmd, _ = environment.shell_command("standardplots",
+                                           [f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
+                                            refant, ','.join(exp.sources_stdplot)], stdout=None,
+                                            stderr=subprocess.STDOUT)
 
-        for an_idi in Path(exp.cwd).glob('*IDI*.PCONVERT'):
-            an_idi.rename(an_idi.name.replace('.PCONVERT', ''))
-
-        exp.log("mkdir idi_ori")
-        exp.log("mv *IDI? *IDI?? *IDI???  idi_ori/")
-        exp.log("zmv '(*).PCONVERT' '$1'")
-        # Imports the standard message into the PI letter
-        with open(f"{exp.expname.lower()}.piletter", 'a') as piletter:
-            if len(exp.antennas.polconvert) == 1:
-                s1 = exp.antennas.polconvert[0]
-                s2 = f"the antenna {s1}"
-            else:
-                s1 = f"{', '.join(exp.antennas.polconvert[:-1])} and {exp.antennas.polconvert[-1]}"
-                s2 = f"the antennas {s1}"
-
-            piletter.write("\n- Note that " + s2 + " originally observed linear polarizations, " \
-                           "which were transformed to circular ones during post-processing using the " \
-                           "PolConvert program (Martí-Vidal, et al. 2016, A&A,587, A143). " \
-                           "Thanks to this correction, you can automatically recover the absolute EVPA " \
-                           f"value when using {s1.replace(' and ', ' or ')} as reference station " \
-                           "during fringe-fitting.")
+    for a_plot in glob.glob(f"{exp.expname.lower()}-pconv-cross*.ps"):
+        environment.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
 
     exp.last_step = 'post_polconvert'
     # Create again a MS from these converted files so I can run standardplots over the corrected data
     # TODO: Doing it manually for now
+    print("\n\n\033[1m### If PolConvert worked fine, re-run me to continue. Otherwise fix it manually before.\033[0m\n")
     return None
 
 
