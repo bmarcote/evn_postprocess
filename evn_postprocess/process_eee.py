@@ -374,7 +374,7 @@ def polconvert(exp):
                                       shell=True, stdout=None)
             environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDI*/g'",
                                       polconv_inp.name], shell=True, bufsize=None, stdout=None)
-            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI*/{exp.expname.lower()}_1_1.IDI*/g'",
+            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI/{exp.expname.lower()}_1_1.IDI/g'",
                                       polconv_inp.name], shell=True, bufsize=None, stdout=None)
             ants = ', '.join(["\"" + ant.upper() + "\"" for ant in exp.antennas.polconvert])
             environment.shell_command('sed', ['-i', "'s/\"T6\"/" + f"{ants}/g'", polconv_inp.name],
