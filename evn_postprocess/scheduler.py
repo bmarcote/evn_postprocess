@@ -125,7 +125,7 @@ def post_polconvert(exp: experiment.Experiment):
 
 
 def archive(exp: experiment.Experiment):
-    output = dispatcher(exp, (eee.archive, ))
+    output = dispatcher(exp, (eee.post_post_polconvert, eee.archive, ))
     exp.last_step = 'archive'
     exp.store()
     return output

@@ -443,6 +443,19 @@ def post_polconvert(exp):
     # TODO: Doing it manually for now
     return None
 
+def post_post_polconvert(exp):
+    """When PolConvert run properly and the user continued, it checks if the standardplots from the
+    converted MS (exp-pconv.ms) exist and then rename those plots to the usual name.
+    """
+    if len(exp.antennas.polconvert) == 0:
+        return True
+
+    stdplot_files = glob.glob('*-pconv*.ps')
+    if len(stdplot_files) > 0:
+        for stdplot_file in stdplot_files:
+            stdplot_file.rename(stdplot_file.replace('-pconv', ''))
+
+    return True
 
 def set_credentials(exp):
     """Sets the credentials for the given experiment.
