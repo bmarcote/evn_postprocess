@@ -1197,7 +1197,12 @@ class Experiment(object):
             if self.eEVNname is not None:
                 s += term.bright_black('From e-EVN run: ') + self.eEVNname + '\n'
 
-            s += term.bright_black('P.I.: ') + f"{self.piname.capitalize()} ({self.email})\n"
+            if isinstance(self.piname, list):
+                for a_piname,an_email,n in zip(self.piname, self.email, ('', *['co-']*(len(self.piname)-1))):
+                    s += term.bright_black(n+'P.I.: ') + f"{a_piname.capitalize()} ({an_email})\n"
+            else:
+                s += term.bright_black('P.I.: ') + f"{self.piname.capitalize()} ({self.email})\n"
+
             s += term.bright_black('Sup. Sci: ') + f"{self.supsci.capitalize()}\n"
             s += term.bright_black('Station Feedback Link: ') + \
                  f"{term.link(self.feedback_page, self.feedback_page)}\n"
