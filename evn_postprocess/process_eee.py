@@ -446,11 +446,11 @@ def post_polconvert(exp):
         refant = exp.refant[0] if len(exp.refant) == 1 else f"({'|'.join(exp.refant)})"
     else:
         for ant in ('EF', 'O8', 'YS', 'MC', 'GB', 'AT', 'PT'):
-            if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
+            if (ant in exp.antennas.names) and (exp.antennas[ant].observed):
                 refant = ant
                 break
         raise ValueError("Could not find a good reference antenna for standardplots. Please specify it manually")
-                 
+
     cmd, _ = environment.shell_command("standardplots",
                                            [f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
                                             refant, ','.join(exp.sources_stdplot)], stdout=None,
