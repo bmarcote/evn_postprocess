@@ -552,11 +552,17 @@ def send_letters(exp):
     Finally, it runs parsePIletter.
     """
     environment.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")
-    #TODO: what if there are co-pis
     print("\n\n\n")
     rprint("[center][bold red] --- Send the PI letter --- [/bold red][/center]")
-    rprint(f"[green]Send the file [bold]{exp.expname.lower()}.piletter_auth[/bold] to " \
-           f"{exp.piname.capitalize()}: {exp.email} (with copy to jops@jive.eu).[/green]")
+    pi = ""
+    if isinstance(exp.piname, list):
+        for a_piname,an_email in zip(exp.piname, exp.email):
+            pi += f"{a_piname.capitalize()}: {an_email}\n"
+    else:
+        pi += f"{exp.piname.capitalize()}: {exp.email}\n"
+
+    rprint(f"[green]Send the file [bold]{exp.expname.lower()}.piletter_auth[/bold] to " + pi + \
+           "with copy to jops@jive.eu.[/green]")
     return True
 
 
