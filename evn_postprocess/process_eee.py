@@ -554,7 +554,7 @@ def send_letters(exp):
     environment.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")
     print("\n\n\n")
     rprint("[center][bold red] --- Send the PI letter --- [/bold red][/center]")
-    pi = ""
+    pi = "\n"
     if isinstance(exp.piname, list):
         for a_piname,an_email in zip(exp.piname, exp.email):
             pi += f"{a_piname.capitalize()}: {an_email}\n"
