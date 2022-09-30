@@ -538,7 +538,7 @@ def append_antab(exp):
     appended.
     """
     if len(glob.glob("*.antab")) == 0:
-        environment.shell_command("append_antab_idi.py", shell=True, stdout=None)
+        environment.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
         exp.log('append_antab_idi.py')
         environment.archive("-fits", exp, "*IDI*")
     else:
