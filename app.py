@@ -15,7 +15,7 @@ from evn_postprocess.evn_postprocess import dialog
 from evn_postprocess.evn_postprocess import environment as env
 
 
-__version__ = 0.8
+__version__ = 0.9
 __prog__ = 'postprocess'
 usage = "%(prog)s  [-h] [options]\n"
 description = """Post-processing of EVN experiments.
@@ -77,6 +77,7 @@ help_gui = 'Type of GUI to use for interactions with the user:\n' \
 
 
 def main():
+    edit_params = ('refant', 'calsour', 'onebit', 'polswap', 'polconvert', 'target', 'calibrator', 'fringefinder')
     all_steps = {'setting_up': sch.setting_up_environment,
                  'lisfile': sch.preparing_lis_files,
                  'checklis': sch.first_manual_check,
@@ -95,13 +96,16 @@ def main():
                                      formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-e', '--expname', type=str, default=None,
                         help='Name of the EVN experiment (case-insensitive).')
-    parser.add_argument('-jss', '--supsci', type=str, default=None, help='Surname of the EVN Support Scientist.')
+    parser.add_argument('-jss', '--supsci', type=str, default=None, help='Surname of the EVN Support Scientist.',
+                        choices=('marcote', 'murthy', 'oh', 'orosz', 'paragi', 'campbell'))
     parser.add_argument('--info', default=False, action='store_true',
                         help='Returns the metadata from the experiment (all what is known to this moment to me).')
     parser.add_argument('--last', default=False, action='store_true',
                         help='Returns the last step conducted in a previous run.')
-    parser.add_argument('--step', type=str, default=None, help=help_steps)
-    parser.add_argument('--edit', type=str, nargs=2, default=None, help=help_edit, metavar=('PARAM', 'VALUE'))
+    parser.add_argument('--step', type=str, default=None, help=help_steps,
+                        choices=tuple(all_steps.keys()))
+    parser.add_argument('--edit', type=str, nargs=2, default=None, help=help_edit, metavar=('PARAM', 'VALUE'),
+                        choices=edit_params)
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:).')
     # parser.add_argument('--gui', type=str, default=None, help=help_gui)
@@ -156,6 +160,22 @@ def main():
         elif edit_param == 'polconvert':
             for ant in args.edit[1].split(','):
                 exp.antennas[ant].polconvert = True
+        elif edit_param == 'target':
+            for src in args.edit[1].split(','):
+                for exp_src in exp.sources:
+                    if exp_src.name == src:
+                        exp_src.type = experiment.SourceType.target
+        elif edit_param == 'calibrator':
+            for src in args.edit[1].split(','):
+                for exp_src in exp.sources:
+                    if exp_src.name == src:
+                        exp_src.type = experiment.SourceType.calibrator
+        elif edit_param == 'fringefinder':
+            for src in args.edit[1].split(','):
+                for exp_src in exp.sources:
+                    if exp_src.name == src:
+                        exp_src.type = experiment.SourceType.fringefinder
+
 
         exp.store()
         sys.exit(0)

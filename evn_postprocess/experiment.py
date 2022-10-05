@@ -149,13 +149,19 @@ class Source(object):
     def type(self):
         return self._type
 
+    @type.setter
+    def type(self, new_type: SourceType):
+        assert isinstance(new_type, SourceType)
+        self._type = new_type
+
     @property
     def protected(self):
         return self._protected
 
-    # @protected.setter
-    # def protected(self, tobeprotected):
-    #     self._protected = tobeprotected
+    @protected.setter
+    def protected(self, to_be_protected: bool):
+        assert isinstance(to_be_protected, bool)
+        self._protected = to_be_protected
 
     def __init__(self, name: str, sourcetype: SourceType, protected: bool):
         assert isinstance(name, str), f"The name of the source must be a string (currrently {name})"
