@@ -304,7 +304,7 @@ def update_piletter(exp):
                             else:
                                 s = f" {exp.antennas.polconvert[0]} "
 
-                            destfile.write(f"- Note that the antenna{s} originally observed linear polarizations, "
+                            destfile.write(f"- Note that the antenna{s}originally observed linear polarizations, "
                                            "which were transformed to circular ones during post-processing via the "
                                            "PolConvert program (Martí-Vidal, et al. 2016, A&A,587, A143). Thanks to "
                                            "this correction, you can automatically recover the absolute EVPA value "
@@ -422,22 +422,6 @@ def post_polconvert(exp):
     exp.log("mkdir idi_ori")
     exp.log("mv *IDI *IDI? *IDI?? *IDI???  idi_ori/")
     exp.log("zmv '(*).PCONVERT' '$1'")
-    # Imports the standard message into the PI letter
-    with open(f"{exp.expname.lower()}.piletter", 'a') as piletter:
-        if len(exp.antennas.polconvert) == 1:
-            s1 = exp.antennas.polconvert[0]
-            s2 = f"the antenna {s1}"
-        else:
-            s1 = f"{', '.join(exp.antennas.polconvert[:-1])} and {exp.antennas.polconvert[-1]}"
-            s2 = f"the antennas {s1}"
-
-        piletter.write("\n- Note that " + s2 + " originally observed linear polarizations, " \
-                       "which were transformed to circular ones during post-processing using the " \
-                       "PolConvert program (Martí-Vidal, et al. 2016, A&A,587, A143). " \
-                       "Thanks to this correction, you can automatically recover the absolute EVPA " \
-                       f"value when using {s1.replace(' and ', ' or ')} as reference station " \
-                       "during fringe-fitting.")
-
     # Creates a new MS with the PolConverted-data in order to plot it to check if the conversion run properly
     cmd, _ = environment.shell_command("idi2ms.py", ['--delete',
                                             f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
