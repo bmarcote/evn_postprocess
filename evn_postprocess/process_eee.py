@@ -459,6 +459,7 @@ def post_post_polconvert(exp):
     stdplot_files = glob.glob('*-pconv*.ps')
     if len(stdplot_files) > 0:
         for stdplot_file in stdplot_files:
+            stdplot_file = Path(stdplot_file)
             stdplot_file.rename(stdplot_file.replace('-pconv', ''))
 
     return True
