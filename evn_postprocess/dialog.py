@@ -78,7 +78,7 @@ class Terminal(Dialog):
                     print("The threshold needs to be a value within [0.0, 1.0).")
 
             except ValueError:
-                print(f'ValueError: could not convert string to float: {threshold}')
+                print(f'ValueError: could not convert input to float (for threshold).')
                 continue
 
         polswap = self.ask_for_antennas(exp, "\n\033[1mAntennas for polswap (comma or space separated)\n"
