@@ -56,7 +56,7 @@ def preparing_lis_files(exp: experiment.Experiment):
 def first_manual_check(exp: experiment.Experiment):
     """It is only executed for complex experiments: those with
     """
-    output = env.check_lisfiles(exp)
+    output = dispatcher(exp, (eee.get_passes_from_lisfiles, env.check_lisfiles))
     if not output:
         temp = 'file', 'seems' if len(exp.correlator_passes) == 1 else 'files', 'seem'
         rprint(f"\n\n[bold red]{'#'*50}[/bold red]\n[center red]...Stopping here...[/center red]\n")
