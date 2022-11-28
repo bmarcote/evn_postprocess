@@ -269,10 +269,17 @@ def pipeline_feedback(exp):
     """Runs the feedback.pl script after the EVN Pipeline has run.
     """
     cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
-    cmd = env.ssh('pipe@jop83',
-                  f"{cd} && /jop83_0/pipe/in/marcote/scripts/evn_support/feedback.pl -exp '{exp.expname.lower()}' "
-                  f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
-    exp.log(cmd)
+    if len(exp.correlator_passes) > 1:
+        for p in range(1, len(exp.correlator_passes) +1):
+            cmd = env.ssh('pipe@jop83',
+                          f"{cd} && /jop83_0/pipe/in/marcote/scripts/evn_support/feedback.pl -exp '{exp.expname.lower()}_{p}' "
+                          f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
+            exp.log(cmd)
+    else:
+        cmd = env.ssh('pipe@jop83',
+                      f"{cd} && /jop83_0/pipe/in/marcote/scripts/evn_support/feedback.pl -exp '{exp.expname.lower()}' "
+                      f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
+        exp.log(cmd)
     return True
 
 
