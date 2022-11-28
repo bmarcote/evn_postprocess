@@ -95,7 +95,7 @@ def run_antab_editor(exp):
             for an_antab in env.ssh('pipe@jop83', f"ls {cdinp}/*.antab")[1].split('\n'):
                 if an_antab != '':
                     env.ssh('pipe@jop83', f"mv {an_antab} "
-                f"{'/'.join([*an_antab.split('/')[:-1], an_antab.split('/')[-1].replace(exp.eEVNname, exp.expname)])}")
+                f"{'/'.join([*an_antab.split('/')[:-1], an_antab.split('/')[-1].replace(exp.eEVNname.lower(), exp.expname.lower())])}")
         return True
 
     if exp.eEVNname is not None:
@@ -153,7 +153,7 @@ def create_uvflg(exp):
             cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp} {cdinp}/{exp.expname.lower()}_{p}.uvflg")
             exp.log(cmd)
     else:
-        cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp}/*.uvflg {cdinp}/{exp.expname.lower()}.uvflg")
+        cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp} {cdinp}/{exp.expname.lower()}.uvflg")
         exp.log(cmd)
 
     return True
