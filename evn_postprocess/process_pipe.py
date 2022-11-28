@@ -119,6 +119,10 @@ def run_antab_editor(exp):
 def create_uvflg(exp):
     """Produces the combined uvflg file containing the full flagging from all telescopes.
     """
+    cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}/"
+    if env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.uvflg"):
+        return True
+
     if (exp.eEVNname is None) or (exp.expname == exp.eEVNname):
         cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
         if not env.remote_file_exists('pipe@jop83', f"{cd}/{exp.expname.lower()}.uvflg"):
@@ -142,9 +146,14 @@ def create_uvflg(exp):
             return None
 
     cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}"
-    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}"
-    if not env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.uvflg"):
-        cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp}/*.uvflg {cdinp}/")
+    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}" \
+             f"/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}.uvflg"
+    if len(exp.correlator_passes) > 1:
+        for p in range(1, len(exp.correlator_passes) + 1):
+            cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp} {cdinp}/{exp.expname.lower()}_{p}.uvflg")
+            exp.log(cmd)
+    else:
+        cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp}/*.uvflg {cdinp}/{exp.expname.lower()}.uvflg")
         exp.log(cmd)
 
     return True
@@ -180,10 +189,10 @@ def create_input_file(exp):
                   ["target = J2254+1341", f"target = {targets}  # VERIFY THIS MANUALLY"]]
 
     if len(pcal) == 0:  # no phase-referencing experiment
-        to_change += ["#solint = 0", "solint = 2"]
+        to_change += [["#solint = 0", "solint = 2"]]
 
     if len(exp.correlator_passes) > 2:
-        to_change += ["#doprimarybeam = 1", "doprimarybeam = 1"]
+        to_change += [["#doprimarybeam = 1", "doprimarybeam = 1"]]
 
     cmd, _ = env.ssh('pipe@jop83',
                   "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()),
