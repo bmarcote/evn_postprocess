@@ -192,7 +192,8 @@ def create_input_file(exp):
         to_change += [["#solint = 0", "solint = 2"]]
 
     if len(exp.correlator_passes) > 2:
-        to_change += [["#doprimarybeam = 1", "doprimarybeam = 1"]]
+        to_change += [["#doprimarybeam = 1", "doprimarybeam = 1"],
+                      ["#setup_station = Ef", f"setup_station = {exp.refant[0]}"]]
 
     cmd, _ = env.ssh('pipe@jop83',
                   "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()),
