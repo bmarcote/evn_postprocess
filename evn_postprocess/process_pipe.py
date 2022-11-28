@@ -259,8 +259,13 @@ def comment_tasav_files(exp):
     cdout = f"/jop83_0/pipe/out/{exp.expname.lower()}"
     if not (env.remote_file_exists('pipe@jop83', f"{cdout}/{exp.expname.lower()}" + r"\*.comment") and
             env.remote_file_exists('pipe@jop83', f"{cdin}/{exp.expname.lower()}" + r"\*.tasav.txt")):
-        cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
-        exp.log(cmd)
+        if len(exp.correlator_passes) > 1:
+            for p in range(1, len(exp.correlator_passes) + 1):
+                cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}_{p}")
+                exp.log(cmd)
+        else:
+            cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
+            exp.log(cmd)
 
     return True
 
@@ -270,7 +275,7 @@ def pipeline_feedback(exp):
     """
     cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
     if len(exp.correlator_passes) > 1:
-        for p in range(1, len(exp.correlator_passes) +1):
+        for p in range(1, len(exp.correlator_passes) + 1):
             cmd = env.ssh('pipe@jop83',
                           f"{cd} && /jop83_0/pipe/in/marcote/scripts/evn_support/feedback.pl -exp '{exp.expname.lower()}_{p}' "
                           f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
