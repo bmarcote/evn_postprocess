@@ -1190,7 +1190,7 @@ class Experiment(object):
 
         print("\n")
 
-    def print_blessed(self):
+    def print_blessed(self, outputfile=None):
         """Pretty print of the full experiment with all available data.
         """
         term = blessed.Terminal()
@@ -1296,6 +1296,10 @@ class Experiment(object):
                 print(term.move_y(term.height - 3) + \
                       term.center(term.on_bright_black('press any key to continue (or Q to cancel)')).rstrip())
                 return term.inkey()#.strip()
+
+            if (outputfile is not None) and (not Path(outputfile).exists()):
+                with open(outputfile, 'w') as ofile:
+                    ofile.write(s_final)
 
             # Fitting the terminal
             i, i_width = 0, term.height - 5

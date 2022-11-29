@@ -142,7 +142,7 @@ def main():
         sys.exit(0)
 
     if args.info:
-        exp.print_blessed()
+        exp.print_blessed(outputfile='notes.md')
         sys.exit(0)
 
     if args.edit is not None:
