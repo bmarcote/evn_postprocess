@@ -770,7 +770,7 @@ class Experiment(object):
         """Obtains the time range, antennas, sources, and frequencies of the observation
         from all existing passes with MS files and incorporate them into the current object.
         """
-        for i, a_pass in enumerate(self.correlator_passes):
+        for  a_pass in self.correlator_passes:
             a_pass.antennas = Antennas()
             try:
                 with pt.table(a_pass.msfile.name, readonly=True, ack=False) as ms:
@@ -1228,6 +1228,10 @@ class Experiment(object):
                 if len(self.correlator_passes) > 1:
                     s += term.bold(f"Correlator pass #{i+1}\n")
 
+                # If MSs are now created, it will get the info. There is still possibility they are not
+                if a_pass.freqsetup is None:
+                    self.get_setup_from_ms()
+
                 try:
                     s += term.bright_black('Frequency: ') + \
                          f"{a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
@@ -1245,7 +1249,9 @@ class Experiment(object):
                     print(f"WARNING: {e}")
                     s += term.bright_black('Bandwidth:  Could not be processed\n')
 
-                s += term.bright_black('lisfile: ') + f"{a_pass.lisfile}\n\n"
+                s += term.bright_black('lisfile: ') + f"{a_pass.lisfile}\n"
+                s += term.bright_black('MS file: ') + f"{a_pass.msfile}\n"
+                s += term.bright_black('IDI files: ') + f"{a_pass.fitsidifile}\n\n"
 
             s += term.bold_green('SOURCES\n')
             for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
