@@ -196,7 +196,7 @@ def standardplots(exp, do_weights=True):
 def print_exp(exp):
     """Shows in the terminal all metadata related to the given experiment.
     """
-    if exp.print_blessed():
+    if exp.print_blessed(outputfile='notes.md'):
         return True
 
     return None
