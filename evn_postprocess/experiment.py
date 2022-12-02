@@ -1231,6 +1231,7 @@ class Experiment(object):
                 # If MSs are now created, it will get the info. There is still possibility they are not
                 if a_pass.freqsetup is None:
                     self.get_setup_from_ms()
+                    self.store()
 
                 try:
                     s += term.bright_black('Frequency: ') + \
