@@ -66,6 +66,9 @@ The following parameters are allowed:
     - refant : change the reference antenna(s).
     - calsour : change the sources used for standardplots.
                 If more than one, they must be comma-separated and with no spaces.
+    - calibrator : change the given source type to calibrator (phase calibrator).
+    - target : change the given source type to target (to be used also for phase-referenced check sources).
+    - fringefinder : change the given source type to fringe-finder.
     - polconvert : marks the antennas to be pol converted.
     - polswap : marks the antennas to be pol swapped.
     - onebit :  marks the antennas to be corrected because they observed with one bit.
