@@ -442,7 +442,7 @@ class CorrelatorPass(object):
 
     @sources.setter
     def sources(self, list_of_sources):
-        self._sources = tuple(list_of_sources)
+        self._sources = list(list_of_sources)
 
     @property
     def antennas(self):
