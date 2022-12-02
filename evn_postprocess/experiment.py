@@ -1234,7 +1234,7 @@ class Experiment(object):
                          f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz.\n"
                 except AttributeError as e:
                     print(f"WARNING: {e}")
-                    s += term.bright_black('Frequency:  Could not be processed')
+                    s += term.bright_black('Frequency:  Could not be processed\n')
 
                 try:
                     s += term.bright_black('Bandwidth: ') + \
@@ -1243,7 +1243,7 @@ class Experiment(object):
                          f"{a_pass.freqsetup.channels} channels each.\n"
                 except AttributeError as e:
                     print(f"WARNING: {e}")
-                    s += term.bright_black('Bandwidth:  Could not be processed')
+                    s += term.bright_black('Bandwidth:  Could not be processed\n')
 
                 s += term.bright_black('lisfile: ') + f"{a_pass.lisfile}\n\n"
 
