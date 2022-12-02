@@ -983,6 +983,34 @@ class Experiment(object):
         return piletterpath
 
     @property
+    def keyfile(self):
+        """Returns the (Path object) to the .key file related to the experiment.
+        If the file does not exist in the experiment dir (in eee), is retrieved from vlbeer.
+        """
+        keyfilepath = self.cwd / f"{self.expname.lower()}.key"
+        if not keyfilepath.exists():
+            env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".key .")
+            self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".key .")
+
+        return keyfilepath
+
+    @property
+    def sumfile(self):
+        """Returns the (Path object) to the .sum file related to the experiment.
+        If the file does not exist in the experiment dir (in eee), is retrieved from vlbeer.
+        """
+        keyfilepath = self.cwd / f"{self.expname.lower()}.sum"
+        if not keyfilepath.exists():
+            env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".sum .")
+            self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".sum .")
+
+        return keyfilepath
+
+    @property
     def logfile(self):
         """Returns a dict with the logs, with two keys:
         - 'dir': the directory where individual log files can be stored (by default 'logs/')
