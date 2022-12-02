@@ -106,7 +106,7 @@ def copy_files(exp):
     May Raise: FileNotFound
     """
     exists = []
-    files = (exp.vix, exp.expsum, exp.piletter)
+    files = (exp.vix, exp.expsum, exp.piletter, exp.keyfile, exp.sumfile)
     for a_file in files:
         exists.append(a_file.exists())
 
