@@ -1221,27 +1221,37 @@ class Experiment(object):
     def print_blessed(self, outputfile=None):
         """Pretty print of the full experiment with all available data.
         """
-        term = blessed.Terminal()
+        term = blessed.Terminal(force_styling=True)
+        s_file = []
         with term.fullscreen(), term.cbreak():
             # s = term.center(term.red_on_bright_black(f"EVN Post-processing of {self.expname.upper()}")) + '\n\n'
             s = term.red_on_bright_black(term.center(term.bold(f"EVN Post-processing of {self.expname.upper()}")))
+            s_file += [f"# EVN Post-processing of {self.expname.upper()}\n"]
             s += f"{term.normal}\n\n{term.normal}"
             s += term.bright_black('Obs date: ') + self.obsdatetime.strftime('%d/%m/%Y')
             s += f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"
+            s_file += ['Obs date: ' + self.obsdatetime.strftime('%d/%m/%Y') + \
+                       f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"]
             if self.eEVNname is not None:
                 s += term.bright_black('From e-EVN run: ') + self.eEVNname + '\n'
+                s_file += [f"From e-EVN run: {self.eEVNname}\n"]
 
             if isinstance(self.piname, list):
                 for a_piname,an_email,n in zip(self.piname, self.email, ('', *['co-']*(len(self.piname)-1))):
                     s += term.bright_black(n+'P.I.: ') + f"{a_piname.capitalize()} ({an_email})\n"
+                    s_file += [f"P.I.: {a_piname.capitalize()} ({an_email})"]
             else:
                 s += term.bright_black('P.I.: ') + f"{self.piname.capitalize()} ({self.email})\n"
+                s_file += [f"P.I.: {self.piname.capitalize()} ({self.email})"]
 
             s += term.bright_black('Sup. Sci: ') + f"{self.supsci.capitalize()}\n"
+            s_file += [f"Sup. Sci: {self.supsci.capitalize()}\n"]
             s += term.bright_black('Station Feedback Link: ') + \
                  f"{term.link(self.feedback_page, self.feedback_page)}\n"
+            s_file += [f"Station Feedback Link: {self.feedback_page}"]
             s += term.bright_black('EVN Archive Link: ') + \
                  f"{term.link(self.archive_page, self.archive_page)}\n"
+            s_file += [f"EVN Archive Link: {self.archive_page}\n"]
             s += term.bright_black('Protection Link: ') +\
                  term.link('http://archive.jive.nl/scripts/pipe/admin.php',
                            'http://archive.jive.nl/scripts/pipe/admin.php') + '\n'
@@ -1249,12 +1259,17 @@ class Experiment(object):
             s += term.bold_green('CREDENTIALS\n')
             s += term.bright_black('Username: ') + f"{self.credentials.username}\n"
             s += term.bright_black('Password: ') + f"{self.credentials.password}\n\n"
+            s_file += ["## CREDENTIALS", f"Username: {self.credentials.username}",
+                       f"Password: {self.credentials.password}\n"]
+
             s += term.bold_green('SETUP\n')
+            s_file += ['## SETUP']
 
             # loop over passes
             for i,a_pass in enumerate(self.correlator_passes):
                 if len(self.correlator_passes) > 1:
                     s += term.bold(f"Correlator pass #{i+1}\n")
+                    s_file += [f"Correlator pass #{i+1}"]
 
                 # If MSs are now created, it will get the info. There is still possibility they are not
                 if a_pass.freqsetup is None:
@@ -1265,77 +1280,107 @@ class Experiment(object):
                     s += term.bright_black('Frequency: ') + \
                          f"{a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
                          f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz.\n"
+                    s_file += [f"Frequency: {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
+                               f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz."]
                 except AttributeError as e:
                     print(f"WARNING: {e}")
                     s += term.bright_black('Frequency:  Could not be processed\n')
+                    s_file += ['Frequency:  Could not be processed']
 
                 try:
                     s += term.bright_black('Bandwidth: ') + \
                          f"{a_pass.freqsetup.n_subbands} x " \
                          f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. " \
                          f"{a_pass.freqsetup.channels} channels each.\n"
+                    s_file += [f"Bandwidth: {a_pass.freqsetup.n_subbands} x " \
+                               f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. " \
+                               f"{a_pass.freqsetup.channels} channels each."]
                 except AttributeError as e:
                     print(f"WARNING: {e}")
                     s += term.bright_black('Bandwidth:  Could not be processed\n')
+                    s_file += ['Bandwidth:  Could not be processed']
 
                 s += term.bright_black('lisfile: ') + f"{a_pass.lisfile}\n"
                 s += term.bright_black('MS file: ') + f"{a_pass.msfile}\n"
                 s += term.bright_black('IDI files: ') + f"{a_pass.fitsidifile}\n\n"
+                s_file += [f"lisfile: {a_pass.lisfile}", f"MS file: {a_pass.msfile}",
+                           f"IDI files: {a_pass.fitsidifile}\n"]
 
             s += term.bold_green('SOURCES\n')
+            s_file += ['## SOURCES']
             for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
                                      (SourceType.fringefinder, SourceType.target, SourceType.calibrator)):
                 src = [s for s in self.sources if s.type is src_type]
                 key = f"{name}{'' if len(src) == 1 else 's'}: "
                 s += term.bright_black(key) + \
                      f"{', '.join([s.name+term.red('*') if s.protected else s.name for s in src])}\n"
+                s_file += [f"{key}: {', '.join([s.name+'*' if s.protected else s.name for s in src])}"]
+
             s += term.bright_black(f"Sources with {term.red('*')} denote the ones that need to be protected.\n")
+            s_file += ["Sources with * denote the ones that need to be protected."]
             s += term.bright_black('Sources to standardplot: ') + f"{', '.join(self.sources_stdplot)}\n\n"
+            s_file += [f"Sources to standardplot: {', '.join(self.sources_stdplot)}\n"]
             s += term.bold_green('ANTENNAS\n')
-            s += term.bright_black('Observed antennas: ') + \
+            s_file += ['## ANTENNAS']
+            s += term.bright_black('Antennas with data: ') + \
                  f"{', '.join([ant.name for ant in self.antennas if ant.observed])}\n"
+            s_file += [f"Antennas with data: {', '.join([ant.name for ant in self.antennas if ant.observed])}"]
             missing_ants = [ant.name for ant in self.antennas if not ant.observed]
             s += term.bright_black('Did not observe: ') + \
                  f"{', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}\n\n"
+            s_file += [f"Did not observe: {', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}"]
             s += term.bright_black('Reference Antenna: ') + f"{', '.join([r.capitalize() for r in self.refant])}\n"
+            s_file += [f"Reference Antenna: {', '.join([r.capitalize() for r in self.refant])}"]
 
             if len(self.antennas.polswap) > 0:
                 s += term.bright_black('Polswapped antennas: ') +  f"{', '.join(self.antennas.polswap)}\n"
+                s_file += [f"Polswapped antennas: {', '.join(self.antennas.polswap)}"]
 
             if len(self.antennas.polconvert) > 0:
                 s += term.bright_black('Polconverted antennas: ') + f"{', '.join(self.antennas.polconvert)}\n"
+                s_file += [f"Polconverted antennas: {', '.join(self.antennas.polconvert)}"]
 
             if len(self.antennas.onebit) > 0:
                 s += term.bright_black('Onebit antennas: ') + f"{', '.join(self.antennas.onebit)}\n"
+                s_file += [f"Onebit antennas: {', '.join(self.antennas.onebit)}"]
 
             missing_logs = [a.name for a in self.antennas if (not a.logfsfile) and a.observed]
             s += term.bright_black('Missing log files: ') + \
                  f"{', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}\n"
+            s_file += [f"Missing log files: {', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}"]
 
             missing_antabs = [a.name for a in self.antennas if (not a.antabfsfile) and a.observed]
             s += term.bright_black('Missing ANTAB files: ') + \
                  f"{', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"
+            s_file += [f"Missing ANTAB files: {', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"]
 
             # In case of antennas not observing the full bandwidth (this may be per correlator pass)
-            ss = ""
+            ss, ss_file = "", []
             try:
                 if len(set([cp.freqsetup.n_subbands for cp in self.correlator_passes])) == 1:
                     for antenna in self.correlator_passes[0].antennas:
                         if 0 < len(antenna.subbands) < self.correlator_passes[0].freqsetup.n_subbands:
                             ss += f"    {antenna.name}: {antenna.subbands}\n"
+                            ss_file += [f"    {antenna.name}: {antenna.subbands}"]
                 else:
                     for antenna in self.correlator_passes[0].antennas:
                         for i,a_pass in enumerate(self.correlator_passes):
                             if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
                                 ss += f"    {antenna.name}: {antenna.subbands} " \
                                       f"(in correlator pass {a_pass.lisfile})\n"
+                                ss_file += [f"    {antenna.name}: {antenna.subbands} " \
+                                      f"(in correlator pass {a_pass.lisfile})"]
             except AttributeError as e:
                 ss += "    No freq. setup information to detect which antennas have a reduced bandwidth."
+                ss_file += ["    No freq. setup information to detect which antennas have a reduced bandwidth."]
 
             if ss != "":
                 s += term.bright_black('Antennas with smaller bandwidth:\n') + ss
+                s_file += ['Antennas with smaller bandwidth:']
+                s_file += ss_file
 
             s_final = term.wrap(s, width=term.width)
+            s_file += ["\n\n## COMMENTS FROM SUP.SCI\n\n\n\n\n"]
 
             def print_all(ss):
                 print(term.clear)
@@ -1348,7 +1393,8 @@ class Experiment(object):
 
             if (outputfile is not None) and (not Path(outputfile).exists()):
                 with open(outputfile, 'w') as ofile:
-                    ofile.write(s_final)
+                    print('writing file', s_file)
+                    ofile.write('\n'.join(s_file))
 
             # Fitting the terminal
             i, i_width = 0, term.height - 5
