@@ -1228,13 +1228,23 @@ class Experiment(object):
                 if len(self.correlator_passes) > 1:
                     s += term.bold(f"Correlator pass #{i+1}\n")
 
-                s += term.bright_black('Frequency: ') + \
-                     f"{a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
-                     f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz.\n"
-                s += term.bright_black('Bandwidth: ') + \
-                     f"{a_pass.freqsetup.n_subbands} x " \
-                     f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. " \
-                     f"{a_pass.freqsetup.channels} channels each.\n"
+                try:
+                    s += term.bright_black('Frequency: ') + \
+                         f"{a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
+                         f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz.\n"
+                except AttributeError as e:
+                    print(f"WARNING: {e}")
+                    s += term.bright_black('Frequency:  Could not be processed')
+
+                try:
+                    s += term.bright_black('Bandwidth: ') + \
+                         f"{a_pass.freqsetup.n_subbands} x " \
+                         f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. " \
+                         f"{a_pass.freqsetup.channels} channels each.\n"
+                except AttributeError as e:
+                    print(f"WARNING: {e}")
+                    s += term.bright_black('Bandwidth:  Could not be processed')
+
                 s += term.bright_black('lisfile: ') + f"{a_pass.lisfile}\n\n"
 
             s += term.bold_green('SOURCES\n')
