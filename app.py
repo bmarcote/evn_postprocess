@@ -104,8 +104,7 @@ def main():
                         help='Returns the last step conducted in a previous run.')
     parser.add_argument('--step', type=str, default=None, help=help_steps,
                         choices=tuple(all_steps.keys()))
-    parser.add_argument('--edit', type=str, nargs=2, default=None, help=help_edit, metavar=('PARAM', 'VALUE'),
-                        choices=edit_params)
+    parser.add_argument('--edit', type=str, nargs=2, default=None, help=help_edit, metavar=('PARAM', 'VALUE'))
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:).')
     # parser.add_argument('--gui', type=str, default=None, help=help_gui)
@@ -147,8 +146,8 @@ def main():
 
     if args.edit is not None:
         edit_param = args.edit[0].strip()
+        assert edit_param in edit_params, f"The parameter to edit is not in the supported list ({edit_params})."
         if edit_param == 'refant':
-            print(args.edit[0], args.edit[1])
             exp.refant = args.edit[1].strip().capitalize()
         elif edit_param == 'calsour':
             exp.sources_stdplot = [cs.strip() for cs in args.edit[1].split(',')]
@@ -178,6 +177,7 @@ def main():
 
 
         exp.store()
+        print('Changes properly stored for experiment.')
         sys.exit(0)
 
     if args.j2ms2par is not None:
