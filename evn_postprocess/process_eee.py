@@ -299,6 +299,11 @@ def update_piletter(exp):
                     if '***percent flagged***' in tmp_line:
                         tmp_line = tmp_line.replace('***percent flagged***', f"{flaggeddata:.2}")
 
+                    for ant in exp.correlator_passes[0].antennas:
+                        if (f"{ant.name.capitalize()}:" in tmp_line) and (not ant.observed):
+                            tmp_line = tmp_line.replace(f"{ant.name.capitalize()}:",
+                                                        f"{ant.name.capitalize()}: Could not observe.")
+
                     destfile.write(tmp_line)
                     if ('Further remarks:' in tmp_line) and (not polconvert_written):
                         if len(exp.antennas.polconvert) > 0:
