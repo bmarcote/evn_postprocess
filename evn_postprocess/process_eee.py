@@ -11,6 +11,7 @@ import string
 import random
 import traceback
 from pathlib import Path
+from collections import defaultdict
 import subprocess
 from rich import print as rprint
 from rich.markdown import Markdown
@@ -331,9 +332,18 @@ def update_piletter(exp):
                                                 f"(in correlator pass #{i})")
 
                         if len(ants_bw) > 0:
-                            s = "- Note that "
+                            ants_bw_r = defaultdict(list)
                             for ant in ants_bw:
-                                s += f"{ant} only observed subbands {' and '.join(ants_bw[ant])}, and "
+                                ants_bw_r[ants_bw[ant]].append(ant)
+
+                            s = "- Note that "
+                            for i,ant_r in enumerate(ants_bw_r):
+                                if i == 0:
+                                    s += f"{', '.join(ants_bw_r[ant_r])} only observed subbands {ant_r}, "
+                                elif i== len(ants_bw_r)-1:
+                                    s += f" and {', '.join(ants_bw_r[ant_r])} subbands {ant_r}, "
+                                else:
+                                    s += f"{', '.join(ants_bw_r[ant_r])} subbands {ant_r}, "
 
                             s += "due to their local bandwidth limitations.\n"
                             destfile.write(s)
