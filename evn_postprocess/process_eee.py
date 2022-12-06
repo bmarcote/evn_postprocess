@@ -13,6 +13,7 @@ import traceback
 from pathlib import Path
 from collections import defaultdict
 import subprocess
+import numpy as np
 from rich import print as rprint
 from rich.markdown import Markdown
 from . import dialog
@@ -317,15 +318,28 @@ def update_piletter(exp):
                         if len(set([cp.freqsetup.n_subbands for cp in exp.correlator_passes])) == 1:
                             for antenna in exp.correlator_passes[0].antennas:
                                 if 0 < len(antenna.subbands) < exp.correlator_passes[0].freqsetup.n_subbands:
-                                    ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1}"]
+                                    # In case the antenna observed a consecutive number of subbands
+                                    ant_sbs = np.array(antenna.subbands)
+                                    ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
+                                    if (ant_sbs[1:] == 1).all():
+                                        ants_bw[antenna.name] = \
+                                                        [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1}"]
+                                    else:
+                                        ants_bw[antenna.name] = [f"{antenna.subbands}"]
                         else:
                             for antenna in exp.correlator_passes[0].antennas:
                                 for i,a_pass in enumerate(exp.correlator_passes):
                                     if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
                                         if antenna.name not in ants_bw:
-                                            ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-"
-                                                                     f"{max(antenna.subbands)+1} "
-                                                                     f"(in correlator pass #{i})"]
+                                            ant_sbs = np.array(antenna.subbands)
+                                            ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
+                                            if (ant_sbs[1:] == 1).all():
+                                                ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-"
+                                                                         f"{max(antenna.subbands)+1} "
+                                                                         f"(in correlator pass #{i})"]
+                                            else:
+                                                ants_bw[antenna.name] = [f"{antenna.subbands} "
+                                                                         f"(in correlator pass #{i})"]
                                         else:
                                             ants_bw[antenna.name].append( \
                                                 f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1} "
