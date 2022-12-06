@@ -105,8 +105,7 @@ def main():
                         help='Returns the metadata from the experiment (all what is known to this moment to me).')
     parser.add_argument('--last', default=False, action='store_true',
                         help='Returns the last step conducted in a previous run.')
-    parser.add_argument('--step', type=str, default=None, help=help_steps,
-                        choices=tuple(all_steps.keys()))
+    parser.add_argument('--step', type=str, default=None, help=help_steps)
     parser.add_argument('--edit', type=str, nargs=2, default=None, help=help_edit, metavar=('PARAM', 'VALUE'))
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:).')
@@ -203,13 +202,17 @@ def main():
                 args.step = args.step.split(',')
                 for a_step in args.step:
                     if a_step not in all_steps:
-                        raise KeyError
+                        raise KeyError(f"The step {a_step} is not recognized (possible values: " \
+                                        f"{', '.join(all_steps.keys())}).")
+
                 the_steps = step_keys[step_keys.index(args.step[0]):step_keys.index(args.step[1])]
                 exp.log(f"Running only the following steps: {', '.join(the_steps)}.", False)
                 print(f"Running only the following steps: {', '.join(the_steps)}.")
             else:
                 if args.step not in all_steps:
-                    raise KeyError
+                    raise KeyError(f"The step {a_step} is not recognized (possible values: " \
+                                    f"{', '.join(all_steps.keys())}).")
+
                 the_steps = step_keys[step_keys.index(args.step):]
                 exp.log(f"Starting at the step '{args.step}'.")
                 print(f"Starting at the step '{args.step}'.")
@@ -220,7 +223,7 @@ def main():
         sys.exit(1)
     except KeyError:
         print("ERROR: the introduced step ({args.step}) is not recognized.\n"
-              "Run the program with '-h' to see the expected options")
+              "Run the program with '-h' to see the expected options.")
         traceback.print_exc()
         sys.exit(1)
 
