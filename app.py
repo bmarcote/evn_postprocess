@@ -227,13 +227,6 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    # TODO: This is temporal, until the script works completely
-    if not os.path.isfile('processing_manual.log'):
-        if (exp.eEVNname is not None) and (exp.expname != exp.eEVNname):
-            env.shell_command('create_processing_log.py',
-                              ['-o', 'processing_manual.log', '-e', exp.eEVNname, exp.expname], shell=True)
-        else:
-            env.shell_command('create_processing_log.py', ['-o', 'processing_manual.log', exp.expname], shell=True)
     try:
         for a_step in the_steps:
             if not all_steps[a_step](exp):
