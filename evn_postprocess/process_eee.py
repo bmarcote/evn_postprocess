@@ -410,6 +410,9 @@ def polconvert(exp):
             ants = ', '.join(["\"" + ant.upper() + "\"" for ant in exp.antennas.polconvert])
             environment.shell_command('sed', ['-i', "'s/\"T6\"/" + f"{ants}/g'", polconv_inp.name],
                                       shell=True, bufsize=None, stdout=None)
+            ants = ', '.join(["\"" + ant.name.upper() + "\"" for ant in exp.antennas if not ant.observe])
+            environment.shell_command('sed', ['-i', "'s/\"EA\"/" + f"{ants}/g'", polconv_inp.name],
+                                      shell=True, bufsize=None, stdout=None)
 
         print("\n\n\033[1m### PolConvert needs to be run manually.\033[0m\n")
         print("You would find the input template in the current directory.")

@@ -262,11 +262,19 @@ def comment_tasav_files(exp):
             env.remote_file_exists('pipe@jop83', f"{cdin}/{exp.expname.lower()}" + r"\*.tasav.txt")):
         if len(exp.correlator_passes) > 1:
             for p in range(1, len(exp.correlator_passes) + 1):
-                cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}_{p}")
-                exp.log(cmd)
+                if exp.correlator_passes[p].freqsetup.channels >= 512:
+                    # We assume that it is a spectral line experiment
+                    cmd = env.ssh('pipe@jop83',
+                                  f"cd {cdout} && comment_tasav_file.py --line {exp.expname.lower()}_{p}")
+                else:
+                    cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}_{p}")
         else:
-            cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
-            exp.log(cmd)
+            if exp.correlator_passes[0].freqsetup.channels >= 512:
+                cmd = env.ssh('pipe@jop83',
+                              f"cd {cdout} && comment_tasav_file.py --line {exp.expname.lower()}")
+            else:
+                cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
+        exp.log(cmd)
 
     return True
 
