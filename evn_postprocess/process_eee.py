@@ -280,6 +280,8 @@ def update_piletter(exp):
     """
     weightthreshold = float(exp.correlator_passes[0].flagged_weights.threshold)
     flaggeddata = float(exp.correlator_passes[0].flagged_weights.percentage)
+    polconvert_written = subprocess.call(["grep", "Martí-Vidal,", f"{exp.expname.lower()}.piletter"],
+                                         shell=False, stdout=subprocess.PIPE) == 0
     with open(f"{exp.expname.lower()}.piletter", 'r') as orifile:
         with open(f"{exp.expname.lower()}.piletter~", 'w') as destfile:
             for a_line in orifile.readlines():
@@ -296,7 +298,7 @@ def update_piletter(exp):
                         tmp_line = tmp_line.replace('***percent flagged***', f"{flaggeddata:.2}")
 
                     destfile.write(tmp_line)
-                    if 'Further remarks:' in tmp_line:
+                    if ('Further remarks:' in tmp_line) and (not polconvert_written):
                         if len(exp.antennas.polconvert) > 0:
                             destfile.write("\n")
                             if len(exp.antennas.polconvert) > 1:
