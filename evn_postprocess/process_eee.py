@@ -289,15 +289,13 @@ def tconvert(exp):
     """Runs tConvert in all MS files available in the directory
     """
     for a_pass in exp.correlator_passes:
-        existing_files = glob.glob(f"{a_pass.fitsidifile}*")
-        if len(existing_files) > 0:
+        if len(glob.glob(f"{a_pass.fitsidifile}*")) > 0:
             continue
-        # environment.shell_command("tConvert", [a_pass.msfile.name, a_pass.fitsidifile],
-        #                           stdout=None, stderr=subprocess.STDOUT)
-        # NOTE: This is a temporary use of the dev version taht includes the -v lisfile implementation
-        environment.shell_command("/home/verkout/src/jive-casa/build-issue-5/apps/tConvert/tConvert",
-                                  ["-v", a_pass.lisfile.name], stdout=None, stderr=subprocess.STDOUT)
+
+        environment.shell_command("tConvert", ["-v", a_pass.lisfile.name], stdout=None, stderr=subprocess.STDOUT)
+
     return True
+
 
 def polconvert(exp):
     """Checks if PolConvert is required for any antenna.
@@ -308,8 +306,8 @@ def polconvert(exp):
         polconv_inp = Path('./polconvert_inputs.ini')
         if not polconv_inp.exists():
             exp.log("cp ~/polconvert/polconvert_inputs.ini ./polconvert_inputs.ini")
-            environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.ini', './polconvert_inputs.ini'],
-                                      shell=True, stdout=None)
+            environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.ini',
+                                      './polconvert_inputs.ini'], shell=True, stdout=None)
             environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDIXXX/g'",
                                       polconv_inp.name], shell=True, bufsize=None, stdout=None)
             environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI*/{exp.expname.lower()}_1_1.IDI*/g'",
