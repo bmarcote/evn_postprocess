@@ -26,13 +26,13 @@ description = """[bold]Post-processing of EVN experiments.[/bold]\n
 
 This program runs the full post-processing for a correlated EVN experiment until distribution, following the steps described in the EVN Post-Processing Guide, in a semi-automatic way.
 
-The program would retrieve the experiment code from the current working directory, and the associated Support Scientist from the parent directory. Otherwise they need to be specified manually.
+[dim]The program would retrieve the experiment code from the current working directory, and the associated Support Scientist from the parent directory. Otherwise they need to be specified manually.
 
 The user can also specify to run only some of the steps or to start the process from a given step
 (for those cases when the process has partially run previously). If the post-processing already run in teh past,
 it will automatically continue from the last successful step that run.
 
-[italic]If the post-processing partially run before this execution, it will continue from the last successful step.[/italic]
+[italic]If the post-processing partially run before this execution, it will continue from the last successful step.[/italic][/dim]
 """
 
 help_calsources = 'Calibrator sources to use in standardplots (comma-separated, no spaces). ' \
@@ -306,10 +306,10 @@ def main():
                                      formatter_class=RawTextRichHelpFormatter)
                                      # formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-e', '--expname', type=str, default=None,
-                        help='Name of the EVN experiment (case-insensitive).\nBy default recovered assuming you' \
-                             'are running this from /data0/{supsci}/{EXPNAME}.')
+                        help='Name of the EVN experiment (case-insensitive).\n[dim]By default recovered assuming you' \
+                             ' run this from /data0/{supsci}/{EXPNAME}.[/dim]')
     parser.add_argument('-jss', '--supsci', type=str, default=None, help='Surname of the EVN Support Scientist.\n' \
-                        'By default recovered assuming you are running this from /data0/{supsci}/{EXPNAME}.')
+                        '[dim]By default recovered assuming you run this from /data0/{supsci}/{EXPNAME}.[/dim]')
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:XXXXX).')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
@@ -338,9 +338,14 @@ def main():
     if args.expname is None:
         args.expname = Path.cwd().name
 
-    assert env.grep_remote_file('jops@ccs', '/ccs/var/log2vex/MASTER_PROJECTS.LIS', args.expname.upper()) != '', \
-        f"The experiment name {args.expname} is not recognized (not present in MASTER_PROJECTS). " \
-        "You may need to manually specify with --expname"
+    try:
+        assert env.grep_remote_file('jops@ccs', '/ccs/var/log2vex/MASTER_PROJECTS.LIS', args.expname.upper()) != '', \
+            f"The experiment name {args.expname} is not recognized (not present in MASTER_PROJECTS). " \
+            "You may need to manually specify with --expname"
+    except ValueError as e:
+        rich.print(f"[italic red]The assumed eperiment code {args.expname} is not recognized.[/italic red]")
+        rich.print('\n' + description)
+        sys.exit(0)
 
     if args.supsci is None:
         args.supsci = Path.cwd().parent.name
