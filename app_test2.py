@@ -6,6 +6,7 @@ import sys
 import argparse
 import traceback
 import rich
+from rich_argparse import RichHelpFormatter
 from pathlib import Path
 from datetime import datetime as dt
 # from inspect import signature  # WHAT?  to know how many parameters has each function
@@ -15,11 +16,12 @@ from evn_postprocess.evn_postprocess import dialog
 from evn_postprocess.evn_postprocess import environment as env
 
 
-__version__ = 0.9
+__version__ = 1.0
 __prog__ = 'postprocess'
 usage = "%(prog)s  [-h] [options]\n"
-description = """Post-processing of EVN experiments.
-The program runs the full post-processing for a correlated EVN experiment until distribution, following the steps described in the EVN Post-Processing Guide.
+description = """[bold]Post-processing of EVN experiments.[/bold]
+
+The program runs the full post-processing for a correlated EVN experiment until distribution, following the steps described in the EVN Post-Processing Guide, in a semi-automatic way.
 
 The program would retrieve the experiment code from the current working directory, and the associated Support Scientist from the parent directory. Otherwise they need to be specified manually.
 
@@ -27,36 +29,48 @@ The user can also specify to run only some of the steps or to start the process 
 (for those cases when the process has partially run previously). If the post-processing already run in teh past,
 it will automatically continue from the last successful step that run.
 
+[italic]If the post-processing partially run before this execution, it will continue from the last successful step.[/italic]
 """
 
 help_calsources = 'Calibrator sources to use in standardplots (comma-separated, no spaces). ' \
                   'If not provided, it will pick the fringefinders found in the .expsum file.'
-help_steps = """Specify the step to start the post-processing (if you want to start it mid-way),
-check with -h the available steps. If two steps are provided (comma-separated
-without spaces), then it will run the steps from the first to the second one.
-The available steps are:
 
-    - setting_up : Sets up the experiment, creates the required folders in @eee and @pipe,
-                   and copy the already-existing files (.expsum, .vix, etc).
-    - lisfile : Produces a .lis file in @ccs and copies them to @eee.
-    - checklis : Checks the existing .lis files and asks the user some parameters to continue.
-    - ms : Gets the data for all available .lis files and runs j2ms2 to produce MS files.
-    - plots : Runs standardplots.
-    - msops : Runs the full MS operations like ysfocus, polswap, flag_weights, etc.
-    - tconvert : Runs tConvert on all available MS files, and runs polConvert is required.
-    - post_polconvert : if polConvert did run, then this steps renames the new *.PCONVERT
-                        files and do standardplots on them.
-    - archive : Sets the credentials for the experiment,
+help_run = """[bold]Runs the post-process from a given step[/bold].
+
+        Four different approaches can be used:
+
+        [italic]postprocess run[/italic]  (no param)  - Runs the entire post-process (or from the last run step).
+        [italic]postprocess run STEP1[/italic]   - Runs from STEP1 until the end (or until manual interaction is
+                                                   required).
+        [italic]postprocess run STEP1,[/italic]        - Only runs STEP1.
+        [italic]postprocess run STEP1,STEP2[/italic]   - Runs from STEP1 until STEP2 (both included).
+                                                                        
+
+        The available steps are:
+            - [bold green]setting_up[/bold green] : Sets up the experiment, creates the required folders in
+                @eee and @pipe, and copy the already-existing files (.expsum, .vix, etc).
+            - [bold green]lisfile[/bold green] : Produces a .lis file in @ccs and copies them to @eee.
+            - [bold green]checklis[/bold green] : Checks the existing .lis files.
+            - [bold green]ms[/bold green] : Gets the data for all available .lis files and runs j2ms2 to produce
+                MS files.
+            - [bold green]plots[/bold green] : Runs standardplots.
+            - [bold green]msops[/bold green] : Runs the full MS operations like ysfocus, polswap, flag_weights, etc.
+            - [bold green]tconvert[/bold green] : Runs tConvert on all available MS files, and runs polConvert
+                is required.
+            - [bold green]post_polconvert[/bold green] : if polConvert did run, then this steps renames the
+                new *.PCONVERT files and do standardplots on them.
+            - [bold green]archive[/bold green] : Sets the credentials for the experiment,
                 create the pipe letter and archive all the data.
-    - antab : Retrieves the .antab file to be used in the pipeline.
-              If it was not generated, Opens antab_editor.py.
-              Needs to run again once you have run antab_editor.py manually.
-    - pipeinputs : Prepares a draft input file for the pipeline and recovers all needed files.
-    - pipeline : Runs the EVN Pipeline for all correlated passes.
-    - postpipe : Runs all steps to be done after the pipeline:
-                 creates tasav, comment files, feedback.pl
-    - last : Appends Tsys/GC and re-archive FITS-IDI and the PI letter.
-             Asks to conduct the last post-processing steps.
+            - [bold green]antab[/bold green] : Retrieves the .antab file to be used in the pipeline.
+                If it was not generated, Opens antab_editor.py.
+                Needs to run again once you have run antab_editor.py manually.
+            - [bold green]pipeinputs[/bold green] : Prepares a draft input file for the pipeline and recovers
+                all needed files.
+            - [bold green]pipeline[/bold green] : Runs the EVN Pipeline for all correlated passes.
+            - [bold green]postpipe[/bold green] : Runs all steps to be done after the pipeline:
+                creates tasav, comment files, feedback.pl
+            - [bold green]last[/bold green] : Appends Tsys/GC and re-archive FITS-IDI and the PI letter.
+                Asks to conduct the last post-processing steps.            
 """
 
 help_edit = """You can edit some of the parameters of the experiment.
@@ -78,25 +92,29 @@ help_gui = 'Type of GUI to use for interactions with the user:\n' \
            '- "tui": uses the Terminal-based User Interface.\n' \
            '- "gui": uses the Graphical User Interface.'
 
+edit_params = ('refant', 'calsour', 'onebit', 'polswap', 'polconvert', 'target', 'calibrator', 'fringefinder')
+all_steps = {'setting_up': sch.setting_up_environment,
+             'lisfile': sch.preparing_lis_files,
+             'checklis': sch.first_manual_check,
+             'ms': sch.creating_ms,
+             'plots': sch.standardplots,
+             'msops': sch.ms_operations,
+             'tconvert': sch.tconvert,
+             'post_polconvert': sch.post_polconvert,
+             'archive': sch.archive,
+             'antab': sch.antab_editor,
+             'pipeinputs': sch.getting_pipeline_files,
+             'pipeline': sch.pipeline,   # TODO:  sch.protect_archive_data
+             'postpipe': sch.after_pipeline,
+             'last': sch.final_steps}
+
+
+
 
 def main():
-    edit_params = ('refant', 'calsour', 'onebit', 'polswap', 'polconvert', 'target', 'calibrator', 'fringefinder')
-    all_steps = {'setting_up': sch.setting_up_environment,
-                 'lisfile': sch.preparing_lis_files,
-                 'checklis': sch.first_manual_check,
-                 'ms': sch.creating_ms,
-                 'plots': sch.standardplots,
-                 'msops': sch.ms_operations,
-                 'tconvert': sch.tconvert,
-                 'post_polconvert': sch.post_polconvert,
-                 'archive': sch.archive,
-                 'antab': sch.antab_editor,
-                 'pipeinputs': sch.getting_pipeline_files,
-                 'pipeline': sch.pipeline,   # TODO:  sch.protect_archive_data
-                 'postpipe': sch.after_pipeline,
-                 'last': sch.final_steps}
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
-                                     formatter_class=argparse.RawTextHelpFormatter)
+                                     formatter_class=RichHelpFormatter)
+                                     # formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-e', '--expname', type=str, default=None,
                         help='Name of the EVN experiment (case-insensitive).')
     parser.add_argument('-jss', '--supsci', type=str, default=None, help='Surname of the EVN Support Scientist.',
@@ -112,7 +130,7 @@ def main():
     # parser.add_argument('--gui', type=str, default=None, help=help_gui)
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
     subparsers = parser.add_subparsers(help='subparsers', dest='subpar')
-    parser_edit = subparsers.add_parser('edit', help='subparser edit')
+    parser_edit = subparsers.add_parser('edit', help='subparser edit', description='[italic green]hahaa[/italic green]', formatter_class=parser.formatter_class)
     parser_edit.add_argument('param', type=str, help='Param to modify')
     parser_edit.add_argument('value', type=str, help='Value to write')
 
