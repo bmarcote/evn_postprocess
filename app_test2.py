@@ -111,8 +111,14 @@ def main():
                         help='Additional attributes for j2ms2 (like the fo:).')
     # parser.add_argument('--gui', type=str, default=None, help=help_gui)
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
+    subparsers = parser.add_subparsers(help='subparsers', dest='subpar')
+    parser_edit = subparsers.add_parser('edit', help='subparser edit')
+    parser_edit.add_argument('param', type=str, help='Param to modify')
+    parser_edit.add_argument('value', type=str, help='Value to write')
 
     args = parser.parse_args()
+    print(args)
+    sys.exit(0)
 
     if args.expname is None:
         args.expname = Path.cwd().name
