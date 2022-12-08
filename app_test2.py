@@ -5,6 +5,7 @@ import os
 import sys
 import argparse
 import traceback
+from typing import Optional
 import rich
 from rich_argparse import RichHelpFormatter
 from pathlib import Path
@@ -14,7 +15,9 @@ from evn_postprocess.evn_postprocess import experiment
 from evn_postprocess.evn_postprocess import scheduler as sch
 from evn_postprocess.evn_postprocess import dialog
 from evn_postprocess.evn_postprocess import environment as env
-
+from evn_postprocess.evn_postprocess import process_ccs as ccs
+from evn_postprocess.evn_postprocess import process_eee as eee
+from evn_postprocess.evn_postprocess import process_pipe as pipe
 
 __version__ = 1.0
 __prog__ = 'postprocess'
@@ -44,7 +47,7 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
                                                    required).
         [italic]postprocess run STEP1,[/italic]        - Only runs STEP1.
         [italic]postprocess run STEP1,STEP2[/italic]   - Runs from STEP1 until STEP2 (both included).
-                                                                        
+
 
         The available steps are:
             - [bold green]setting_up[/bold green] : Sets up the experiment, creates the required folders in
@@ -70,27 +73,64 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
             - [bold green]postpipe[/bold green] : Runs all steps to be done after the pipeline:
                 creates tasav, comment files, feedback.pl
             - [bold green]last[/bold green] : Appends Tsys/GC and re-archive FITS-IDI and the PI letter.
-                Asks to conduct the last post-processing steps.            
+                Asks to conduct the last post-processing steps.
+"""
+help_edit = """[bold]Edit some of the parameters related to the experiment[/bold].
+
+    Note that if you assign the values before they are read from the standard processing tasks,
+    they may be overwriten.
+
+    The following parameters are allowed:
+        - [bold green]refant[/bold green] : change the reference antenna(s) to the provided one(s) (comma-separated).
+        - [bold green]calsour[/bold green] : change the sources used for standardplots.
+            If more than one, they must be comma-separated and with no spaces.
+        - [bold green]calibrator[/bold green] : Set the source type to calibrator (phase cal.) for the given source.
+        - [bold green]target[/bold green] : Set the source type to target for the given source
+            (to be used also for phase-referenced check sources).
+        - [bold green]fringefinder[/bold green] : Set the source type to fringe-finder for the given source.
+        - [bold green]polconvert[/bold green] : marks the antennas to be pol converted.
+        - [bold green]polswap[/bold green] : marks the antennas to be pol swapped.
+        - [bold green]onebit[/bold green] :  marks the antennas to be corrected because they observed with one bit.
 """
 
-help_edit = """You can edit some of the parameters of the experiment.
-Note that if you assign the values before they are read from the processing
-normal tasks they may be overwriten.
-The following parameters are allowed:
-    - refant : change the reference antenna(s).
-    - calsour : change the sources used for standardplots.
-                If more than one, they must be comma-separated and with no spaces.
-    - calibrator : change the given source type to calibrator (phase calibrator).
-    - target : change the given source type to target (to be used also for phase-referenced check sources).
-    - fringefinder : change the given source type to fringe-finder.
-    - polconvert : marks the antennas to be pol converted.
-    - polswap : marks the antennas to be pol swapped.
-    - onebit :  marks the antennas to be corrected because they observed with one bit.
+help_exec = f"""[bold]Runs a single command of the experiment post-process.[/bold]
+
+This method allows you even more granularity than 'run' as it will only run a single command from the post-processing.
+
+The following commands are allowed:
+    {'\n'.join(['- [bold green]'+c+'[/bold green] : '+all_commands[c].doc for c in all_commands])}
+
 """
+
+
+help_info = """[bold]Shows the info related to the given experiment (all what postprocess knows until the presentmoment).[/bold]
+
+    It will also write this information down into a 'notes.md' file is this does not exist.
+"""
+
+help_last = """[bold]Returns the last step that run successfully from post-process in this experiment.[/bold]
+    """
+
 help_gui = 'Type of GUI to use for interactions with the user:\n' \
            '- "terminal" (default): it uses the basic prompt in the terminal.\n' \
            '- "tui": uses the Terminal-based User Interface.\n' \
            '- "gui": uses the Graphical User Interface.'
+
+class Command(object):
+    @property
+    def command(self):
+        return self._cmd
+
+    @property
+    def doc(self):
+        return self._doc
+
+    def __init__(self, command, doc):
+        """Executes the command (which must be a Python function), that has the associated doc string for help.
+        """
+        self._cmd = command
+        self._doc = doc
+
 
 edit_params = ('refant', 'calsour', 'onebit', 'polswap', 'polconvert', 'target', 'calibrator', 'fringefinder')
 all_steps = {'setting_up': sch.setting_up_environment,
@@ -108,145 +148,92 @@ all_steps = {'setting_up': sch.setting_up_environment,
              'postpipe': sch.after_pipeline,
              'last': sch.final_steps}
 
+all_commands = {'dirs': Command(env.create_all_dirs, "Creates the required folders (in eee and jop83): " \
+                                    "eee:/data0/{supsci}/{EXP}, jop83:$IN/{exp}, $OUT/{exp}, $IN/{supsci}/{exp}"),
+                'copyfiles': Command(env.copy_files, "Copies the .vix, .expsum, .piletter, .key/sum  to eee."),
+                'auth': Command(eee.set_credentials,
+                                "Sets/recovers the credentials (auth file) for this experiment."),
+                'vlbeer': Command(pipe.get_files_from_vlbeer,
+                                  "Retrieves the antabfs, log, and flag files from vlbeer"),
+                'makelis': Command(ccs.create_lis_files, "Create the .lis files in ccs."),
+                'getlis': Command(ccs.get_lis_files, "Copies the .lis files from ccs to eee."),
+                'modlis': Command(eee.get_passes_from_lisfiles,
+                                  "Reads the correlator passes from the lis files and updates the header."),
+                'checklis': Command(env.check_lisfiles, "Runs checklis.py in all .lis files."),
+                'getdata': Command(eee.getdata, "Runs getdata.pl."),
+                'j2ms2': Command(eee.j2ms2,
+                                 "Runs j2ms2 with the specified params (modify them with the 'edit' command)."),
+                'expname': Command(eee.update_ms_expname, "Runs expname.py (for e-EVN experiments)."),
+                'metadata': Command(eee.get_metadata_from_ms,
+                                    "Retrieves the observational metadata from the MS."),
+                'standardplots': Command(eee.standardplots, "Runs standardplots."),
+                'gv': Command(eee.open_standardplot_files, "Opens the standardplots files with gv."),
+                'ysfocus': Command(eee.ysfocus, "Runs ysfocus.py"),
+                'polswap': Command(eee.polswap, "Runs polswap.py"),
+                'flag_weights': Command(eee.flag_weights, "Runs flag_weights.py"),
+                'onebit': Command(eee.onebit, "Runs onebit.py"),
+                'piletter': Command(eee.update_piletter,
+                                    "Updates the PI letter with info on MS and PolConvert."),
+                'tconvert': Command(eee.tconvert, "Runs tConvert"),
+                'polconvert': Command(eee.polconvert, "Runs PolConvert (or prepares files to run it manually)."),
+                'postpolconvert': Command(eee.post_polconvert, "Runs all required steps after run PolConvert."),
+                'archive-fits': Command(eee.archive, "Runs archive in eee on the standard plots and " \
+                                                     "FITS-IDI files"),
+                'archive-pilet': Command(eee.send_letters, "Archives the PI letter."),
+                'antab': Command(pipe.run_antab_editor, "Prepares .antab and antab_editor.py."),
+                'uvflg': Command(pipe.create_uvflg, "Creates .uvflg from all log files."),
+                'pyinput': Command(pipe.create_input_file, "Creates the input file for the EVN pipeline."),
+                'pipe': Command(pipe.run_pipeline, "Runs the EVN Pipeline."),
+                'comment_tasav': Command(pipe.comment_tasav_files, "Creates the .comment and .tasav file."),
+                'feedback': Command(pipe.pipeline_feedback, "Runs the Pipeline Feedback script."),
+                'archive-pipe': Command(pipe.archive, "Archives the pipeline results."),
+                '': Command(eee.append_antab, ""),
+                'ampcal': Command(pipe.ampcal,
+                                  "Runs ampcal.sh script to incorporate the gain corrections into Grafana"),
+                'pipelet': Command(eee.create_pipelet, "Creates the piletter_auth containing the credentials."),
+                'issues': Command(eee.antenna_feedback, "Tells you where to store the observed problems " \
+                                                        "(station feedback, aka to Grafana, and JIVE RedMine."),
+                'nme': Command(eee.nme_report, "Tells you if you need to write an NME Report.")}
+supsciers = ('agudo', 'bayandina', 'blanchard', 'burns', 'immer', 'marcote', 'minnie', 'murthy', 'nair', 'oh',
+         'orosz', 'paragi', 'rmc', 'surcis', 'yang')
 
 
-
-def main():
-    parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
-                                     formatter_class=RichHelpFormatter)
-                                     # formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-e', '--expname', type=str, default=None,
-                        help='Name of the EVN experiment (case-insensitive).')
-    parser.add_argument('-jss', '--supsci', type=str, default=None, help='Surname of the EVN Support Scientist.',
-                        choices=('marcote', 'murthy', 'oh', 'orosz', 'paragi', 'campbell'))
-    parser.add_argument('--info', default=False, action='store_true',
-                        help='Returns the metadata from the experiment (all what is known to this moment to me).')
-    parser.add_argument('--last', default=False, action='store_true',
-                        help='Returns the last step conducted in a previous run.')
-    parser.add_argument('--step', type=str, default=None, help=help_steps)
-    parser.add_argument('--edit', type=str, nargs=2, default=None, help=help_edit, metavar=('PARAM', 'VALUE'))
-    parser.add_argument('--j2ms2par', type=str, default=None,
-                        help='Additional attributes for j2ms2 (like the fo:).')
-    # parser.add_argument('--gui', type=str, default=None, help=help_gui)
-    parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
-    subparsers = parser.add_subparsers(help='subparsers', dest='subpar')
-    parser_edit = subparsers.add_parser('edit', help='subparser edit', description='[italic green]hahaa[/italic green]', formatter_class=parser.formatter_class)
-    parser_edit.add_argument('param', type=str, help='Param to modify')
-    parser_edit.add_argument('value', type=str, help='Value to write')
-
-    args = parser.parse_args()
-    print(args)
-    sys.exit(0)
-
-    if args.expname is None:
-        args.expname = Path.cwd().name
-        print(f"\nAssuming the experiment code is {args.expname}.")
-
-    if args.supsci is None:
-        args.supsci = Path.cwd().parent.name
-        print(f"Assuming the Support Scientist is {args.supsci}.\n")
-
-    exp = experiment.Experiment(args.expname, args.supsci)
-
-    # if args.gui == 'terminal' or args.gui is None:
-    exp.gui = dialog.Terminal()
-    # elif args.gui.lower() == 'tui':
-    #     raise NotImplementedError("'tui' option not implemented yet.")
-    # elif args.gui.lower() == 'gui':
-    #     raise NotImplementedError("'gui' option not implemented yet.")
-    # else:
-    #     print(f"gui option not recognized. Expecting 'terminal', 'tui', or 'gui'. Obtained {args.gui}")
-    #     sys.exit(1)
-
-    if exp.exists_local_copy():
-        print('Restoring stored information from a previous run.')
-        exp = exp.load()
-
-    if args.last:
-        print("\n\n" + f"The last step that run for this experiment was {exp.last_step}.")
-        sys.exit(0)
-
-    if args.info:
-        exp.print_blessed(outputfile='notes.md')
-        sys.exit(0)
-
-    if args.edit is not None:
-        edit_param = args.edit[0].strip()
-        assert edit_param in edit_params, f"The parameter to edit is not in the supported list ({edit_params})."
-        if edit_param == 'refant':
-            exp.refant = args.edit[1].strip().capitalize()
-        elif edit_param == 'calsour':
-            exp.sources_stdplot = [cs.strip() for cs in args.edit[1].split(',')]
-        elif edit_param == 'onebit':
-            exp.special_params = {'onebit': [ant.strip().capitalize() for ant in args.edit[1].split(',')]}
-        elif edit_param == 'polswap':
-            for ant in args.edit[1].split(','):
-                exp.antennas[ant].polswap = True
-        elif edit_param == 'polconvert':
-            for ant in args.edit[1].split(','):
-                exp.antennas[ant].polconvert = True
-        elif edit_param == 'target':
-            for src in args.edit[1].split(','):
-                for exp_src in exp.sources:
-                    if exp_src.name == src:
-                        exp_src.type = experiment.SourceType.target
-        elif edit_param == 'calibrator':
-            for src in args.edit[1].split(','):
-                for exp_src in exp.sources:
-                    if exp_src.name == src:
-                        exp_src.type = experiment.SourceType.calibrator
-        elif edit_param == 'fringefinder':
-            for src in args.edit[1].split(','):
-                for exp_src in exp.sources:
-                    if exp_src.name == src:
-                        exp_src.type = experiment.SourceType.fringefinder
-
-
-        exp.store()
-        print('Changes properly stored for experiment.')
-        sys.exit(0)
-
-    if args.j2ms2par is not None:
-        exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
+def run(exp: experiment.Experiment, step1: Optional[str] = None, step2: Optional[str] = None,
+        j2ms2par: Optional[str] = None):
+    """Runs the post-process from a given step.
+    """
+    if j2ms2par is not None:
+        exp.special_params = {'j2ms2': [par.strip() for par in j2ms2par.split(',')]}
 
     exp.log(f"\n\n\n{'#'*37}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
             f"# Running on {dt.today().strftime('%d %b %Y %H:%M')} by {exp.supsci}.\n")
     try:
         step_keys = list(all_steps.keys())
-        if (exp.last_step is None) and (args.step is None):
+        if (exp.last_step is None) and (step1 is None):
             the_steps = step_keys
-        elif (exp.last_step is not None) and (args.step is None):
+        elif (exp.last_step is not None) and (step1 is None):
             the_steps = step_keys[step_keys.index(exp.last_step)+1:]
-            exp.log(f"Starting after the last sucessful step from a previous run ('{exp.last_step}').", False)
-            print(f"Starting after the last sucessful step from a previous run ('{exp.last_step}').")
+            exp.log(f"Starting after the last sucessful step from a previous run ({exp.last_step}).", False)
+            rich.print("[italic]Starting after the last sucessful step from a previous run " \
+                       f"({exp.last_step})[/italic].")
+        # step1 is not None
+        elif step2 is None:
+            assert step1 in step_keys, f"The introduced step1 {step1} is not recognized from the list {step_keys}."
+            the_steps = step_keys[step_keys.index(step1):]
+            exp.log(f"Starting at the step '{step1}'.")
+            print(f"Starting at the step '{step1}'.")
         else:
-            if ',' in args.step:
-                if args.step.count(',') > 1:
-                    raise ValueError
-                args.step = args.step.split(',')
-                for a_step in args.step:
-                    if a_step not in all_steps:
-                        raise KeyError(f"The step {a_step} is not recognized (possible values: " \
-                                        f"{', '.join(all_steps.keys())}).")
-
-                the_steps = step_keys[step_keys.index(args.step[0]):step_keys.index(args.step[1])]
-                exp.log(f"Running only the following steps: {', '.join(the_steps)}.", False)
-                print(f"Running only the following steps: {', '.join(the_steps)}.")
-            else:
-                if args.step not in all_steps:
-                    raise KeyError(f"The step {a_step} is not recognized (possible values: " \
-                                    f"{', '.join(all_steps.keys())}).")
-
-                the_steps = step_keys[step_keys.index(args.step):]
-                exp.log(f"Starting at the step '{args.step}'.")
-                print(f"Starting at the step '{args.step}'.")
+            assert step2 in step_keys, f"The introduced step2 {step2} is not recognized from the list {step_keys}."
+            the_steps = step_keys[step_keys.index(step1):step_keys.index(step2)]
+            exp.log(f"Running only the following steps: {', '.join(the_steps)}.", False)
+            print(f"Running only the following steps: {', '.join(the_steps)}.")
     except ValueError:
         print("ERROR: more than two steps have been introduced.\n"
               "Only one or two options are expected.")
         traceback.print_exc()
         sys.exit(1)
     except KeyError:
-        print("ERROR: the introduced step ({args.step}) is not recognized.\n"
+        print("ERROR: the introduced step ({step1}) is not recognized.\n"
               "Run the program with '-h' to see the expected options.")
         traceback.print_exc()
         sys.exit(1)
@@ -261,7 +248,136 @@ def main():
         print('\n\nStopped for manual interaction (see above). Re-run once you have done your duty.')
         return
 
-    print('\nThe post-processing has finished properly.')
+    exp.last_step = "Finished."
+    exp.store()
+    rich.print('\n[italic green]The post-processing has finished properly.[/italic green]')
+
+
+def edit(exp: experiment.Experiment, param: str, value: str):
+    """Edits PARAM with VALUE in the associated experiment.
+    """
+    assert param in edit_params, f"The provided PARAM {param} is not recognized. " \
+                                 f"Only the following values are allow: {', '.join(edit_params)}"
+    if param == 'refant':
+        exp.refant = value.strip().capitalize()
+    elif param == 'calsour':
+        exp.sources_stdplot = [cs.strip() for cs in value.split(',')]
+        # I leave this generic, as for e-EVN it can be tricky and it may complicate the parsing while still
+        # it will work as expected.
+        # for src in exp.sources_stdplot:
+        #     assert src in exp.sources, f"The introduced source {src} was not observe in the observation."
+    elif param == 'onebit':
+        exp.special_params = {'onebit': [ant.strip().capitalize() for ant in value.split(',')]}
+    elif param == 'polswap':
+        for ant in value.split(','):
+            exp.antennas[ant].polswap = True
+    elif param == 'polconvert':
+        for ant in value.split(','):
+            exp.antennas[ant].polconvert = True
+    elif param == 'target':
+        for src in value.split(','):
+            for exp_src in exp.sources:
+                if exp_src.name == src:
+                    exp_src.type = experiment.SourceType.target
+    elif param == 'calibrator':
+        for src in value.split(','):
+            for exp_src in exp.sources:
+                if exp_src.name == src:
+                    exp_src.type = experiment.SourceType.calibrator
+    elif param == 'fringefinder':
+        for src in value.split(','):
+            for exp_src in exp.sources:
+                if exp_src.name == src:
+                    exp_src.type = experiment.SourceType.fringefinder
+
+    exp.store()
+    rich.print('[italic green]Changes properly stored for experiment.[/italic green]')
+    sys.exit(0)
+
+
+def info(exp: experiment.Experiment):
+    """Shows the info related to the experiment.
+    """
+    exp.print_blessed(outputfile='notes.md')
+    sys.exit(0)
+
+
+def last(exp: experiment.Experiment):
+    """Returns the last step that run successfully from post-process in this experiment.
+    """
+    rich.print("\n\n" + f"[italic]The last step that successfully run for this experiment was " \
+               f"[green]{exp.last_step}[/green][/italic].")
+    sys.exit(0)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
+                                     formatter_class=RichHelpFormatter)
+                                     # formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument('-e', '--expname', type=str, default=None,
+                        help='Name of the EVN experiment (case-insensitive).')
+    parser.add_argument('-jss', '--supsci', type=str, default=None, help='Surname of the EVN Support Scientist.',
+                        choices=('marcote', 'murthy', 'oh', 'orosz', 'paragi', 'campbell'))
+    parser.add_argument('--j2ms2par', type=str, default=None,
+                        help='Additional attributes for j2ms2 (like the fo:).')
+    parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
+    subparsers = parser.add_subparsers(help='subparsers', dest='subpar')
+    parser_edit = subparsers.add_parser('edit', help='subparser edit', description=help_edit,
+                                        formatter_class=parser.formatter_class)
+    parser_edit.add_argument('param', type=str, help='Param to modify')
+    parser_edit.add_argument('value', type=str, help='Value to write')
+    parser_run = subparsers.add_parser('run', help='subparser run', description=help_run,
+                                       formatter_class=parser.formatter_class)
+    parser_run.add_argument('step1', type=str, help='Step to start the post-process.')
+    parser_run.add_argument('step2', type=str, default=None, help='Last step to run (included). ' \
+                                                                  'By default None so it will run until the end.')
+    parser_info = subparsers.add_parser('info', help='subparser info', description=help_info,
+                                       formatter_class=parser.formatter_class)
+    parser_last = subparsers.add_parser('last', help='subparser last', description=help_last,
+                                       formatter_class=parser.formatter_class)
+    parser_exec = subparsers.add_parser('exec', help='subparser exec', description=help_exec,
+                                       formatter_class=parser.formatter_class)
+    parser_exec.add_argument('command', type=str, help='Rusn a single command from the experiment post-processing.')
+
+    args = parser.parse_args()
+
+    if expname is None:
+        expname = Path.cwd().name
+
+    assert env.grep_remote_file('jops@ccs', '/ccs/var/log2vex/MASTER_PROJECTS.LIS', expname.upper()) != '', \
+        f"The experiment name {expname} is not recognized (not present in MASTER_PROJECTS). " \
+        "You may need to manually specify with --expname"
+
+    if supsci is None:
+        supsci = Path.cwd().parent.name
+
+    assert supsci in supsciers, f"It seems like the JIVE Support Scientist {supsci} is not recognized " \
+                                f"from my database. You may need to use the --supsci option or ask for support."
+
+    exp = experiment.Experiment(expname, supsci)
+    exp.gui = dialog.Terminal()
+
+    if exp.exists_local_copy():
+        print('A local copy from a previous run has been found and restored.')
+        exp = exp.load()
+
+    if args.j2ms2par is not None:
+        exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
+
+    if args.subpar is None:
+        # Run the whole post-process
+        run(exp)
+    elif args.subpar is 'run':
+        run(exp, args.step1, args.step2)
+    elif args.subpar is 'info':
+        info(exp)
+    elif args.subpar is 'edit':
+        edit(exp, args.param, args.value)
+    elif args.subpar is 'last':
+        last(exp)
+    elif args.subpar is 'exec':
+        assert args.command in all_commands.keys(), f"The provided command {args.command} is not recognized." \
+                f"Accepted commands are: {', '.join(all_commands.keys())}. Run 'postprocess exec -h' for more info."
 
 
 if __name__ == '__main__':
