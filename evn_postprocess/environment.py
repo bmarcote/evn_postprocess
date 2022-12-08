@@ -83,16 +83,16 @@ def remote_file_exists(host, path):
     raise Exception(f"SSH connection to {host} failed.")
 
 
-def grep_remote_file(host, file, word):
+def grep_remote_file(host, remote_file, word):
     """Runs a grep in a file located in a remote host and returns it.
     It may raise ValueError if there is a problem accessing the host or file.
     """
-    cmd = f"grep {word} {file}"
+    cmd = f"grep {word} {remote_file}"
     process = subprocess.Popen(["ssh", host, cmd], shell=False, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
     output = process.communicate()[0].decode('utf-8')
     if process.returncode != 0:
-        raise ValueError(f"Errorcode {process.returncode} when reading {file} from {host}.")
+        raise ValueError(f"Errorcode {process.returncode} when searching for {word} in {remote_file} from {host}.")
 
     return output
 
