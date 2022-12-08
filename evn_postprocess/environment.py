@@ -83,6 +83,20 @@ def remote_file_exists(host, path):
     raise Exception(f"SSH connection to {host} failed.")
 
 
+def grep_remote_file(host, file, word):
+    """Runs a grep in a file located in a remote host and returns it.
+    It may raise ValueError if there is a problem accessing the host or file.
+    """
+    cmd = f"grep {word} {file}"
+    process = subprocess.Popen(["ssh", host, cmd], shell=False, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+    output = process.communicate()[0].decode('utf-8')
+    if process.returncode != 0:
+        raise ValueError(f"Errorcode {process.returncode} when reading {file} from {host}.")
+
+    return output
+
+
 def create_all_dirs(exp):
     """Creates all folders (in eee and jop83) for the associated post-processing.
     Input:
