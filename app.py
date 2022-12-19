@@ -318,7 +318,7 @@ def main():
     parser_run = subparsers.add_parser('run', help='Runs the post-process from a given step.', description=help_run,
                                        formatter_class=parser.formatter_class)
     parser_run.add_argument('step1', type=str, help='Step to start the post-process.')
-    parser_run.add_argument('step2', type=str, default=None, help='Last step to run (included). ' \
+    parser_run.add_argument('step2', type=str, default=None, nargs='?', help='Last step to run (included). ' \
                                                                   'By default None so it will run until the end.')
     parser_exec = subparsers.add_parser('exec', help='Executes a single function from post-processing.',
                                         description=help_exec, formatter_class=parser.formatter_class)
