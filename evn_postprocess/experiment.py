@@ -990,7 +990,7 @@ class Experiment(object):
         keyfilepath = self.cwd / f"{self.expname.lower()}.key"
         if not keyfilepath.exists():
             env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".key .")
+               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".key", ".")
             self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".key .")
 
@@ -1004,7 +1004,7 @@ class Experiment(object):
         keyfilepath = self.cwd / f"{self.expname.lower()}.sum"
         if not keyfilepath.exists():
             env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".sum .")
+               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".sum", ".")
             self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}" + r"\*" + ".sum .")
 
