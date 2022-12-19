@@ -12,7 +12,7 @@ def scp(originpath, destpath):
     """
     print("\n\033[1m> " + f"scp {originpath} {destpath}" + "\033[0m")
     process = subprocess.call(["scp", originpath, destpath], shell=False,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                              stdout=None, stderr=subprocess.PIPE)
     if process != 0:
         raise ValueError(f"\nError code {process} when running scp {originpath} {destpath} in ccs.")
 
