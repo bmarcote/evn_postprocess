@@ -805,8 +805,11 @@ class Experiment(object):
                                     ant_subband[antenna_name].add(spw)
 
                     for antenna_name in self.antennas.names:
-                        a_pass.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
-                        a_pass.antennas[antenna_name].observed = len(a_pass.antennas[antenna_name].subbands) > 0
+                        try:
+                            a_pass.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
+                            a_pass.antennas[antenna_name].observed = len(a_pass.antennas[antenna_name].subbands) > 0
+                        except ValueError:
+                            print(f"Antenna {antenna_name} in list not present in {a_pass.msfile}.")
 
                     # Takes the predefined "best" antennas as reference
                     if len(self.refant) == 0:
@@ -829,8 +832,11 @@ class Experiment(object):
                 print(f"WARNING: {a_pass.msfile} not found.")
 
         for antenna_name in self.antennas.names:
-            self.antennas[antenna_name].observed = any([cp.antennas[antenna_name].observed \
-                                                        for cp in self.correlator_passes])
+            try:
+                self.antennas[antenna_name].observed = any([cp.antennas[antenna_name].observed \
+                                                            for cp in self.correlator_passes])
+            except ValueError:
+                print(f"Antenna {antenna_name} in list not present in {a_pass.msfile}.")
 
     def parse_expsum(self):
         """Parses the .expsum file associated to the experiment to get different
