@@ -353,14 +353,15 @@ def update_piletter(exp):
                         if len(ants_bw) > 0:
                             ants_bw_r = defaultdict(list)
                             for ant in ants_bw:
-                                ants_bw_r[ants_bw[ant]].append(ant)
+                                for sb_range in ants_bw[ant]:
+                                    ants_bw_r[sb_range].append(ant)
 
                             s = "- Note that "
                             for i,ant_r in enumerate(ants_bw_r):
                                 if i == 0:
                                     s += f"{', '.join(ants_bw_r[ant_r])} only observed subbands {ant_r}, "
                                 elif i== len(ants_bw_r)-1:
-                                    s += f" and {', '.join(ants_bw_r[ant_r])} subbands {ant_r}, "
+                                    s += f"and {', '.join(ants_bw_r[ant_r])} subbands {ant_r}, "
                                 else:
                                     s += f"{', '.join(ants_bw_r[ant_r])} subbands {ant_r}, "
 
