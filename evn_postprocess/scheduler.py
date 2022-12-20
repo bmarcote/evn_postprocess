@@ -63,7 +63,7 @@ def first_manual_check(exp: experiment.Experiment):
         print(f"The .lis {temp[0]} for {exp.expname} {temp[1]} has issues to "
               f"be solved manually.\n{'#'*10}\n")
         rprint("[bold]NOTE[/bold]: if you change the name of the .lis file, "
-               "you will need to re-run the step 'lisfile' (with [dim]postprocess --step lisfile[/dim]).")
+               "you will need to re-run the step 'lisfile' (with [dim]postprocess run lisfile[/dim]).")
 
     if exp.eEVNname is not None:
         rprint(f"\n\n[bold red]{exp.expname} is part of an e-EVN run. "
@@ -72,7 +72,7 @@ def first_manual_check(exp: experiment.Experiment):
         output = None
         exp.store()
         rprint("[bold]NOTE[/bold]: if you change the name of the .lis file, "
-               "you will need to re-run the step 'lisfile' (with [dim]postprocess --step lisfile[/dim]).")
+               "you will need to re-run the step 'lisfile' (with [dim]postprocess run lisfile[/dim]).")
         raise ManualInteractionRequired('The lis file needs to be manually edited.')
 
     return output
@@ -183,7 +183,7 @@ def after_pipeline(exp: experiment.Experiment):
     rprint("[green]    2. Run me (`postprocess`) again.[/green]\n")
     rprint("[bold green]If you are NOT happy with the results:[/bold green]")
     rprint("[green]    1. Re-run the pipeline manually (after modifying the needed input files).[/green]")
-    rprint("[green]    2. Run me again with `postprocess --step postpipe`.[/green]\n")
+    rprint("[green]    2. Run me again with `postprocess run postpipe`.[/green]\n")
     if output:
         raise ManualInteractionRequired('')
 
