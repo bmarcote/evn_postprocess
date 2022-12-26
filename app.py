@@ -19,7 +19,7 @@ from evn_postprocess.evn_postprocess import process_ccs as ccs
 from evn_postprocess.evn_postprocess import process_eee as eee
 from evn_postprocess.evn_postprocess import process_pipe as pipe
 
-__version__ = 1.0.3
+__version__ = '1.0.3'
 __prog__ = 'postprocess'
 usage = "%(prog)s  [-h] [options] [commands]\n"
 description = """[bold]Post-processing of EVN experiments.[/bold]\n
