@@ -19,7 +19,7 @@ from evn_postprocess.evn_postprocess import process_ccs as ccs
 from evn_postprocess.evn_postprocess import process_eee as eee
 from evn_postprocess.evn_postprocess import process_pipe as pipe
 
-__version__ = 1.0
+__version__ = 1.0.3
 __prog__ = 'postprocess'
 usage = "%(prog)s  [-h] [options] [commands]\n"
 description = """[bold]Post-processing of EVN experiments.[/bold]\n
@@ -197,7 +197,8 @@ def run(exp: experiment.Experiment, step1: Optional[str] = None, step2: Optional
         exp.special_params = {'j2ms2': [par.strip() for par in j2ms2par.split(',')]}
 
     exp.log(f"\n\n\n{'#'*37}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
-            f"# Running on {dt.today().strftime('%d %b %Y %H:%M')} by {exp.supsci}.\n")
+            f"# Running on {dt.today().strftime('%d %b %Y %H:%M')} by {exp.supsci}.\n"
+            f"Using evn_postprocess version {__version__}.")
     try:
         step_keys = list(all_steps.keys())
         if (exp.last_step is None) and (step1 is None):
