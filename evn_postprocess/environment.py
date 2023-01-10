@@ -6,13 +6,13 @@ from . import process_eee as eee
 from . import process_pipe as pipe
 
 
-def scp(originpath, destpath):
+def scp(originpath, destpath, timeout=None):
     """Does a scp from originpath to destpath. If the process returns an error,
     then it raises ValueError.
     """
     print("\n\033[1m> " + f"scp {originpath} {destpath}" + "\033[0m")
-    process = subprocess.call(["scp", originpath, destpath], shell=False,
-                              stdout=None, stderr=subprocess.PIPE)
+    process = subprocess.run(["scp", originpath, destpath], shell=False,
+                              stdout=None, stderr=subprocess.PIPE, timeout=timeout)
     if process != 0:
         raise ValueError(f"\nError code {process} when running scp {originpath} {destpath} in ccs.")
 

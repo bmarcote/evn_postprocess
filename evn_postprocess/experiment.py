@@ -995,10 +995,16 @@ class Experiment(object):
         """
         keyfilepath = self.cwd / f"{self.expname.lower()}.key"
         if not keyfilepath.exists():
-            env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.key", ".")
-            self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.key .")
+            try:
+                env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+                        f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.key", ".",
+                        timeout=10)
+                self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+                         f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.key .")
+            except subprocess.TimeoutExpired:
+                self.log("Could not retrieve the key file from vlbeer. Check the connection and "
+                         "do it manually if you want the key file.")
+                rprint(f"[italic orange]Could not retrieve the key file from vlbeer.[/italic orane]")
 
         return keyfilepath
 
@@ -1009,10 +1015,16 @@ class Experiment(object):
         """
         keyfilepath = self.cwd / f"{self.expname.lower()}.sum"
         if not keyfilepath.exists():
-            env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum", ".")
-            self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-               f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum .")
+            try:
+                env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+                        f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum", ".",
+                        timeout=10)
+                self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
+                         f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum .")
+            except subprocess.TimeoutExpired:
+                self.log("Could not retrieve the key file from vlbeer. Check the connection and "
+                         "do it manually if you want the key file.")
+                rprint(f"[italic orange]Could not retrieve the key file from vlbeer.[/italic orane]")
 
         return keyfilepath
 
