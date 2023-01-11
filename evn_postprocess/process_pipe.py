@@ -210,19 +210,25 @@ def create_input_file(exp):
                       "mv /jop83_0/pipe/in/{0}/{0}.inp.txt "
                       "/jop83_0/pipe/in/{0}/{0}_1.inp.txt".format(exp.expname.lower()))
         exp.log(cmd, False)
-        a_change = ["experiment = {exp.expname.lower()}", "experiment = {exp.expname.lower()}_1"]
+        a_change = [f"experiment = {exp.expname.lower()}", f"experiment = {exp.expname.lower()}_1"]
         cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
-                                    f"{'/jop83_0/pipe/in/{0}/{0}_1.inp.txt'.format(exp.expname.lower())}", shell=False)
+                         f"{'/jop83_0/pipe/in/{0}/{0}_1.inp.txt'.format(exp.expname.lower())}",
+                         shell=False)
         exp.log(cmd, False)
         for i in range(2, len(exp.correlator_passes)+1):
             cmd, _ = env.ssh('pipe@jop83',
                           "cp /jop83_0/pipe/in/{0}/{0}_1.inp.txt "
                           "/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt".format(exp.expname.lower(), i))
             exp.log(cmd, False)
-            a_change = ["experiment = {exp.expname.lower()}_1", "experiment = {exp.expname.lower()}_{i}"]
+            a_change = [f"experiment = {exp.expname.lower()}_1", f"experiment = {exp.expname.lower()}_{i}"]
             cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
+<<<<<<< HEAD
+                             f"{'/jop83_0/pipe/in/{0}/{0}_{i}.inp.txt'.format(exp.expname.lower())}",
+                             shell=False)
+=======
                                         f"{'/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt'.format(exp.expname.lower(), i)}",
                                         shell=False)
+>>>>>>> 127a884a730994a7da3ca4b5c980484c0c816f3f
             exp.log(cmd, False)
 
     return True
