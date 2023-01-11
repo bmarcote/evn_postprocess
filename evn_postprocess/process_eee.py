@@ -580,8 +580,9 @@ def send_letters(exp):
     else:
         pi += f"{exp.piname.capitalize()}: {exp.email}\n"
 
-    rprint(f"[green]Send the file [bold]{exp.expname.lower()}.piletter_auth[/bold] to " + pi + \
-           "with copy to jops@jive.eu.[/green]")
+    rprint(f"[green]Send the file [bold]{exp.expname.lower()}.piletter"
+           f"{'_auth' if exp.credentials.password is not None else ''}[/bold] to " + pi + \
+           "and CCing jops@jive.eu.[/green]")
     return True
 
 
