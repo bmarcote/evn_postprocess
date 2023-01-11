@@ -1004,7 +1004,9 @@ class Experiment(object):
             except subprocess.TimeoutExpired:
                 self.log("Could not retrieve the key file from vlbeer. Check the connection and "
                          "do it manually if you want the key file.")
-                rprint(f"[italic orange]Could not retrieve the key file from vlbeer.[/italic orane]")
+                rprint(f"[italic orange]Could not retrieve the key file from vlbeer.[/italic orange]")
+                # Because a zero-sized file will be there
+                keyfilepath.unlink(missing_ok=True)
 
         return keyfilepath
 
@@ -1013,8 +1015,8 @@ class Experiment(object):
         """Returns the (Path object) to the .sum file related to the experiment.
         If the file does not exist in the experiment dir (in eee), is retrieved from vlbeer.
         """
-        keyfilepath = self.cwd / f"{self.expname.lower()}.sum"
-        if not keyfilepath.exists():
+        sumfilepath = self.cwd / f"{self.expname.lower()}.sum"
+        if not sumfilepath.exists():
             try:
                 env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                         f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum", ".",
@@ -1024,9 +1026,11 @@ class Experiment(object):
             except subprocess.TimeoutExpired:
                 self.log("Could not retrieve the key file from vlbeer. Check the connection and "
                          "do it manually if you want the key file.")
-                rprint(f"[italic orange]Could not retrieve the key file from vlbeer.[/italic orane]")
+                rprint(f"[italic orange]Could not retrieve the key file from vlbeer.[/italic orange]")
+                # Because a zero-sized file will be there
+                sumfilepath.unlink(missing_ok=True)
 
-        return keyfilepath
+        return sumfilepath
 
     @property
     def logfile(self):
