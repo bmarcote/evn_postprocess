@@ -341,14 +341,14 @@ def update_piletter(exp):
                                             if (ant_sbs[1:] == 1).all():
                                                 ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-"
                                                                          f"{max(antenna.subbands)+1} "
-                                                                         f"(in correlator pass #{i})"]
+                                                                         f"(in correlator pass #{i+1})"]
                                             else:
                                                 ants_bw[antenna.name] = [f"{antenna.subbands} "
-                                                                         f"(in correlator pass #{i})"]
+                                                                         f"(in correlator pass #{i+1})"]
                                         else:
                                             ants_bw[antenna.name].append( \
                                                 f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1} "
-                                                f"(in correlator pass #{i})")
+                                                f"(in correlator pass #{i+1})")
 
                         if len(ants_bw) > 0:
                             ants_bw_r = defaultdict(list)
