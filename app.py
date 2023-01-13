@@ -377,6 +377,7 @@ def main():
     elif args.subpar == 'exec':
         assert args.command in all_commands.keys(), f"The provided command {args.command} is not recognized." \
                 f"Accepted commands are: {', '.join(all_commands.keys())}. Run 'postprocess exec -h' for more info."
+        all_commands[args.command].command(exp)
 
 
 if __name__ == '__main__':
