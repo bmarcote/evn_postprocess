@@ -358,7 +358,6 @@ def main():
     exp.gui = dialog.Terminal()
 
     if exp.exists_local_copy():
-        print('A local copy from a previous run has been found and restored.')
         exp = exp.load()
 
     if args.j2ms2par is not None:
