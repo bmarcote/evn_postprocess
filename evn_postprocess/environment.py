@@ -13,7 +13,7 @@ def scp(originpath, destpath, timeout=None):
     print("\n\033[1m> " + f"scp {originpath} {destpath}" + "\033[0m")
     process = subprocess.run(["scp", originpath, destpath], shell=False,
                               stdout=None, stderr=subprocess.PIPE, timeout=timeout)
-    if process != 0:
+    if process.returncode != 0:
         raise ValueError(f"\nError code {process} when running scp {originpath} {destpath} in ccs.")
 
     return f"scp {originpath} {destpath}", process
@@ -121,7 +121,7 @@ def copy_files(exp):
     """
     exists = []
     files = (exp.vix, exp.expsum, exp.piletter, exp.keyfile, exp.sumfile)
-    for a_file in files:
+    for a_file in files[:-2]:
         exists.append(a_file.exists())
 
     if False in exists:

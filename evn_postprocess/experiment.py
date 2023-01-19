@@ -1004,7 +1004,7 @@ class Experiment(object):
             except subprocess.TimeoutExpired:
                 self.log("Could not retrieve the key file from vlbeer. Check the connection and "
                          "do it manually if you want the key file.")
-                rprint(f"[italic orange]Could not retrieve the key file from vlbeer.[/italic orange]")
+                rprint("\n"+f"[bold yellow]Could not retrieve the key file from vlbeer.[/bold yellow]")
                 # Because a zero-sized file will be there
                 keyfilepath.unlink(missing_ok=True)
 
@@ -1026,7 +1026,7 @@ class Experiment(object):
             except subprocess.TimeoutExpired:
                 self.log("Could not retrieve the key file from vlbeer. Check the connection and "
                          "do it manually if you want the key file.")
-                rprint(f"[italic orange]Could not retrieve the key file from vlbeer.[/italic orange]")
+                rprint("\n"+f"[bold yellow]Could not retrieve the key file from vlbeer.[/bold yellow]")
                 # Because a zero-sized file will be there
                 sumfilepath.unlink(missing_ok=True)
 
