@@ -320,6 +320,7 @@ def update_piletter(exp):
                                            "when using the antenna as reference station during fringe-fitting.\n")
 
                         ants_bw = {}
+                        print(exp.expname, exp.correlator_passes, exp.correlator_passes[0].freqsetup)
                         if len(set([cp.freqsetup.n_subbands for cp in exp.correlator_passes])) == 1:
                             for antenna in exp.correlator_passes[0].antennas:
                                 if 0 < len(antenna.subbands) < exp.correlator_passes[0].freqsetup.n_subbands:
@@ -410,7 +411,7 @@ def polconvert(exp):
             ants = ', '.join(["\"" + ant.upper() + "\"" for ant in exp.antennas.polconvert])
             environment.shell_command('sed', ['-i', "'s/\"T6\"/" + f"{ants}/g'", polconv_inp.name],
                                       shell=True, bufsize=None, stdout=None)
-            ants = ', '.join(["\"" + ant.name.upper() + "\"" for ant in exp.antennas if not ant.observe])
+            ants = ', '.join(["\"" + ant.name.upper() + "\"" for ant in exp.antennas if not ant.observed])
             environment.shell_command('sed', ['-i', "'s/\"EA\"/" + f"{ants}/g'", polconv_inp.name],
                                       shell=True, bufsize=None, stdout=None)
 
