@@ -481,7 +481,8 @@ def post_polconvert(exp):
     exp.last_step = 'post_polconvert'
     # Create again a MS from these converted files so I can run standardplots over the corrected data
     # TODO: Doing it manually for now
-    print("\n\n\033[1m### If PolConvert worked fine, re-run me to continue. Otherwise fix it manually before.\033[0m\n")
+    rprint("\n\n[bold green]If PolConvert worked fine, re-run me to continue. " \
+           "Otherwise fix it manually before.[/bold green]\n")
     return None
 
 def post_post_polconvert(exp):
