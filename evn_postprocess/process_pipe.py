@@ -192,7 +192,7 @@ def create_input_file(exp):
         to_change += [["#solint = 0", "solint = 2"]]
 
     if len(exp.correlator_passes) > 2:
-        env.scp(f"{exp.vexfile}", f"pipe@jop83:/jop83_0/pipe/in/{exp.expname.lower()}/")
+        env.scp(f"{exp.vix}", f"pipe@jop83:/jop83_0/pipe/in/{exp.expname.lower()}/")
         to_change += [["#doprimarybeam = 1", "doprimarybeam = 1"],
                       ["#setup_station = Ef", f"setup_station = {exp.refant[0]}"]]
 
