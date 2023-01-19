@@ -1080,7 +1080,9 @@ class Experiment(object):
         elif self.obsdatetime.month // 2 > 0:
             sess_month = 'feb'
         else:
-            raise ValueError(f"Experiment {self.expname} not part of e-EVN but outside a session (run in Jan)?")
+            # It can be an out-of-session experiment or an e-EVN with a single experiment
+            return f" -- No associated feedback pages --"
+
 
         return "http://old.evlbi.org/session/" \
                f"{sess_month}{self.obsdatetime.strftime('%y').lower()}/{self.expname.lower()}.html"
