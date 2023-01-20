@@ -51,9 +51,6 @@ def shell_command(command, parameters=None, shell=True, bufsize=-1,
 
     process = subprocess.Popen(' '.join(full_shell_command), shell=shell,
                                stdout=stdout, stderr=stderr, bufsize=bufsize)
-    # process = subprocess.Popen(full_shell_command, shell=shell, stdout=subprocess.PIPE,
-    # for line in process.stdout:
-    #     print(line.decode('utf-8').replace('\n', ''))
     output_lines = []
     while process.poll() is None:
         if process.stdout is not None:
