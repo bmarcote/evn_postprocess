@@ -417,11 +417,11 @@ def polconvert(exp):
             environment.shell_command('sed', ['-i', "'s/\"EA\"/" + f"{ants}/g'", polconv_inp.name],
                                       shell=True, bufsize=None, stdout=None)
 
-        print("\n\n\033[1m### PolConvert needs to be run manually.\033[0m\n")
+        pprint("\n\n[red bold]PolConvert needs to be run manually[/red bold]\n")
         print("You would find the input template in the current directory.")
         print("Edit it manually and then run it with:\n")
         print("> polconvert.py  polconvert_inputs.ini")
-        print("\n\n\033[1mOnce PolConvert has run, re-run me.\033[0m\n\n")
+        pprint("\n\n[red bold]Once PolConvert has run, re-run me[/red bold]\n\n")
         # Keep the following as it will require a manual interaction
         exp.last_step = 'tconvert'
         return None
