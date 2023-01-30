@@ -46,9 +46,10 @@ def get_passes_from_lisfiles(exp):
     together with the MS file associated for each of them.
     """
     lisfiles = glob.glob(f"{exp.expname.lower()}*.lis")
-    thereis_line = True if (len(lisfiles) == 2 and '_line' in ''.join(lisfiles)) else False
+    thereis_line = True if '_line' in ''.join(lisfiles) else False
+    i_lines_done = 0
     passes = []
-    for i, a_lisfile in enumerate(lisfiles):
+    for i, a_lisfile in enumerate(lisfiles.sort()):
         with open(a_lisfile, 'r') as lisfile:
             for a_lisline in lisfile.readlines():
                 if '.ms' in a_lisline:  # The header line
@@ -61,11 +62,12 @@ def get_passes_from_lisfiles(exp):
                     else:
                         if thereis_line:
                             if '_line' in a_lisfile:
-                                fitsidiname = f"{exp.expname.lower()}_2_1.IDI"
+                                fitsidiname = f"{exp.expname.lower()}_{2*i_lines_done + 2}_1.IDI"
                             else:
-                                fitsidiname = f"{exp.expname.lower()}_1_1.IDI"
+                                fitsidiname = f"{exp.expname.lower()}_{2*i_lines_done + 1}_1.IDI"
 
                             to_pipeline = True
+                            i_lines_done += 1
                         else:
                             fitsidiname = f"{exp.expname.lower()}_{i+1}_1.IDI"
                             to_pipeline = True if (i == 0) else False
