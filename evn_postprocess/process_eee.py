@@ -49,7 +49,10 @@ def get_passes_from_lisfiles(exp):
     thereis_line = True if '_line' in ''.join(lisfiles) else False
     i_lines_done = 0
     passes = []
-    for i, a_lisfile in enumerate(lisfiles.sort()):
+    if len(lisfiles) > 1:
+        lisfiles = lisfiles.sort()
+
+    for i, a_lisfile in enumerate(lisfiles):
         with open(a_lisfile, 'r') as lisfile:
             for a_lisline in lisfile.readlines():
                 if '.ms' in a_lisline:  # The header line
