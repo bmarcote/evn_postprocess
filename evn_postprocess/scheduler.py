@@ -56,16 +56,18 @@ def preparing_lis_files(exp: experiment.Experiment):
 def first_manual_check(exp: experiment.Experiment):
     """It is only executed for complex experiments: those with
     """
-    output = dispatcher(exp, (eee.get_passes_from_lisfiles, env.check_lisfiles))
-    if not output:
-        temp = 'file', 'seems' if len(exp.correlator_passes) == 1 else 'files', 'seem'
-        rprint(f"\n\n[bold red]{'#'*50}[/bold red]\n[center red]...Stopping here...[/center red]\n")
-        print(f"The .lis {temp[0]} for {exp.expname} {temp[1]} has issues to "
-              f"be solved manually.\n{'#'*10}\n")
-        rprint("[bold]NOTE[/bold]: if you change the name of the .lis file, "
-               "you will need to re-run the step 'lisfile' (with [dim]postprocess run lisfile[/dim]).")
+    output = dispatcher(exp, (eee.get_passes_from_lisfiles, ))
 
-    if exp.eEVNname is not None:
+    if not env.check_lisfiles(exp):
+        temp = 'file', 'seems' if len(exp.correlator_passes) == 1 else 'files', 'seem'
+        rprint(f"\n\n[red]The .lis {temp[0]} for {exp.expname} {temp[1]} to have issues to "
+               f"be solved manually.[/red]\n")
+        rprint("[bold yellow]NOTE[/bold yellow]:\n- if you change the name of the .lis " + temp[0] + ","
+               "you will need to re-run the step 'lisfile' (with [dim]postprocess run lisfile[/dim]).")
+        rprint("- if the info in the .lis file is actually OK, you can skip the checklis step and continue "
+               "with [dim]postprocess run ms[/dim].")
+        raise ManualInteractionRequired('The lis file needs to be manually edited.')
+    elif exp.eEVNname is not None:
         rprint(f"\n\n[bold red]{exp.expname} is part of an e-EVN run. "
                "Please edit manually the lis file now.[/bold red]")
         exp.last_step = 'checklis'
