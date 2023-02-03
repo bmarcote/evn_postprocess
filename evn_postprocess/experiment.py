@@ -1007,6 +1007,11 @@ class Experiment(object):
                 rprint("\n"+f"[bold yellow]Could not retrieve the key file from vlbeer.[/bold yellow]")
                 # Because a zero-sized file will be there
                 keyfilepath.unlink(missing_ok=True)
+            except ValueError:
+                self.log("Could not find the key file in vlbeer.")
+                rprint("\n"+f"[bold yellow]Could not find the key file in vlbeer.[/bold yellow]")
+                keyfilepath.unlink(missing_ok=True)
+
 
         return keyfilepath
 
@@ -1028,6 +1033,10 @@ class Experiment(object):
                          "do it manually if you want the key file.")
                 rprint("\n"+f"[bold yellow]Could not retrieve the key file from vlbeer.[/bold yellow]")
                 # Because a zero-sized file will be there
+                sumfilepath.unlink(missing_ok=True)
+            except ValueError:
+                self.log("Could not find the sum file in vlbeer.")
+                rprint("\n"+f"[bold yellow]Could not find the sum file in vlbeer.[/bold yellow]")
                 sumfilepath.unlink(missing_ok=True)
 
         return sumfilepath
