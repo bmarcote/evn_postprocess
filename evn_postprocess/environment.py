@@ -197,7 +197,7 @@ def check_lisfiles(exp):
         #       {errors if any otherwise no extra lines}
         #      Last scan = Y
         temp = [o for o in output.split('\n') if len(o) > 0]  # removing any possible trailing empty line
-        all_good = all_good and not (len(temp) > 2)
+        all_good = all_good and (not (len(temp) > 2))
 
     return all_good
 

@@ -46,8 +46,12 @@ def get_passes_from_lisfiles(exp):
     together with the MS file associated for each of them.
     """
     lisfiles = glob.glob(f"{exp.expname.lower()}*.lis")
-    thereis_line = True if (len(lisfiles) == 2 and '_line' in ''.join(lisfiles)) else False
+    thereis_line = True if '_line' in ''.join(lisfiles) else False
+    i_lines_done = 0
     passes = []
+    if len(lisfiles) > 1:
+        lisfiles = lisfiles.sort()
+
     for i, a_lisfile in enumerate(lisfiles):
         with open(a_lisfile, 'r') as lisfile:
             for a_lisline in lisfile.readlines():
@@ -61,11 +65,12 @@ def get_passes_from_lisfiles(exp):
                     else:
                         if thereis_line:
                             if '_line' in a_lisfile:
-                                fitsidiname = f"{exp.expname.lower()}_2_1.IDI"
+                                fitsidiname = f"{exp.expname.lower()}_{2*i_lines_done + 2}_1.IDI"
                             else:
-                                fitsidiname = f"{exp.expname.lower()}_1_1.IDI"
+                                fitsidiname = f"{exp.expname.lower()}_{2*i_lines_done + 1}_1.IDI"
 
                             to_pipeline = True
+                            i_lines_done += 1
                         else:
                             fitsidiname = f"{exp.expname.lower()}_{i+1}_1.IDI"
                             to_pipeline = True if (i == 0) else False
@@ -415,11 +420,11 @@ def polconvert(exp):
             environment.shell_command('sed', ['-i', "'s/\"EA\"/" + f"{ants}/g'", polconv_inp.name],
                                       shell=True, bufsize=None, stdout=None)
 
-        print("\n\n\033[1m### PolConvert needs to be run manually.\033[0m\n")
+        pprint("\n\n[red bold]PolConvert needs to be run manually[/red bold]\n")
         print("You would find the input template in the current directory.")
         print("Edit it manually and then run it with:\n")
         print("> polconvert.py  polconvert_inputs.ini")
-        print("\n\n\033[1mOnce PolConvert has run, re-run me.\033[0m\n\n")
+        pprint("\n\n[red bold]Once PolConvert has run, re-run me[/red bold]\n\n")
         # Keep the following as it will require a manual interaction
         exp.last_step = 'tconvert'
         return None
