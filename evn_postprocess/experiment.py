@@ -790,26 +790,26 @@ class Experiment(object):
                         spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
 
                     ant_subband = defaultdict(set)
-                    print('\nReading the MS to find the missing antennas...')
-                    for (start, nrow) in chunkert(0, len(ms), 5000):
-                        ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
-                        ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
-                        spws = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
-                        msdata = ms.getcol('DATA', startrow=start, nrow=nrow)
-                        cli_progress_bar(start, len(ms), bar_length=40)
+                    print('\nReading the MS to find the antennas that actually observed...')
+                    with progress.Progress() as progress_bar:
+                        task = progress_bar.add_task("[yellow]Reading MS...", total=len(ms))
+                        for (start, nrow) in chunkert(0, len(ms), 5000):
+                            ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
+                            ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
+                            spws = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
+                            msdata = ms.getcol('DATA', startrow=start, nrow=nrow)
 
-                        for ant_i,antenna_name in enumerate(antenna_col):
-                            for spw in spw_names:
-                                cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
-                                if not (abs(msdata[cond]) < 1e-5).all():
-                                    ant_subband[antenna_name].add(spw)
+                            for ant_i,antenna_name in enumerate(antenna_col):
+                                for spw in spw_names:
+                                    cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
+                                    if not (abs(msdata[cond]) < 1e-5).all():
+                                        ant_subband[antenna_name].add(spw)
+
+                            progress_bar.update(task, advance=nrow)
 
                     for antenna_name in self.antennas.names:
-                        try:
-                            a_pass.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
-                            a_pass.antennas[antenna_name].observed = len(a_pass.antennas[antenna_name].subbands) > 0
-                        except ValueError:
-                            print(f"Antenna {antenna_name} in list not present in {a_pass.msfile}.")
+                        a_pass.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
+                        a_pass.antennas[antenna_name].observed = len(a_pass.antennas[antenna_name].subbands) > 0
 
                     # Takes the predefined "best" antennas as reference
                     if len(self.refant) == 0:
