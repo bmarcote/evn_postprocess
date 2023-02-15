@@ -11,13 +11,13 @@ from rich_argparse import RichHelpFormatter, RawTextRichHelpFormatter
 from pathlib import Path
 from datetime import datetime as dt
 # from inspect import signature  # WHAT?  to know how many parameters has each function
-from evn_postprocess.evn_postprocess import experiment
-from evn_postprocess.evn_postprocess import scheduler as sch
-from evn_postprocess.evn_postprocess import dialog
-from evn_postprocess.evn_postprocess import environment as env
-from evn_postprocess.evn_postprocess import process_ccs as ccs
-from evn_postprocess.evn_postprocess import process_eee as eee
-from evn_postprocess.evn_postprocess import process_pipe as pipe
+from evn_postprocess import experiment
+from evn_postprocess import scheduler as sch
+from evn_postprocess import dialog
+from evn_postprocess import environment as env
+from evn_postprocess import ccs
+from evn_postprocess import eee
+from evn_postprocess import pipe
 
 __version__ = '1.0.3'
 __prog__ = 'postprocess'
