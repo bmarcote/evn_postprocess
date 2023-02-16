@@ -407,7 +407,7 @@ def polconvert(exp):
     if len(exp.antennas.polconvert) > 0:
         polconv_inp = Path('./polconvert_inputs.ini')
         if not polconv_inp.exists():
-            exp.log("cp ~/polconvert/polconvert_inputs.ini ./polconvert_inputs.ini")
+            exp.log("cp ~/polconvert/polconvert_inputs.toml ./polconvert_inputs.toml")
             environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.ini',
                                       './polconvert_inputs.ini'], shell=True, stdout=None)
             environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDI*/g'",
@@ -424,7 +424,7 @@ def polconvert(exp):
         rprint("\n\n[red bold]PolConvert needs to be run manually[/red bold]\n")
         print("You would find the input template in the current directory.")
         print("Edit it manually and then run it with:\n")
-        print("> polconvert.py  polconvert_inputs.ini")
+        rprint("[bold]> polconvert.py  polconvert_inputs.ini[/bold]")
         rprint("\n\n[red bold]Once PolConvert has run, re-run me[/red bold]\n\n")
         # Keep the following as it will require a manual interaction
         exp.last_step = 'tconvert'
@@ -544,6 +544,10 @@ def create_pipelet(exp):
 def archive(exp):
     # Compress all figures from standardplots if they haven't been yet
     if len(glob.glob("*.ps")) > 0:
+        # This avoids issues as it seems like gzip freezes when overwriting the same files
+        if len(glob.glob("*.ps.gz")) > 0:
+            environment.shell_command("rm -rf", "*ps.gz", shell=True)
+
         environment.shell_command("gzip", "*ps", shell=True)
         exp.log('gzip *ps')
 
@@ -564,17 +568,20 @@ def append_antab(exp):
     If the ANTAB file is already present in the directory, it will assume that the information was already
     appended.
     """
-    # if len(glob.glob("*.antab")) == 0:
-    if not check_antab_idi.check_consistency("*IDI*"):
+    fits2check = glob.glob(f"{exp.expname.lower()}_*_*.IDI1") + glob.glob(f"{exp.expname.lower()}_*_*.IDI")
+    assert len(fits2check) > 0, "Could not find FITS-IDI to append Tsys/GC!"
+
+    if not all([check_antab_idi.check_consistency(a_fits, verbose=False) for a_fits in fits2check]):
         environment.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
         exp.log('append_antab_idi.py')
-        if not check_antab_idi.check_consistency("*IDI*"):
+        if not all([check_antab_idi.check_consistency(a_fits) for a_fits in fits2check]):
+            # As now everything should be OK. Means that something failed.
+            rprint(f"[red bold]The Tsys/GC could be imported into the FITS-IDI.[/red bold]")
             return False
-
-        environment.archive("-fits", exp, "*IDI*")
     else:
-        print("ANTAB information already appended into the FITS-IDI files.")
+        rprint("[green]ANTAB information already appended into the FITS-IDI files.[/green]")
 
+    environment.archive("-fits", exp, f"{exp.expname.lower()}_*_*.IDI*")
     return True
 
 
