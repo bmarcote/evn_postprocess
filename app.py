@@ -15,9 +15,9 @@ from evn_postprocess import experiment
 from evn_postprocess import scheduler as sch
 from evn_postprocess import dialog
 from evn_postprocess import environment as env
-from evn_postprocess import ccs
-from evn_postprocess import eee
-from evn_postprocess import pipe
+from evn_postprocess import process_ccs as ccs
+from evn_postprocess import process_eee as eee
+from evn_postprocess import process_pipe as pipe
 
 __version__ = '1.0.3'
 __prog__ = 'postprocess'

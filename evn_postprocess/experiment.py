@@ -20,6 +20,7 @@ from pyrap import tables as pt
 from enum import Enum
 from astropy import units as u
 from rich import print as rprint
+from rich import progress
 import blessed
 from . import environment as env
 from . import dialog
@@ -31,13 +32,6 @@ def chunkert(f, l, cs):
         f = f + n
 
 percent = lambda x, y: (float(x)/float(y))*100.0
-
-def cli_progress_bar(current_val, end_val, bar_length=40):
-        percent = current_val/end_val
-        hashes = '#'*int(round(percent*bar_length))
-        spaces = ' '*(bar_length-len(hashes))
-        sys.stdout.write("\rProgress: [{0}] {1}%".format(hashes+spaces, int(round(percent*100))))
-        sys.stdout.flush()
 
 
 class Credentials(object):
@@ -1114,8 +1108,8 @@ class Experiment(object):
         if path is not None:
             self._local_copy = path
 
-        with open(self._local_copy, 'wb') as file:
-            pickle.dump(self, file)
+        with open(self._local_copy, 'wb') as f:
+            pickle.dump(self, f)
 
     def store_json(self, path=None):
         """Stores the current Experiment into a JSON file.
@@ -1124,8 +1118,8 @@ class Experiment(object):
         if path is not None:
             self._local_copy = path
 
-        with open(self._local_copy, 'wb') as file:
-            json.dump(self.json(), file, cls=ExpJsonEncoder, indent=4)
+        with open(self._local_copy, 'wb') as f:
+            json.dump(self.json(), f, cls=ExpJsonEncoder, indent=4)
 
     def load(self, path=None):
         """Loads the current Experiment that was stored in a file in the indicated path. If path is None,
@@ -1134,8 +1128,8 @@ class Experiment(object):
         if path is not None:
             self._local_copy = path
 
-        with open(self._local_copy, 'rb') as file:
-            obj = pickle.load(file)
+        with open(self._local_copy, 'rb') as f:
+            obj = pickle.load(f)
 
         return obj
 
