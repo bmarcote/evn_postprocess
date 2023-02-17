@@ -1068,7 +1068,6 @@ class Experiment(object):
 
         self._checklist[a_step] = is_done
 
-    @property
     def feedback_page(self):
         """Returns the url link to the station feedback pages for the experiment.
         """
@@ -1086,7 +1085,8 @@ class Experiment(object):
             # It can be an out-of-session experiment or an e-EVN with a single experiment
             return f" -- No associated feedback pages --"
 
-
+        # This should be the url to write, but the "click here" to provide feedback in the page is broken...
+        # return f"http://archive.jive.nl/scripts/getfeed.php?exp={exp.expname.upper()}_{exp.obsdate}\n"
         return "http://old.evlbi.org/session/" \
                f"{sess_month}{self.obsdatetime.strftime('%y').lower()}/{self.expname.lower()}.html"
 
