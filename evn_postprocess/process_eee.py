@@ -464,7 +464,7 @@ def post_polconvert(exp):
     exp.log("mv *IDI *IDI? *IDI?? *IDI???  idi_ori/")
     exp.log("zmv '(*).PCONVERT' '$1'")
     # Creates a new MS with the PolConverted-data in order to plot it to check if the conversion run properly
-    cmd, _ = environment.shell_command("idi2ms.py", ['--delete',
+    _ = environment.shell_command("idi2ms.py", ['--delete',
                                             f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
                                             f"'{exp.expname.lower()}_1_1.IDI*'"])
     if exp.refant is not None:
@@ -476,7 +476,7 @@ def post_polconvert(exp):
                 break
         raise ValueError("Could not find a good reference antenna for standardplots. Please specify it manually")
 
-    cmd, _ = environment.shell_command("standardplots",
+    _ = environment.shell_command("standardplots",
                                            [f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
                                             refant, ','.join(exp.sources_stdplot)], stdout=None,
                                             stderr=subprocess.STDOUT)
@@ -601,7 +601,7 @@ def send_letters(exp):
 def antenna_feedback(exp):
     rprint("\n[center][bold red] --- Also update the database with the observed issues --- [/bold red][/center]")
     rprint("[bold]Now it is also time to bookkeep the issues that you may have seen in the antennas at[/bold]")
-    rprint(f"http://archive.jive.nl/scripts/getfeed.php?exp={exp.expname.upper()}_{exp.obsdate}\n")
+    rprint(f"{exp.feedback_page()}\n")
     rprint("[bold]Also go to the JIVE RedMine to write down the relevant issues with particular antennas[/bold]:")
     rprint("https://jrm.jive.nl/projects/science-support/news\n\n")
     return True
