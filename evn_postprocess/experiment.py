@@ -1274,8 +1274,8 @@ class Experiment(object):
             s += term.bright_black('Sup. Sci: ') + f"{self.supsci.capitalize()}\n"
             s_file += [f"Sup. Sci: {self.supsci.capitalize()}\n"]
             s += term.bright_black('Station Feedback Link: ') + \
-                 f"{term.link(self.feedback_page, self.feedback_page)}\n"
-            s_file += [f"Station Feedback Link: {self.feedback_page}"]
+                 f"{term.link(self.feedback_page(), self.feedback_page())}\n"
+            s_file += [f"Station Feedback Link: {self.feedback_page()}"]
             s += term.bright_black('EVN Archive Link: ') + \
                  f"{term.link(self.archive_page, self.archive_page)}\n"
             s_file += [f"EVN Archive Link: {self.archive_page}\n"]
