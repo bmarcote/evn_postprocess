@@ -728,6 +728,18 @@ class Experiment(object):
         isinstance(gui_object, dialog.Dialog)
         self._gui = gui_object
 
+    @property
+    def silent_mode(self):
+        """Returns if the user wants to avoid launching graphical stuff (like opening plots).
+        True means no graphical opens should take place.
+        False if the user does not mind.
+        """
+        return self._silence
+
+    @silent_mode.setter
+    def silent_mode(self, silence):
+        self._silence = silence
+
     def __init__(self, expname, support_scientist):
         """Initializes an EVN experiment with the given name.
 
@@ -759,6 +771,7 @@ class Experiment(object):
         self._special_pars = {}
         self._last_step = None
         self._gui = None
+        self._silence = False
 
     def get_setup_from_ms(self):
         """Obtains the time range, antennas, sources, and frequencies of the observation
