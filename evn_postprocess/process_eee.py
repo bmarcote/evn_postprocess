@@ -221,12 +221,20 @@ def open_standardplot_files(exp):
     if len(standardplots) == 0:
         raise FileNotFoundError(f"Standardplots for {exp.expname} not found but expected.")
 
+    if exp.silent_mode:
+        rprint("[bold yellow]You did not want me to open the plots. " \
+               "You shall do it manually[/bold yellow]")
+        print("Take a look at the produced standard plots:")
+        print("\n".join(["- {a_plot}" for a_plot in standardplots]))
+        print("[green]Execute me again after that to continue the post-process.[/green]")
+        return None
+
     try:
         for a_plot in standardplots:
             environment.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
     except Exception as e:
         print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")
-        return False
+        return None
 
     return True
 
