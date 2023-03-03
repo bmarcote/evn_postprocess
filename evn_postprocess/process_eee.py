@@ -273,7 +273,6 @@ def polswap(exp):
 
 def flag_weights(exp):
     for a_pass in exp.correlator_passes:
-        print('\n\nThe following may take a while...')
         cmd, output = environment.shell_command("flag_weights.py",
                                                 [a_pass.msfile.name, str(a_pass.flagged_weights.threshold)],
                                                 shell=True, stdout=None, stderr=subprocess.STDOUT)
@@ -332,7 +331,6 @@ def update_piletter(exp):
                                            "when using the antenna as reference station during fringe-fitting.\n")
 
                         ants_bw = {}
-                        print(exp.expname, exp.correlator_passes, exp.correlator_passes[0].freqsetup)
                         if len(set([cp.freqsetup.n_subbands for cp in exp.correlator_passes])) == 1:
                             for antenna in exp.correlator_passes[0].antennas:
                                 if 0 < len(antenna.subbands) < exp.correlator_passes[0].freqsetup.n_subbands:

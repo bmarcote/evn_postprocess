@@ -1400,15 +1400,15 @@ class Experiment(object):
                 if len(set([cp.freqsetup.n_subbands for cp in self.correlator_passes])) == 1:
                     for antenna in self.correlator_passes[0].antennas:
                         if 0 < len(antenna.subbands) < self.correlator_passes[0].freqsetup.n_subbands:
-                            ss += f"    {antenna.name}: {antenna.subbands}\n"
-                            ss_file += [f"    {antenna.name}: {antenna.subbands}"]
+                            ss += f"    {antenna.name}: {3*antenna.subbands[0]}{antenna.subbands}\n"
+                            ss_file += [f"    {antenna.name}: {3*antenna.subbands[0]}{antenna.subbands}"]
                 else:
                     for antenna in self.correlator_passes[0].antennas:
                         for i,a_pass in enumerate(self.correlator_passes):
                             if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
-                                ss += f"    {antenna.name}: {antenna.subbands} " \
+                                ss += f"    {antenna.name}: {3*antenna.subbands[0]}{antenna.subbands} " \
                                       f"(in correlator pass {a_pass.lisfile})\n"
-                                ss_file += [f"    {antenna.name}: {antenna.subbands} " \
+                                ss_file += [f"    {antenna.name}: {3*antenna.subbands[0]}{antenna.subbands} " \
                                       f"(in correlator pass {a_pass.lisfile})"]
             except AttributeError as e:
                 ss += "    No freq. setup information to detect which antennas have a reduced bandwidth."
