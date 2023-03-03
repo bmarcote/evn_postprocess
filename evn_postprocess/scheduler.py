@@ -62,9 +62,11 @@ def first_manual_check(exp: experiment.Experiment):
         temp = 'file', 'seems' if len(exp.correlator_passes) == 1 else 'files', 'seem'
         rprint(f"\n\n[red]The .lis {temp[0]} for {exp.expname} {temp[1]} to have issues to "
                f"be solved manually.[/red]\n")
-        rprint("[bold yellow]NOTE[/bold yellow]:\n- if you change the name of the .lis " + temp[0] + ","
-               "you will need to re-run the step 'lisfile' (with [dim]postprocess run lisfile[/dim]).")
-        rprint("- if the info in the .lis file is actually OK, you can skip the checklis step and continue "
+        rprint("[bold yellow]NOTE[/bold yellow]:")
+        rprint("- If you modify the .lis file, just re-run me with [dim]postprocess[/dim].")
+        rprint(f"- If you change the name of the .lis {temp[0]}," \
+               "you will need to re-run the previous step with [dim]postprocess run lisfile[/dim].")
+        rprint("- If the info in the .lis file is actually OK, you can skip the checklis step and continue "
                "with [dim]postprocess run ms[/dim].")
         raise ManualInteractionRequired('The lis file needs to be manually edited.')
     elif exp.eEVNname is not None:
