@@ -316,6 +316,9 @@ def main():
     parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
     subparsers = parser.add_subparsers(help='[bold]If no command is provided, the full postprocessing will run ' \
                                             'from the last successful step.[/bold]', dest='subpar')
+    parser.add_argument('-s', '--silent', default=False, action='store_true',
+                        help="Choose this option if you don't want graphical windows to be open "\
+                             "(e.g. the standanrd plots).")
     parser_run = subparsers.add_parser('run', help='Runs the post-process from a given step.', description=help_run,
                                        formatter_class=parser.formatter_class)
     parser_run.add_argument('step1', type=str, help='Step to start the post-process.')
@@ -356,6 +359,7 @@ def main():
 
     exp = experiment.Experiment(args.expname, args.supsci)
     exp.gui = dialog.Terminal()
+    exp.silent_mode = args.silent
 
     if exp.exists_local_copy():
         exp = exp.load()
@@ -382,5 +386,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
