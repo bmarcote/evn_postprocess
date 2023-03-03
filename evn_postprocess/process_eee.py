@@ -15,8 +15,6 @@ from collections import defaultdict
 import subprocess
 import numpy as np
 from rich import print as rprint
-from rich.markdown import Markdown
-from . import dialog
 from . import experiment
 from . import environment
 from evn_support import check_antab_idi
@@ -521,7 +519,8 @@ def set_credentials(exp):
     or creates such file iwth a new password.
     """
     if (exp.expname.upper()[0] == 'N') or (exp.expname.upper()[0] == 'F'):
-        print(f"NOTE: {exp.expname} is an NME or test experiment.\nNo authentification will be set.")
+        rprint(f"\n[green][bold]NOTE:[/bold] {exp.expname} is an NME or test experiment.\n"
+               "No authentification will be set.[/green]")
     elif len(glob.glob("*_*.auth")) == 1:
         # Some credentials are already in place.
         exp.set_credentials(*glob.glob("*_*.auth")[0].split('.')[0].split('_'))
