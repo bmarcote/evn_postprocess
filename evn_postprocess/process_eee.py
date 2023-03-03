@@ -49,8 +49,9 @@ def get_passes_from_lisfiles(exp):
     i_lines_done = 0
     passes = []
     if len(lisfiles) > 1:
-        lisfiles = lisfiles.sort()
+        lisfiles.sort()
 
+    print(lisfiles)
     for i, a_lisfile in enumerate(lisfiles):
         with open(a_lisfile, 'r') as lisfile:
             for a_lisline in lisfile.readlines():
