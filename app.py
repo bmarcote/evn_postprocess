@@ -48,7 +48,7 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
 
 
         The available steps are:
-            - [bold green]setting_up[/bold green] : Sets up the experiment, creates the required folders in @eee and @pipe, and copy the already-existing files (.expsum, .vix, etc).
+            - [bold green]start[/bold green] : Sets up the experiment, creates the required folders in @eee and @pipe, and copy the already-existing files (.expsum, .vix, etc).
             - [bold green]lisfile[/bold green] : Produces a .lis file in @ccs and copies them to @eee.
             - [bold green]checklis[/bold green] : Checks the existing .lis files.
             - [bold green]ms[/bold green] : Gets the data for all available .lis files and runs j2ms2 to produce MS files.
@@ -113,7 +113,7 @@ class Command(object):
 
 
 edit_params = ('refant', 'calsour', 'onebit', 'polswap', 'polconvert', 'target', 'calibrator', 'fringefinder')
-all_steps = {'setting_up': sch.setting_up_environment,
+all_steps = {'start': sch.setting_up_environment,
              'lisfile': sch.preparing_lis_files,
              'checklis': sch.first_manual_check,
              'ms': sch.creating_ms,
