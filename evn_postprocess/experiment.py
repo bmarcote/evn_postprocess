@@ -815,8 +815,9 @@ class Experiment(object):
                             progress_bar.update(task, advance=nrow)
 
                     for antenna_name in self.antennas.names:
-                        a_pass.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
-                        a_pass.antennas[antenna_name].observed = len(a_pass.antennas[antenna_name].subbands) > 0
+                        if antenna_name in a_pass.antennas:
+                            a_pass.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
+                            a_pass.antennas[antenna_name].observed = len(a_pass.antennas[antenna_name].subbands) > 0
 
                     # Takes the predefined "best" antennas as reference
                     if len(self.refant) == 0:
@@ -873,7 +874,7 @@ class Experiment(object):
                         self.piname = [self.piname, name]
                         self.email = [self.email, email]
                 elif 'scheduled telescopes' in a_line:
-                    sched_antennas = a_line.split(':')[1].split()
+                    sched_antennas = a_line.split(':')[1].strip().split(' ')
                     # The antennas will likely not be defined at this point, it checks it and adds it
                     saved_ants = self.antennas.scheduled
                     for ant in sched_antennas:
