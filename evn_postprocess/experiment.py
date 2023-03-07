@@ -846,6 +846,7 @@ class Experiment(object):
             except ValueError:
                 print(f"Antenna {antenna_name} in list not present in {a_pass.msfile}.")
 
+
     def parse_expsum(self):
         """Parses the .expsum file associated to the experiment to get different
         valuable data as:
