@@ -409,11 +409,11 @@ def polconvert(exp):
     will run it. For now it just requests the user to run it manually.
     """
     if len(exp.antennas.polconvert) > 0:
-        polconv_inp = Path('./polconvert_inputs.ini')
+        polconv_inp = Path('./polconvert_inputs.toml')
         if not polconv_inp.exists():
             exp.log("cp ~/polconvert/polconvert_inputs.toml ./polconvert_inputs.toml")
-            environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.ini',
-                                      './polconvert_inputs.ini'], shell=True, stdout=None)
+            environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.toml',
+                                      './polconvert_inputs.toml'], shell=True, stdout=None)
             environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDI*/g'",
                                       polconv_inp.name], shell=True, bufsize=None, stdout=None)
             environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI/{exp.expname.lower()}_1_1.IDI/g'",
@@ -428,7 +428,7 @@ def polconvert(exp):
         rprint("\n\n[red bold]PolConvert needs to be run manually[/red bold]\n")
         print("You would find the input template in the current directory.")
         print("Edit it manually and then run it with:\n")
-        rprint("[bold]> polconvert.py  polconvert_inputs.ini[/bold]")
+        rprint("[bold]> polconvert.py  polconvert_inputs.toml[/bold]")
         rprint("\n\n[red bold]Once PolConvert has run, re-run me[/red bold]\n\n")
         # Keep the following as it will require a manual interaction
         exp.last_step = 'tconvert'

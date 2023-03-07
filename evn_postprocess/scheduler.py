@@ -40,6 +40,7 @@ def setting_up_environment(exp: experiment.Experiment):
     output = dispatcher(exp, (env.create_all_dirs, env.copy_files, eee.set_credentials))
     exp.parse_expsum()
     output = dispatcher(exp, (pipe.get_files_from_vlbeer, ))
+    exp.last_step = 'start'
     exp.store()
     return output
 
@@ -49,6 +50,7 @@ def preparing_lis_files(exp: experiment.Experiment):
     Otherwise it creates it in ccs and copy it to the experiment folder.
     """
     output = dispatcher(exp, (ccs.create_lis_files, ccs.get_lis_files, eee.get_passes_from_lisfiles))
+    exp.last_step = 'lisfile'
     exp.store()
     return output
 
@@ -58,6 +60,7 @@ def first_manual_check(exp: experiment.Experiment):
     """
     output = dispatcher(exp, (eee.get_passes_from_lisfiles, ))
 
+    exp.store()
     if not env.check_lisfiles(exp):
         temp = 'file', 'seems' if len(exp.correlator_passes) == 1 else 'files', 'seem'
         rprint(f"\n\n[red]The .lis {temp[0]} for {exp.expname} {temp[1]} to have issues to "
@@ -102,7 +105,7 @@ def standardplots(exp: experiment.Experiment):
 def ms_operations(exp: experiment.Experiment):
     exp.gui.askMSoperations(exp)
     output = dispatcher(exp, (eee.ysfocus, eee.polswap, eee.flag_weights, eee.onebit,
-                              eee.update_piletter))
+                              eee.get_metadata_from_ms, eee.update_piletter))
     exp.store()
     # To get plots on, specially, ampphase without the drops that have been flagged here:
     eee.standardplots(exp, do_weights=False)
