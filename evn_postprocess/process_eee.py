@@ -581,7 +581,7 @@ def append_antab(exp):
         exp.log('append_antab_idi.py')
         if not all([check_antab_idi.check_consistency(a_fits) for a_fits in fits2check]):
             # As now everything should be OK. Means that something failed.
-            rprint(f"[red bold]The Tsys/GC could be imported into the FITS-IDI.[/red bold]")
+            rprint(f"\n\n[red bold]The Tsys/GC could not be imported into the FITS-IDI.[/red bold]")
             return False
     else:
         rprint("[green]ANTAB information already appended into the FITS-IDI files.[/green]")
