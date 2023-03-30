@@ -43,10 +43,16 @@ def get_files_from_vlbeer(exp):
         the_files = [o for o in output.split('\n') if o != '']  # just to avoid trailing \n
         for a_file in the_files:
             ant = a_file.split('.')[0].replace(exp.expname.lower(), '').capitalize()
-            if ext == 'log':
-                exp.antennas[ant].logfsfile = True
-            elif ext == 'antabfs':
-                exp.antennas[ant].antabfsfile = True
+            try:
+                if ext == 'log':
+                    exp.antennas[ant].logfsfile = True
+                elif ext == 'antabfs':
+                    exp.antennas[ant].antabfsfile = True
+            except ValueError:
+                # Likely the antenna has a different name in the expsum, or is an e-EVN
+                # where this antenna participated but not in this particular experiment
+                rprint(f"[yellow]The antenna '{ant}' has a log file but is not found in " \
+                       "the .expsum file. Just ignoring this and continuing...[/yellow]")
 
 
     exp.log(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
