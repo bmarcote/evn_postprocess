@@ -576,7 +576,8 @@ def append_antab(exp):
     fits2check = glob.glob(f"{exp.expname.lower()}_*_*.IDI1") + glob.glob(f"{exp.expname.lower()}_*_*.IDI")
     assert len(fits2check) > 0, "Could not find FITS-IDI to append Tsys/GC!"
 
-    if not all([check_antab_idi.check_consistency(a_fits, verbose=False) for a_fits in fits2check]):
+    if (not all([check_antab_idi.check_consistency(a_fits, verbose=False) for a_fits in fits2check])) \
+       or (len(glob.glob(f"{exp.expname.lower()}*.antab")) == 0):
         environment.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
         exp.log('append_antab_idi.py')
         if not all([check_antab_idi.check_consistency(a_fits) for a_fits in fits2check]):
