@@ -772,6 +772,40 @@ class Experiment(object):
         self._last_step = None
         self._gui = None
         self._silence = False
+        if not self._logs['file'].exists():
+            # Writes down some snippets for jplotter in case the standard one fails.
+            with open(self._logs['file'], 'a') as logfile:
+                logfile.write("This is the log file for the Post-Processing of the EVN " \
+                              f"experiment {self._expname}, observed on "\
+                              f"{self.obsdatetime.strftime('%d %b %Y')}.\n")
+                logfile.write("The associated JIVE support scientist is " \
+                              f"{self._supsci.capitalize()}.\n\n")
+                logfile.write("# Some shortcuts to run manually the standardplots in JPlotter:\n")
+                logfile.write(f"ms {self._expname.lower()}.ms\nindexr\nlistr\nr\n\n")
+                logfile.write("# Weight plot:\n")
+                logfile.write("bl auto;fq */p;sort bl sb;pt wt;ckey sb sb[none]=1;ptsz 4;pl\n")
+                logfile.write(f"save {self._expname.lower()}-weight.ps\n\n")
+                logfile.write("# Amp & phase VS time plots:\n")
+                logfile.write("bl Ef* -auto;fq 5/p;ch 0.1*last:0.9*last;avc vector;nxy 1 4; " \
+                              "pt anptime;ckey src src[none]=1;y local;ptsz 2;time none;pl\n")
+                logfile.write(f"save {self._expname.lower()}-ampphase-0.ps\n")
+                logfile.write("time $start to +50m;pl\n")
+                logfile.write(f"save {self._expname.lower()}-ampphase-1.ps\n\n")
+                logfile.write("# Auto-correlation plots:\n")
+                logfile.write("scan 1;bl auto;fq */p;ch none;avt vector;avc none;pt ampfreq;ckey" \
+                              " p p[none]=1;sort bl;new sb false;multi true;y 0 1.6;nxy 2 4;pl\n")
+                logfile.write(f"save {self._expname.lower()}-auto-0.ps\n")
+                logfile.write("scan 91;pl\n")
+                logfile.write(f"save {self._expname.lower()}-auto-1.ps\n\n")
+                logfile.write("# Cross-correlation plots:\n")
+                logfile.write("scan 1;pt anpfreq;bl Ef* -auto;fq *;ckey p['RR']=2 p['LL']=3 " \
+                              "p['RL']=4 p['LR']=5;nxy 2 3;y local;draw lines points;multi " \
+                              "true;new sb false;ptsz 4;sort bl sb;pl\n")
+                logfile.write(f"save {self._expname.lower()}-cross-0.ps\n")
+                logfile.write("scan 91;pl\n")
+                logfile.write(f"save {self._expname.lower()}-cross-1.ps\n\n")
+                logfile.write("exit\n")
+
 
     def get_setup_from_ms(self):
         """Obtains the time range, antennas, sources, and frequencies of the observation
