@@ -485,7 +485,7 @@ def post_polconvert(exp):
                                             refant, ','.join(exp.sources_stdplot)], stdout=None,
                                             stderr=subprocess.STDOUT)
 
-    for a_plot in glob.glob(f"{exp.expname.lower()}-pconv-cross*.ps"):
+    for a_plot in glob.glob(f"{exp.expname.lower()}-*-pconv-cross*.ps"):
         environment.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
 
     exp.last_step = 'post_polconvert'
