@@ -1398,9 +1398,10 @@ class Experiment(object):
             s_file += [f"Sources to standardplot: {', '.join(self.sources_stdplot)}\n"]
             s += term.bold_green('ANTENNAS\n')
             s_file += ['## ANTENNAS']
-            s += term.bright_black('Antennas with data: ') + \
-                 f"{', '.join([ant.name for ant in self.antennas if ant.observed])}\n"
-            s_file += [f"Antennas with data: {', '.join([ant.name for ant in self.antennas if ant.observed])}"]
+            antennas_observing = [ant.name for ant in self.antennas if ant.observed]
+            s += term.bright_black(f'Antennas with data ({len(antennas_observing)}):') + \
+                 f"{', '.join(antennas_observing)}\n"
+            s_file += [f"Antennas with data ({len(antennas_observing)}): {', '.join(antennas_observing)}"]
             missing_ants = [ant.name for ant in self.antennas if not ant.observed]
             s += term.bright_black('Did not observe: ') + \
                  f"{', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}\n\n"
