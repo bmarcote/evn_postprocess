@@ -15,9 +15,9 @@ from collections import defaultdict
 import subprocess
 import numpy as np
 from rich import print as rprint
+from evn_support import check_antab_idi
 from . import experiment
 from . import environment
-from evn_support import check_antab_idi
 
 
 def create_folders(exp):
