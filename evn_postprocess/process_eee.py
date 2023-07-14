@@ -414,22 +414,45 @@ def polconvert(exp):
             exp.log("cp ~/polconvert/polconvert_inputs.toml ./polconvert_inputs.toml")
             environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.toml',
                                       './polconvert_inputs.toml'], shell=True, stdout=None)
-            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI6/{exp.expname.lower()}_1_1.IDI*/g'",
-                                      polconv_inp.name], shell=True, bufsize=None, stdout=None)
-            environment.shell_command('sed', ['-i', f"'s/es100_1_1.IDI/{exp.expname.lower()}_1_1.IDI/g'",
-                                      polconv_inp.name], shell=True, bufsize=None, stdout=None)
-            ants = ', '.join(["\"" + ant.upper() + "\"" for ant in exp.antennas.polconvert])
-            environment.shell_command('sed', ['-i', "'s/\"T6\"/" + f"{ants}/g'", polconv_inp.name],
-                                      shell=True, bufsize=None, stdout=None)
-            ants = ', '.join(["\"" + ant.name.upper() + "\"" for ant in exp.antennas if not ant.observed])
-            environment.shell_command('sed', ['-i', "'s/\"EA\"/" + f"{ants}/g'", polconv_inp.name],
-                                      shell=True, bufsize=None, stdout=None)
 
-        rprint("\n\n[red bold]PolConvert needs to be run manually[/red bold]\n")
+            with open(polconv_inp, 'r') as pcfile:
+                pccontent = pcfile.read()
+
+            pccontent.replace("expname_1_1.IDI*", f"{exp.expname.lower()}_1_1.IDI*")
+            pccontent.replace("'T6'", ', '.join([f"'{ant.upper()}'" for ant in \
+                              exp.antennas.polconvert]))
+            pccontent.replace("'EF'", f"'{exp.refant[0].upper()}'")
+
+            excl_ants = []
+            for ant in exp.antennas:
+                if (ant.name != exp.refant[0]) and (ant not in exp.antennas.polconvert):
+                    if (not ant.observed):
+                        excl_ants.append(ant.name.upper())
+
+                    # I exclude all antennas that did not observe all subbands as the antenas
+                    # to PolConvert
+                    for pant in exp.antennas.polconvert:
+                        if not set(exp.antennas[pant].subbands).issubset(set(ant.subbands)):
+                            excl_ants.append(ant.name.upper())
+
+            pccontent.replace("'IR', 'CM', 'DE'", ', '.join([f"'{a}'" for a in excl_ants]))
+
+            with open(polconv_inp, 'w') as pcfile:
+                pcfile.write(pccontent)
+
+
+        if len(exp.antennas.polconvert) > 1:
+            verbose_polconv_ants = ', '.join(exp.antennas.polconvert[:-1]) + ' and ' + \
+                                    exp.antennas.polconvert[-1]
+        else:
+            verbose_polconv_ants = exp.antennas.polconvert[0]
+
+        rprint("\n\n[red bold]PolConvert needs to be run manually for " \
+               f"{verbose_polconv_ants}.[/red bold]\n")
         print("You would find the input template in the current directory.")
         print("Edit it manually and then run it with:\n")
         rprint("[bold]> polconvert.py  polconvert_inputs.toml[/bold]")
-        rprint("\n\n[red bold]Once PolConvert has run, re-run me[/red bold]\n\n")
+        rprint("\n\n[red bold]Once PolConvert has run, re-run me as ('postprocess')[/red bold]\n\n")
         # Keep the following as it will require a manual interaction
         exp.last_step = 'tconvert'
         return None
