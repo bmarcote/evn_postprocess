@@ -2,6 +2,7 @@
 import os
 import sys
 import subprocess
+from astropy import units as u
 from . import process_eee as eee
 from . import process_pipe as pipe
 
@@ -273,4 +274,10 @@ def archive(flag, exp, rest_parameters):
     exp.log(cmd, '# '+'# '.join(output))
     return cmd, output
 
+
+def space_available(path):
+    """Returns the available space in the disk where the given path is located.
+    """
+    results = os.statvfs(path)
+    return (results.f_frsize*results.f_bavail*u.b).to(u.Gb)
 

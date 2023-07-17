@@ -14,6 +14,7 @@ from pathlib import Path
 from collections import defaultdict
 import subprocess
 import numpy as np
+from astropy import units as u
 from rich import print as rprint
 from evn_support import check_antab_idi
 from . import experiment
@@ -114,6 +115,13 @@ def j2ms2(exp):
             # print('Removing the pre-existing MS file {outms}')
             # cmd,output = environment.shell_command("rm", ["-rf", outms], shell=True)
             # exp.log(cmd)
+            if environment.space_available(exp.cwd) <= 1.2**u.kbit*int(subprocess.run(
+                                                       f"du -sc */*.cor*", shell=True,
+                                                       capture_output=True).stdout.decode().split()[-2]):
+                rprint("\n\n[bold red]There is no enough space in the computer to create " \
+                       "the MS file[/bold red]")
+                raise IOError("Not enough disk space to create the MS file.")
+
             if 'j2ms2' in exp.special_params:
                 cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
                                                              *exp.special_params['j2ms2']],
@@ -398,7 +406,25 @@ def tconvert(exp):
         if len(glob.glob(f"{a_pass.fitsidifile}*")) > 0:
             continue
 
-        environment.shell_command("tConvert", ["-v", a_pass.lisfile.name], stdout=None, stderr=subprocess.STDOUT)
+        # The size difference between internal MS and FITS-IDI is around 1.55
+        idi_size = 1.55*u.kbit*int(subprocess.run(f"du -s {str(a_pass.msfile)}", shell=True,
+                                                  capture_output=True).stdout.decode().split()[0])
+
+        if idi_size < 20*u.Gb:
+            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name],
+                                      stdout=None, stderr=subprocess.STDOUT)
+        elif idi_size < 4*u.Tb:
+            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
+                                      stdout=None, stderr=subprocess.STDOUT)
+        else:
+            if environment.space_available(exp.cwd) <= 1.1*idi_size:
+                rprint("\n\n[bold red]There is no enough space in the computer to create " \
+                       "the FITS-IDI files[/bold red]")
+                raise IOError("Not enough disk space to create the FITS-IDI files.")
+
+            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o",
+                                      f"chunk_size={int(idi_size.to(u.Tb).value)}GB"],
+                                      stdout=None, stderr=subprocess.STDOUT)
 
     return True
 
