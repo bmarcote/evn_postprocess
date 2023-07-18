@@ -115,7 +115,7 @@ def j2ms2(exp):
             # print('Removing the pre-existing MS file {outms}')
             # cmd,output = environment.shell_command("rm", ["-rf", outms], shell=True)
             # exp.log(cmd)
-            if environment.space_available(exp.cwd) <= 1.2**u.kbit*int(subprocess.run(
+            if environment.space_available(exp.cwd) <= 1.2*u.kbit*int(subprocess.run(
                                                        f"du -sc */*.cor*", shell=True,
                                                        capture_output=True).stdout.decode().split()[-2]):
                 rprint("\n\n[bold red]There is no enough space in the computer to create " \
