@@ -8,11 +8,13 @@ resumed, or restarted.
 """
 import os
 import sys
+import copy
 import numpy as np
 import pickle
 import json
 import subprocess
 import datetime as dt
+from typing import Optional, Union, Iterable, Any
 from pathlib import Path
 from dataclasses import dataclass
 from collections import defaultdict
@@ -25,13 +27,18 @@ import blessed
 from . import environment as env
 from . import dialog
 
-def chunkert(f, l, cs):
-    while f<l:
-        n = min(cs, l-f)
-        yield (f, n)
-        f = f + n
 
-percent = lambda x, y: (float(x)/float(y))*100.0
+def chunkert(pointer: int, total: int, step: int):
+    while pointer < total:
+        n = min(step, total - pointer)
+        yield (pointer, n)
+        pointer = pointer + n
+
+
+def percent(value: float, total: float) -> float:
+    """Returns in percentage the given value as  100*value/total
+    """
+    return (value/total)*100.0
 
 
 class Credentials(object):
@@ -42,14 +49,14 @@ class Credentials(object):
     (a new object needs to be created).
     """
     @property
-    def username(self):
+    def username(self) -> Optional[str]:
         return self._username
 
     @property
-    def password(self):
+    def password(self) -> Optional[str]:
         return self._password
 
-    def __init__(self, username: str, password: str):
+    def __init__(self, username: Optional[str], password: Optional[str]):
         self._username = username
         self._password = password
 
@@ -57,7 +64,8 @@ class Credentials(object):
         for key in ('username', 'password'):
             yield key, getattr(self, key)
 
-    def json(self):
+
+    def json(self) -> dict[str, Optional[str]]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -81,14 +89,14 @@ class FlagWeight(object):
         -1 value if not known.
     """
     @property
-    def threshold(self):
+    def threshold(self) -> float:
         """Threshold value set to flag visibilities with a weight below such value
         when using flag_weight.py.
         """
         return self._th
 
     @threshold.setter
-    def threshold(self, value):
+    def threshold(self, value: float):
         self._th = value
 
     @property
@@ -100,7 +108,7 @@ class FlagWeight(object):
         return self._pc
 
     @percentage.setter
-    def percentage(self, value):
+    def percentage(self, value: float):
         self._pc = value
 
     def __init__(self, threshold: float, percentage: float = -1):
@@ -111,7 +119,7 @@ class FlagWeight(object):
         for key in ('threshold', 'percentage'):
             yield key, getattr(self, key)
 
-    def json(self):
+    def json(self) -> dict[str, float]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -136,11 +144,11 @@ class Source(object):
     and if it must be protected or not (password required to get its data).
     """
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
     @property
-    def type(self):
+    def type(self) -> SourceType:
         return self._type
 
     @type.setter
@@ -149,7 +157,7 @@ class Source(object):
         self._type = new_type
 
     @property
-    def protected(self):
+    def protected(self) -> bool:
         return self._protected
 
     @protected.setter
@@ -161,7 +169,8 @@ class Source(object):
         assert isinstance(name, str), f"The name of the source must be a string (currrently {name})"
         assert isinstance(sourcetype, SourceType), \
                f"The name of the source must be a SourceType object (currrently {sourcetype})"
-        assert isinstance(protected, bool), f"The name of the source must be a boolean (currrently {protected})"
+        assert isinstance(protected, bool), \
+               f"The name of the source must be a boolean (currrently {protected})"
         self._name = name
         self._type = sourcetype
         self._protected = protected
@@ -170,7 +179,7 @@ class Source(object):
         for key in ('name', 'type', 'protected'):
             yield key, getattr(self, key)
 
-    def json(self):
+    def json(self) -> dict[str, Union[str, SourceType, bool]]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -203,78 +212,90 @@ class Antenna:
 class Antennas(object):
     """List of antennas (Antenna class)
     """
-    def __init__(self, antennas=None):
+    def __init__(self, antennas: Optional[list[Antenna]] = None):
         if antennas is not None:
-            self._antennas = antennas[:]
+            self._antennas = copy.deepcopy(antennas)
         else:
-            self._antennas = []
+            self._antennas: list[Antenna] = []
 
-    def add(self, new_antenna):
-        assert isinstance(new_antenna, Antenna)
+        self._niter : int = -1
+
+
+    def add(self, new_antenna: Antenna):
+        if new_antenna.name in self.names:
+            raise KeyError(f"The antenna {new_antenna.name} is already in the list of antennas.")
+
         self._antennas.append(new_antenna)
 
+
     @property
-    def names(self):
+    def names(self) -> list[str]:
         return [a.name for a in self._antennas]
 
     @property
-    def scheduled(self):
+    def scheduled(self) -> list[str]:
         return [a.name for a in self._antennas if a.scheduled]
 
     @property
-    def observed(self):
+    def observed(self) -> list[str]:
         return [a.name for a in self._antennas if a.observed]
 
     @property
-    def subbands(self):
+    def subbands(self) -> list[tuple[int]]:
         return [a.subbands for a in self._antennas if a.observed]
 
     @property
-    def polswap(self):
+    def polswap(self) -> list[str]:
         return [a.name for a in self._antennas if a.polswap]
 
     @property
-    def polconvert(self):
+    def polconvert(self) -> list[str]:
         return [a.name for a in self._antennas if a.polconvert]
 
     @property
-    def onebit(self):
+    def onebit(self) -> list[str]:
         return [a.name for a in self._antennas if a.onebit]
 
     @property
-    def logfsfile(self):
+    def logfsfile(self) -> list[str]:
         return [a.name for a in self._antennas if a.logfsfile]
 
     @property
-    def antabfsfile(self):
+    def antabfsfile(self) -> list[str]:
         return [a.name for a in self._antennas if a.antabfsfile]
 
     @property
-    def opacity(self):
+    def opacity(self) -> list[str]:
         return [a.name for a in self._antennas if a.opacity]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._antennas)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Antenna:
         return self._antennas[self.names.index(key)]
 
-    def __delitem__(self, key):
-        return self._antennas.remove(self.names.index(key))
+    def __delitem__(self, key: str) -> None:
+        return self._antennas.remove(self[key])
 
-    def __iter__(self):
-        return self._antennas.__iter__()
-        # TODO: Why did I created the following code? Is it better?
-        # for ant in self._antennas:
-        #     yield ant
+    def __iter__(self) -> Iterable[Antenna]:
+        self._niter = -1
+        for ant in self._antennas:
+            yield ant
 
-    def __reversed__(self):
+    def __next__(self) -> Antenna:
+        if self._niter < self.__len__()-1:
+            self._niter += 1
+            return self._antennas[self._niter]
+
+        raise StopIteration
+
+    def __reversed__(self) -> list[Antenna]:
         return self._antennas[::-1]
 
-    def __contains__(self, key):
+    def __contains__(self, key: str) -> bool:
         return key in self.names
 
-    def __str__(self):
+    def __str__(self) -> str:
         s = ""
         if len(self.polswap) > 0:
             s += f"PolSwapped: {','.join(self.polswap)}\n "
@@ -288,7 +309,7 @@ class Antennas(object):
         return f"Antennas([{','.join(self.names)}])\n Scheduled: {','.join(self.scheduled)}\n " \
                f"Observed: {','.join(self.observed)}\n " + s
 
-    def json(self):
+    def json(self) -> dict[str, Union[str, bool, tuple]]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -314,22 +335,22 @@ class Subbands(object):
             Total bandwidth for each subband.
     """
     @property
-    def n_subbands(self):
+    def n_subbands(self) -> int:
         return self._n_subbands
 
     @property
-    def channels(self):
+    def channels(self) -> int:
         return self._channels
 
     @property
-    def frequencies(self):
+    def frequencies(self) -> np.ndarray:
         return self._freqs
 
     @property
-    def bandwidths(self):
+    def bandwidths(self) -> u.Quantity:
         return self._bandwidths
 
-    def __init__(self, chans: int, freqs, bandwidths):
+    def __init__(self, chans: int, freqs: np.ndarray, bandwidths: Union[float, u.Quantity]):
         """Inputs:
             - chans : int
                 Number of channels per subband.
@@ -340,10 +361,9 @@ class Subbands(object):
                 Total bandwidth for each subband. If not units are provided, Hz are assumed.
         """
         self._n_subbands = freqs.shape[0]
-        assert isinstance(chans, (int, np.int32, np.int64)), \
-            f"Chans {chans} is not an int as expected (found type {type(chans)})."
         assert isinstance(bandwidths, float) or isinstance(bandwidths, u.Quantity), \
-            f"Bandiwdth {bandwidths} is not a float or Quantity as expected (found type {type(bandwidths)})."
+            f"Bandiwdth {bandwidths} is not a float or Quantity as expected " \
+            f"(found type {type(bandwidths)})."
         assert freqs.shape == (self._n_subbands, chans)
         self._channels = int(chans)
         self._freqs = np.copy(freqs)
@@ -352,11 +372,13 @@ class Subbands(object):
         else:
             self._bandwidths = bandwidths
 
+
     def __iter__(self):
         for key in ('n_subbands', 'channels', 'bandwidths', 'frequencies'):
             yield key, getattr(self, key)
 
-    def json(self):
+
+    def json(self) -> dict[str, Union[int, float, tuple]]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -367,7 +389,7 @@ class Subbands(object):
             if isinstance(val, u.Quantity):
                 d[key] = val.to(u.Hz).value
             elif isinstance(val, np.ndarray):
-                d[key] = list(val)
+                d[key] = tuple(val)
             else:
                 d[key] = val
 
@@ -381,99 +403,115 @@ class CorrelatorPass(object):
     """
 
     @property
-    def lisfile(self):
+    def lisfile(self) -> Path:
         """Returns the name of the .lis file (libpath.Path object) used for this correlator pass.
         """
         return self._lisfile
 
     @lisfile.setter
-    def lisfile(self, new_lisfile):
+    def lisfile(self, new_lisfile: Union[str, Path]):
         if isinstance(new_lisfile, Path):
             self._lisfile = new_lisfile
         elif isinstance(new_lisfile, str):
             self._lisfile = Path(new_lisfile)
+        else:
+            raise TypeError("The new lisfile parameter needs to be either a str or Path object.")
 
     @property
-    def msfile(self):
+    def msfile(self) -> Path:
         """Returns the name of the MS file (libpath.Path object) associated to this correlator pass.
         """
         return self._msfile
 
+
     @msfile.setter
-    def msfile(self, new_msfile):
+    def msfile(self, new_msfile: Union[Path, str]):
         if isinstance(new_msfile, Path):
             self._msfile = new_msfile
         elif isinstance(new_msfile, str):
             self._msfile = Path(new_msfile)
+        else:
+            raise TypeError("The new lisfile parameter needs to be either a str or Path object.")
+
 
     @property
-    def fitsidifile(self):
+    def fitsidifile(self) -> str:
         """Returns the name of the FITS IDI files associated to this correlator pass.
         Note that this is the common name for all files (without the trailing number)
         """
         return self._fitsidifile
 
+
     @fitsidifile.setter
-    def fitsidifile(self, newfitsidifile):
+    def fitsidifile(self, newfitsidifile: str):
         self._fitsidifile = newfitsidifile
 
+
     @property
-    def pipeline(self):
+    def pipeline(self) -> bool:
         """If this pass should be pipelined.
         """
         return self._pipeline
 
+
     @pipeline.setter
-    def pipeline(self, pipeline):
-        isinstance(pipeline, bool)
+    def pipeline(self, pipeline: bool):
         self._pipeline = pipeline
 
+
     @property
-    def sources(self):
+    def sources(self) -> list[Source]:
         """List of sources present in this correlator pass.
         """
         return self._sources
 
+
     @sources.setter
-    def sources(self, list_of_sources):
+    def sources(self, list_of_sources: list[Source]):
         self._sources = list(list_of_sources)
 
+
     @property
-    def antennas(self):
+    def antennas(self) -> Antennas:
         """List of antennas available in the experiment.
         """
         return self._antennas
 
+
     @antennas.setter
-    def antennas(self, new_antennas):
-        isinstance(new_antennas, Antennas)
+    def antennas(self, new_antennas: Antennas):
         self._antennas = new_antennas
 
+
     @property
-    def flagged_weights(self):
+    def flagged_weights(self) -> Optional[FlagWeight]:
         return self._flagged_weights
 
+
     @flagged_weights.setter
-    def flagged_weights(self, flagweight):
-        assert isinstance(flagweight, FlagWeight)
+    def flagged_weights(self, flagweight: FlagWeight):
         self._flagged_weights = flagweight
 
+
     @property
-    def freqsetup(self):
+    def freqsetup(self) -> Optional[Subbands]:
         return self._freqsetup
 
+
     @freqsetup.setter
-    def freqsetup(self, a_subband):
+    def freqsetup(self, new_freqsetup: Subbands):
         """Sets the frequency setup for the given correlator pass.
         """
-        self._freqsetup = a_subband
+        self._freqsetup = new_freqsetup
+
 
     def __init__(self, lisfile: str, msfile: str, fitsidifile: str, pipeline: bool = True,
-                 antennas = None, flagged_weights = None):
+                 antennas: Optional[Antennas] = None,
+                 flagged_weights: Optional[FlagWeight] = None):
         self._lisfile = Path(lisfile)
         self._msfile = Path(msfile)
         self._fitsidifile = fitsidifile
-        self._sources = None
+        self._sources = []
         self._pipeline = pipeline
         self._freqsetup = None  # Must be an object with subbands, freqs, channels, pols.
         if antennas is None:
@@ -483,12 +521,14 @@ class CorrelatorPass(object):
 
         self._flagged_weights = flagged_weights
 
+
     def __iter__(self):
         for key in ('lisfile', 'msfile', 'fitsidifile', 'pipeline', 'sources', 'antennas',
                     'flagged_weights', 'freqsetup'):
             yield key, getattr(self, key)
 
-    def json(self):
+
+    def json(self) -> dict[str, Any]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -499,7 +539,7 @@ class CorrelatorPass(object):
             if hasattr(val, 'json'):
                 d[key] = val.json()
             elif isinstance(val, Path):
-                d[key] = val.name
+                d[key] = str(val)
             elif isinstance(val, list):
                 d[key] = [v.json() for v in val]
             else:
@@ -512,70 +552,83 @@ class Experiment(object):
     """Defines and EVN experiment with all relevant metadata.
     """
     @property
-    def expname(self):
+    def expname(self) -> str:
         """Name of the EVN experiment, in upper case.
         """
         return self._expname
 
+
     @property
-    def eEVNname(self):
+    def eEVNname(self) -> Optional[str]:
         """Name of the e-EVN run in case this experiment was observed in this mode.
         Otherwise returns None
         """
         return self._eEVN
 
+
     @eEVNname.setter
-    def eEVNname(self, eEVNname):
+    def eEVNname(self, eEVNname: Optional[str]):
         self._eEVN = eEVNname
 
+
     @property
-    def piname(self):
+    def piname(self) -> list[str]:
         return self._piname
 
+
     @piname.setter
-    def piname(self, new_piname):
+    def piname(self, new_piname: list[str]):
         self._piname = new_piname
 
+
     @property
-    def email(self):
+    def email(self) -> list[str]:
         return self._email
 
+
     @email.setter
-    def email(self, new_email):
+    def email(self, new_email: list[str]):
         self._email = new_email
 
+
     @property
-    def supsci(self):
+    def supsci(self) -> str:
         return self._supsci
 
+
     @supsci.setter
-    def supsci(self, supsci):
+    def supsci(self, supsci: str):
         self._supsci = supsci
 
+
     @property
-    def obsdate(self):
+    def obsdate(self) -> str:
         """Epoch at which the EVN experiment was observed (starting date), in YYMMDD format.
         """
         return self._obsdate
 
+
     @obsdate.setter
-    def obsdate(self, obsdate):
+    def obsdate(self, obsdate: str):
         self._obsdate = obsdate
 
+
     @property
-    def obsdatetime(self):
+    def obsdatetime(self) -> dt.datetime:
         """Epoch at which the EVN experiment was observed (starting date), in datetime format.
         """
         return dt.datetime.strptime(self.obsdate, '%y%m%d')
 
+
     @property
-    def timerange(self):
+    def timerange(self) -> tuple[Optional[dt.datetime], Optional[dt.datetime]]:
         """Start and end time of the observation in datetime format.
         """
-        return self._startime, self._endtime
+        return (self._startime, self._endtime)
+
 
     @timerange.setter
-    def timerange(self, times):
+    def timerange(self, times: tuple[dt.datetime, dt.datetime]):
         """Start and end time of the observation in datetime format.
         Input:
             - times : tuple of datetime
@@ -587,31 +640,35 @@ class Experiment(object):
         self._startime = starttime
         self._endtime = endtime
 
+
     @property
-    def sources(self):
+    def sources(self) -> list:
         """List of sources observed in the experiment.
         """
         return self._sources
 
+
     @sources.setter
-    def sources(self, new_sources):
+    def sources(self, new_sources: list):
         """List of sources observed in the experiment.
         """
-        self._sources = list(new_sources)
+        self._sources = copy.deepcopy(new_sources)
+
 
     @property
-    def antennas(self):
+    def antennas(self) -> Antennas:
         """List of antennas that were scheduled during the experiment.
         """
         return self._antennas
 
+
     @antennas.setter
-    def antennas(self, new_antennas):
-        isinstance(new_antennas, Antennas)
+    def antennas(self, new_antennas: Antennas):
         self._antennas = new_antennas
 
+
     @property
-    def sources_stdplot(self):
+    def sources_stdplot(self) -> list[str]:
         """Returns the source names to be used to create the standardplots.
         If not specified manually, it will take all fringe-finders that are included in the
         list of sources.
@@ -626,31 +683,33 @@ class Experiment(object):
         else:
             return self._src_stdplot
 
+
     @sources_stdplot.setter
-    def sources_stdplot(self, stdplot_sources):
-        self._src_stdplot = list(stdplot_sources)
+    def sources_stdplot(self, stdplot_sources: list[str]):
+        self._src_stdplot = copy.deepcopy(stdplot_sources)
+
 
     @property
-    def refant(self):
+    def refant(self) -> list:
         """The antenna name to be used as reference. It can be either only one or multiple antennas.
         Returns a list object.
         """
         return self._refant
 
+
     @refant.setter
-    def refant(self, new_refant):
+    def refant(self, new_refant: Union[list, str]):
         if isinstance(new_refant, list):
             self._refant = list(new_refant)
         elif isinstance(new_refant, str):
-            if ',' in new_refant:
-                self._refant = [r.strip() for r in new_refant.split(',')]
-            else:
-                self._refant = [new_refant, ]
+            self._refant = [refant.strip() for refant in new_refant.split(',')]
         else:
-            raise ValueError(f"{new_refant} has an unrecognized type (string or list of strings expected)")
+            raise TypeError(f"{new_refant} has an unrecognized type " \
+                            "(str or list of strings expected)")
+
 
     @property
-    def correlator_passes(self):
+    def correlator_passes(self) -> list[CorrelatorPass]:
         """List of all correlator passes (one or more) that have been conducted.
         Each element of the list is a CorrelatorPass object with all the relevant
         associated information that may vary for each pass.
@@ -659,12 +718,13 @@ class Experiment(object):
         """
         return self._passes
 
-    @correlator_passes.setter
-    def correlator_passes(self, new_passes):
-        assert isinstance(new_passes, list)
-        self._passes = list(new_passes)
 
-    def add_pass(self, a_new_pass):
+    @correlator_passes.setter
+    def correlator_passes(self, new_passes: list[CorrelatorPass]):
+        self._passes = copy.deepcopy(new_passes)
+
+
+    def add_pass(self, a_new_pass: CorrelatorPass):
         """Appends a new correlator pass to the existing list of passes associated
         to this experiment.
         Input:
@@ -673,74 +733,84 @@ class Experiment(object):
         assert isinstance(a_new_pass, CorrelatorPass)
         self._passes.append(a_new_pass)
 
+
     @property
-    def credentials(self):
+    def credentials(self) -> Credentials:
         """Username and password to access the experiment data from the EVN
         archive during the proprietary period.
         """
         return self._credentials
 
-    def set_credentials(self, username, password):
+
+    def set_credentials(self, username: Optional[str], password: Optional[str]):
         self._credentials = Credentials(username, password)
 
+
     @property
-    def cwd(self):
+    def cwd(self) -> Path:
         """Returns the Path to the folder in eee where the experiment is being post-processed.
         """
-        return Path(f"/data0/{self.supsci}/{self.expname}")
+        return self._cwd
+
 
     @property
-    def special_params(self):
-        """Collects some special parameters (non-default ones) that should be used in determined functions
-        that run during the post-processing of the experiment.
+    def special_params(self) -> dict[str, list[str]]:
+        """Collects some special parameters (non-default ones) that should be used in
+        given functions that run during the post-processing of the experiment.
 
-        NOTE: This is a function that only exists to allow a better process of the experiment, not because it
-        should be in this class.
+        NOTE: This is a function that only exists to allow a better process of the experiment,
+        not because it should be in this class.
 
         Returns a dict with the name of the function as key and a list of the parameters to use.
         Or None if no parameters have been set for this experiment.
         """
         return self._special_pars
 
+
     @special_params.setter
-    def special_params(self, new_param):
-        assert isinstance(new_param, dict)
+    def special_params(self, new_param: dict[str, list[str]]):
         self._special_pars.update(new_param)
 
+
     @property
-    def last_step(self):
+    def last_step(self) -> Optional[str]:
         """Returns the last post-processing step that did run properly in a tentative previous run.
         """
         return self._last_step
 
+
     @last_step.setter
-    def last_step(self, last_step):
+    def last_step(self, last_step: str):
         self._last_step = last_step
 
+
     @property
-    def gui(self):
+    def gui(self) -> dialog.Dialog:
         """Returns the GUI object that allows to exchange dialogs with the user
         """
         return self._gui
 
+
     @gui.setter
-    def gui(self, gui_object):
-        isinstance(gui_object, dialog.Dialog)
+    def gui(self, gui_object: dialog.Dialog):
         self._gui = gui_object
 
+
     @property
-    def silent_mode(self):
+    def graphics(self) -> bool:
         """Returns if the user wants to avoid launching graphical stuff (like opening plots).
         True means no graphical opens should take place.
         False if the user does not mind.
         """
-        return self._silence
+        return self._graphics
 
-    @silent_mode.setter
-    def silent_mode(self, silence):
-        self._silence = silence
 
-    def __init__(self, expname, support_scientist):
+    @graphics.setter
+    def graphics(self, do_graphics: bool):
+        self._graphics = do_graphics
+
+
+    def __init__(self, expname: str, support_scientist: str):
         """Initializes an EVN experiment with the given name.
 
         Inputs:
@@ -749,29 +819,40 @@ class Experiment(object):
         """
         self._expname = expname.upper()
         self._eEVN = None
-        self._piname = None
-        self._email = None
+        self._piname = []
+        self._email = []
         self._supsci = support_scientist.lower()
-        self._obsdate = None
+        self._obsdate = ''
         self._refant = []
         self._src_stdplot = None
+        # TODO: verify this is the path and ask the user if different
+        self._cwd = Path().cwd()
+        if self._cwd != Path(f"/data0/{self.supsci}/{self.expname}"):
+            rprint("\n\n[yellow]The current directory is not a default "
+                   "one for an experiment.[/yellow]")
+            answer = input(f"Do you want to change to /data0/{self.supsci}/{self.expname}?  (y/Y)")
+            if answer.lower().strip() in ('y', 'yes'):
+                self._cwd = Path(f"/data0/{self.supsci}/{self.expname}")
+                self._cwd.mkdir(parents=True, exist_ok=True)
+                os.chdir(self._cwd)
+
         # Attributes not known until the MS file is created
         self._startime = None
         self._endtime = None
-        self._sources = None
+        self._sources: list[Source] = []
         self._antennas = Antennas()
         self._credentials = Credentials(None, None)
         self._passes = []
         logpath = self.cwd / "logs"
         logpath.mkdir(parents=True, exist_ok=True)
         self._logs = {'dir': logpath, 'file': self.cwd / "processing.log"}
-        self._checklist = {}  # TODO: add here by default all steps in the check list, with False value
+        self._checklist = {}
         self._local_copy = self.cwd / f"{self.expname.lower()}.obj"
         self.parse_masterprojects()
         self._special_pars = {}
         self._last_step = None
-        self._gui = None
-        self._silence = False
+        self.gui = dialog.Terminal()
+        self._graphics = True
         if not self._logs['file'].exists():
             # Writes down some snippets for jplotter in case the standard one fails.
             with open(self._logs['file'], 'a') as logfile:
@@ -811,7 +892,7 @@ class Experiment(object):
         """Obtains the time range, antennas, sources, and frequencies of the observation
         from all existing passes with MS files and incorporate them into the current object.
         """
-        for  a_pass in self.correlator_passes:
+        for a_pass in self.correlator_passes:
             a_pass.antennas = Antennas()
             try:
                 with pt.table(a_pass.msfile.name, readonly=True, ack=False) as ms:
@@ -827,14 +908,15 @@ class Experiment(object):
                                 ant = Antenna(name=ant_name, observed=True)
                                 self.antennas.add(ant)
 
-                    with pt.table(ms.getkeyword('DATA_DESCRIPTION'), readonly=True, ack=False) as ms_spws:
+                    with pt.table(ms.getkeyword('DATA_DESCRIPTION'),
+                                  readonly=True, ack=False) as ms_spws:
                         spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
 
                     ant_subband = defaultdict(set)
                     print('\nReading the MS to find the antennas that actually observed...')
                     with progress.Progress() as progress_bar:
                         task = progress_bar.add_task("[yellow]Reading MS...", total=len(ms))
-                        for (start, nrow) in chunkert(0, len(ms), 5000):
+                        for (start, nrow) in chunkert(0, len(ms), 100):
                             ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
                             ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
                             spws = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
@@ -842,7 +924,8 @@ class Experiment(object):
 
                             for ant_i,antenna_name in enumerate(antenna_col):
                                 for spw in spw_names:
-                                    cond = np.where((ants1 == ant_i) & (ants2 == ant_i) & (spws == spw))
+                                    cond = np.where((ants1 == ant_i) & (ants2 == ant_i) \
+                                                    & (spws == spw))
                                     if not (abs(msdata[cond]) < 1e-5).all():
                                         ant_subband[antenna_name].add(spw)
 
@@ -850,8 +933,10 @@ class Experiment(object):
 
                     for antenna_name in self.antennas.names:
                         if antenna_name in a_pass.antennas:
-                            a_pass.antennas[antenna_name].subbands = tuple(ant_subband[antenna_name])
-                            a_pass.antennas[antenna_name].observed = len(a_pass.antennas[antenna_name].subbands) > 0
+                            a_pass.antennas[antenna_name].subbands = \
+                                      tuple(ant_subband[antenna_name])
+                            a_pass.antennas[antenna_name].observed = \
+                                      len(a_pass.antennas[antenna_name].subbands) > 0
 
                     # Takes the predefined "best" antennas as reference
                     if len(self.refant) == 0:
@@ -866,7 +951,8 @@ class Experiment(object):
                     with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
                         self.timerange = dt.datetime(1858, 11, 17, 0, 0, 2) + \
                              ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
-                    with pt.table(ms.getkeyword('SPECTRAL_WINDOW'), readonly=True, ack=False) as ms_spw:
+                    with pt.table(ms.getkeyword('SPECTRAL_WINDOW'),
+                                  readonly=True, ack=False) as ms_spw:
                         a_pass.freqsetup = Subbands(ms_spw.getcol('NUM_CHAN')[0],
                                                     ms_spw.getcol('CHAN_FREQ'),
                                                     ms_spw.getcol('TOTAL_BANDWIDTH')[0])
@@ -878,7 +964,7 @@ class Experiment(object):
                 self.antennas[antenna_name].observed = any([cp.antennas[antenna_name].observed \
                                                             for cp in self.correlator_passes])
             except ValueError:
-                print(f"Antenna {antenna_name} in list not present in {a_pass.msfile}.")
+                print(f"Antenna {antenna_name} in list not present in the MS.")
 
 
     def parse_expsum(self):
@@ -895,22 +981,25 @@ class Experiment(object):
                 if 'Principal Investigator:' in a_line:
                     # The line is expected to be 'Principal Investigator: SURNAME  (EMAIL)'
                     piname, email = a_line.split(':')[1].split('(')
-                    self.piname = piname.strip()
-                    self.email = email.split(')')[0].strip()
+                    if piname.strip() not in self.piname:
+                        self.piname.append(piname.strip())
+                        self.email.append(email.split(')')[0].strip())
                 elif 'co-I information' in a_line:
                     # Typically it does not show the :
                     name, email = a_line.replace('co-I information', '').replace(':', '').split('(')
                     name = name.strip()
                     email = email.split(')')[0].strip()
-                    if isinstance(self.piname, list):
-                        self.piname += name
-                        self.email += email
-                    else:
-                        self.piname = [self.piname, name]
-                        self.email = [self.email, email]
+                    if name not in self.piname:
+                        if isinstance(self.piname, list):
+                            self.piname += name
+                            assert isinstance(email, list)
+                            self.email += email
+                        else:
+                            self.piname.append(name)
+                            self.email.append(email)
                 elif 'scheduled telescopes' in a_line:
                     sched_antennas = a_line.split(':')[1].strip().split(' ')
-                    # The antennas will likely not be defined at this point, it checks it and adds it
+                    # The antennas will likely not be defined at this point, it checks and adds it
                     saved_ants = self.antennas.scheduled
                     for ant in sched_antennas:
                         if ant in saved_ants:
@@ -947,11 +1036,12 @@ class Experiment(object):
                         elif srcprot == 'NO':
                             srcprot = True
                         else:
-                            raise ValueError(f"Unknown 'use' value ({srcprot}) found in the expsum.")
+                            raise ValueError(f"Unknown 'use' value ({srcprot}) found in expsum.")
 
                         sources.append(Source(srcname, srctype, srcprot))
 
         self.sources = sources
+
 
     def parse_masterprojects(self):
         """Obtains the observing epoch from the MASTER_PROJECTS.LIS located in ccc.
@@ -970,6 +1060,7 @@ class Experiment(object):
             # One line will have EXP EPOCH.
             # The other one eEXP EPOCH EXP1 EXP2..
             inputs = [i.split() for i in output[:-1].split('\n')]
+            obsdate = ''
             for an_input in inputs:
                 if an_input[0] == self.expname:
                     obsdate = an_input[1]
@@ -978,7 +1069,6 @@ class Experiment(object):
                     self.eEVNname = an_input[0]
 
             self.obsdate = obsdate[2:]
-
         elif output.count('\n') == 1:
             expline = output[:-1].split()
             if len(expline) > 2:
@@ -992,8 +1082,9 @@ class Experiment(object):
             raise ValueError(f"{self.expname} not found in (ccs) MASTER_PROJECTS.LIS"
                              + "or server not reachable.")
 
+
     @property
-    def vix(self):
+    def vix(self) -> Path:
         """Returns the (Path object) to the .vix file related to the experiment.
         If the file does not exist in the experiment dir (in eee), is retrieved from ccs.
         """
@@ -1001,14 +1092,16 @@ class Experiment(object):
         ename = self.expname if self.eEVNname is None else self.eEVNname
         if not vixfilepath.exists():
             env.scp(f"jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix", '.')
-            self.log(f"scp jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix {self.expname.lower()}.vix")
+            self.log(f"scp jops@ccs:/ccs/expr/{ename.upper()}/{ename.lower()}.vix " \
+                     f"{self.expname.lower()}.vix")
             os.symlink(f"{ename.lower()}.vix", f"{self.expname}.vix")
             self.log(f"ln -s {ename.lower()}.vix {self.expname}.vix")
 
         return vixfilepath
 
+
     @property
-    def expsum(self):
+    def expsum(self) -> Path:
         """Returns the (Path object) to the .expsum file related to the experimet.
         If the files does not exist in the experiment dir (in eee), is retrieved from jop83.
         """
@@ -1019,8 +1112,9 @@ class Experiment(object):
 
         return expsumfilepath
 
+
     @property
-    def piletter(self):
+    def piletter(self) -> Path:
         """Returns the (Path object) to the .piletter file related to the experimet.
         If the files does not exist in the experiment dir (in eee), is retrieved from jop83.
         """
@@ -1031,8 +1125,9 @@ class Experiment(object):
 
         return piletterpath
 
+
     @property
-    def keyfile(self):
+    def keyfile(self) -> Path:
         """Returns the (Path object) to the .key file related to the experiment.
         If the file does not exist in the experiment dir (in eee), is retrieved from vlbeer.
         """
@@ -1040,26 +1135,27 @@ class Experiment(object):
         if not keyfilepath.exists():
             try:
                 env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-                        f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.key", ".",
-                        timeout=10)
+                        f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.key", \
+                        ".", timeout=10)
                 self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-                         f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.key .")
+                         f"{self.obsdatetime.strftime('%b%y').lower()}/" \
+                         f"{self.expname.lower()}.key .")
             except subprocess.TimeoutExpired:
                 self.log("Could not retrieve the key file from vlbeer. Check the connection and "
                          "do it manually if you want the key file.")
-                rprint("\n"+f"[bold yellow]Could not retrieve the key file from vlbeer.[/bold yellow]")
+                rprint("\n[bold yellow]Could not retrieve the key file from vlbeer.[/bold yellow]")
                 # Because a zero-sized file will be there
                 keyfilepath.unlink(missing_ok=True)
             except ValueError:
                 self.log("Could not find the key file in vlbeer.")
-                rprint("\n"+f"[bold yellow]Could not find the key file in vlbeer.[/bold yellow]")
+                rprint("\n[bold yellow]Could not find the key file in vlbeer.[/bold yellow]")
                 keyfilepath.unlink(missing_ok=True)
-
 
         return keyfilepath
 
+
     @property
-    def sumfile(self):
+    def sumfile(self) -> Path:
         """Returns the (Path object) to the .sum file related to the experiment.
         If the file does not exist in the experiment dir (in eee), is retrieved from vlbeer.
         """
@@ -1067,33 +1163,36 @@ class Experiment(object):
         if not sumfilepath.exists():
             try:
                 env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-                        f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum", ".",
-                        timeout=10)
+                        f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum", \
+                        ".", timeout=10)
                 self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-                         f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum .")
+                         f"{self.obsdatetime.strftime('%b%y').lower()}/" \
+                         f"{self.expname.lower()}.sum .")
             except subprocess.TimeoutExpired:
                 self.log("Could not retrieve the key file from vlbeer. Check the connection and "
                          "do it manually if you want the key file.")
-                rprint("\n"+f"[bold yellow]Could not retrieve the key file from vlbeer.[/bold yellow]")
+                rprint("\n[bold yellow]Could not retrieve the key file from vlbeer.[/bold yellow]")
                 # Because a zero-sized file will be there
                 sumfilepath.unlink(missing_ok=True)
             except ValueError:
                 self.log("Could not find the sum file in vlbeer.")
-                rprint("\n"+f"[bold yellow]Could not find the sum file in vlbeer.[/bold yellow]")
+                rprint("\n[bold yellow]Could not find the sum file in vlbeer.[/bold yellow]")
                 sumfilepath.unlink(missing_ok=True)
 
         return sumfilepath
 
+
     @property
-    def logfile(self):
+    def logfile(self) -> dict:
         """Returns a dict with the logs, with two keys:
         - 'dir': the directory where individual log files can be stored (by default 'logs/')
-        - 'file': the 'processing.log' file which stores all steps that run during the post-processing
-                  of the experiment.
+        - 'file': the 'processing.log' file which stores all steps that run during
+                  the post-processing of the experiment.
         """
         return self._logs
 
-    def log(self, entry, timestamp=False):
+
+    def log(self, entry: str, timestamp: bool = False):
         """Writes into the processing.log file a new entry.
         """
         if timestamp:
@@ -1104,53 +1203,60 @@ class Experiment(object):
         with open(self.logfile['file'], 'a') as logfile:
             logfile.write(cmd)
 
+
     @property
-    def checklist(self):
+    def checklist(self) -> dict:
         return self._checklist
 
-    def update_checklist(self, a_step, is_done=True):
-        """Updates the step in the checklist and marks it as done or not (True/False, as specified in is_done)
-        If a_step does not exist, it will raise a ValueError Exception.
+
+    def update_checklist(self, a_step: str, is_done: bool = True):
+        """Updates the step in the checklist and marks it as done or not (True/False,
+        as specified in is_done). If a_step does not exist, it will raise a ValueError Exception.
         """
         if a_step not in self._checklist:
             raise ValueError(f"The step {a_step} is not present in the checklis of {self.expname}.")
 
         self._checklist[a_step] = is_done
 
-    def feedback_page(self):
+
+    def feedback_page(self) -> str:
         """Returns the url link to the station feedback pages for the experiment.
         """
         if self.eEVNname is not None:
-            return f" -- No associated feedback pages --"
+            return " -- No associated feedback pages --"
 
         # Folling back the month to the standard session: feb, jun, or oct:
-        if self.obsdatetime.month // 10 > 0:
-            sess_month = 'oct'
-        elif self.obsdatetime.month // 6 > 0:
-            sess_month = 'jun'
-        elif self.obsdatetime.month // 2 > 0:
-            sess_month = 'feb'
-        else:
-            # It can be an out-of-session experiment or an e-EVN with a single experiment
-            return f" -- No associated feedback pages --"
+        # if self.obsdatetime.month // 10 > 0:
+        #     sess_month = 'oct'
+        # elif self.obsdatetime.month // 6 > 0:
+        #     sess_month = 'jun'
+        # elif self.obsdatetime.month // 2 > 0:
+        #     sess_month = 'feb'
+        # else:
+        #     # It can be an out-of-session experiment or an e-EVN with a single experiment
+        #     return " -- No associated feedback pages --"
 
-        # This should be the url to write, but the "click here" to provide feedback in the page is broken...
+        # This should be the url to write, but the "click here" to provide feedback is broken...
         # return f"http://archive.jive.nl/scripts/getfeed.php?exp={exp.expname.upper()}_{exp.obsdate}\n"
-        return "http://old.evlbi.org/session/" \
-               f"{sess_month}{self.obsdatetime.strftime('%y').lower()}/{self.expname.lower()}.html"
+        return "Type '/feedback' in Mattermost"
+        #"http://old.evlbi.org/session/" \
+        #       f"{sess_month}{self.obsdatetime.strftime('%y').lower()}/{self.expname.lower()}.html"
+
 
     @property
-    def archive_page(self):
+    def archive_page(self) -> str:
         """Returns the url link to the EVN Archive pages for the experiment.
         """
         return f"http://archive.jive.nl/scripts/arch.php?exp={self.expname.upper()}"
 
-    def exists_local_copy(self):
+
+    def exists_local_copy(self) -> bool:
         """Checks if there is a local copy of the Experiment object stored in a local file.
         """
         return self._local_copy.exists()
 
-    def store(self, path=None):
+
+    def store(self, path: Optional[Path] = None):
         """Stores the current Experiment into a file in the indicated path. If not provided,
         it will be '.{expname.lower()}.obj' where exp is the name of the experiment.
         """
@@ -1160,7 +1266,8 @@ class Experiment(object):
         with open(self._local_copy, 'wb') as f:
             pickle.dump(self, f)
 
-    def store_json(self, path=None):
+
+    def store_json(self, path: Optional[Path] = None):
         """Stores the current Experiment into a JSON file.
         If path not prvided, it will be '{expname.lower()}.json'.
         """
@@ -1170,9 +1277,11 @@ class Experiment(object):
         with open(self._local_copy, 'wb') as f:
             json.dump(self.json(), f, cls=ExpJsonEncoder, indent=4)
 
-    def load(self, path=None):
-        """Loads the current Experiment that was stored in a file in the indicated path. If path is None,
-        it assumes the standard path of '.{exp}.obj' where exp is the name of the experiment.
+
+    def load(self, path: Optional[Path] = None):
+        """Loads the current Experiment that was stored in a file in the indicated path.
+        If path is None, it assumes the standard path of '.{exp}.obj' where 'exp' is the name
+        of the experiment.
         """
         if path is not None:
             self._local_copy = path
@@ -1182,13 +1291,16 @@ class Experiment(object):
 
         return obj
 
-    def __repr__(self, *args, **kwargs):
+
+    def __repr__(self, *args, **kwargs) -> str:
         rep = super().__repr__(*args, **kwargs)
         rep.replace("object", f"object ({self.expname})")
         return rep
 
-    def __str__(self):
+
+    def __str__(self) -> str:
         return f"<Experiment {self.expname}>"
+
 
     def __iter__(self):
         for key in ('expname', 'eEVNname', 'piname', 'email', 'supsci', 'obsdate', 'obsdatetime',
@@ -1197,7 +1309,8 @@ class Experiment(object):
                     'last_step', 'gui', 'correlator_passes'):
             yield key, getattr(self, key)
 
-    def json(self):
+
+    def json(self) -> dict:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -1231,13 +1344,18 @@ class Experiment(object):
 
         return d
 
+
     def print(self):
         """Pretty print of the full experiment.
         """
         print('\n\n')
         rprint(f"[bold red]Experiment {self.expname.upper()}[/bold red].", sep="\n\n")
-        rprint(f"[dim]Obs. date[/dim]: {self.obsdatetime.strftime('%d/%m/%Y')} "
-               f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC")
+        if None not in self.timerange:
+            rprint(f"[dim]Obs. date[/dim]: {self.obsdatetime.strftime('%d/%m/%Y')} "
+                   f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC")
+        else:
+            rprint(f"[dim]Obs. date[/dim]: {self.obsdatetime.strftime('%d/%m/%Y')}")
+
         if self.eEVNname is not None:
             rprint(f"[dim]e-EVN run[/dim]: {self.eEVNname}")
 
@@ -1252,18 +1370,22 @@ class Experiment(object):
             if len(self.correlator_passes) > 1:
                 rprint(f"[bold]Correlator pass #{i}[/bold]")
 
-            rprint(f"Frequency: {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
-                   f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz")
-            rprint(f"{a_pass.freqsetup.n_subbands} x {a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands")
-            rprint(f"{a_pass.freqsetup.channels} channels each.")
-            rprint(f"lisfile: [italic]{a_pass.lisfile}[/italic]", sep="\n\n")
+            if a_pass.freqsetup is not None:
+                rprint(f"Frequency: {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
+                       f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz")
+                rprint(f"{a_pass.freqsetup.n_subbands} x " \
+                       f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands")
+                rprint(f"{a_pass.freqsetup.channels} channels each.")
+                rprint(f"lisfile: [italic]{a_pass.lisfile}[/italic]", sep="\n\n")
 
         print("\n")
         rprint("[bold]SOURCES[/bold]")
         for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
-                                 (SourceType.fringefinder, SourceType.target, SourceType.calibrator)):
+                                 (SourceType.fringefinder, SourceType.target,
+                                  SourceType.calibrator)):
             src = [s for s in self.sources if s.type is src_type]
-            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]{', '.join([s.name for s in src])}[/italic]")
+            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]" \
+                   f"{', '.join([s.name for s in src])}[/italic]")
 
         print("\n")
         rprint("[bold]ANTENNAS[/bold]")
@@ -1272,7 +1394,7 @@ class Experiment(object):
             if ant.observed:
                 ant_str.append(ant.name)
             else:
-                ant_str.append(f"[bold red]ant.name[/bold red]")
+                ant_str.append(f"[bold red]{ant.name}[/bold red]")
 
         rprint(f"{', '.join(ant_str)}")
         if len(self.antennas.polswap) > 0:
@@ -1294,26 +1416,32 @@ class Experiment(object):
 
         print("\n")
 
+
     def print_blessed(self, outputfile=None):
         """Pretty print of the full experiment with all available data.
         """
         term = blessed.Terminal(force_styling=True)
         s_file = []
         with term.fullscreen(), term.cbreak():
-            # s = term.center(term.red_on_bright_black(f"EVN Post-processing of {self.expname.upper()}")) + '\n\n'
-            s = term.red_on_bright_black(term.center(term.bold(f"EVN Post-processing of {self.expname.upper()}")))
+            s = term.red_on_bright_black(term.center(term.bold("EVN Post-processing of " \
+                                                               f"{self.expname.upper()}")))
             s_file += [f"# EVN Post-processing of {self.expname.upper()}\n"]
             s += f"{term.normal}\n\n{term.normal}"
             s += term.bright_black('Obs date: ') + self.obsdatetime.strftime('%d/%m/%Y')
-            s += f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"
-            s_file += ['Obs date: ' + self.obsdatetime.strftime('%d/%m/%Y') + \
-                       f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"]
+            if None not in self.timerange:
+                s += f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"
+                s_file += ['Obs date: ' + self.obsdatetime.strftime('%d/%m/%Y') + \
+                           f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"]
+            else:
+                s_file += ['Obs date: ' + self.obsdatetime.strftime('%d/%m/%Y')]
+
             if self.eEVNname is not None:
                 s += term.bright_black('From e-EVN run: ') + self.eEVNname + '\n'
                 s_file += [f"From e-EVN run: {self.eEVNname}\n"]
 
             if isinstance(self.piname, list):
-                for a_piname,an_email,n in zip(self.piname, self.email, ('', *['co-']*(len(self.piname)-1))):
+                for a_piname,an_email,n in zip(self.piname, self.email,
+                                               ('', *['co-']*(len(self.piname)-1))):
                     s += term.bright_black(n+'P.I.: ') + f"{a_piname.capitalize()} ({an_email})\n"
                     s_file += [f"P.I.: {a_piname.capitalize()} ({an_email})"]
             else:
@@ -1347,23 +1475,17 @@ class Experiment(object):
                     s += term.bold(f"Correlator pass #{i+1}\n")
                     s_file += [f"Correlator pass #{i+1}"]
 
-                # If MSs are now created, it will get the info. There is still possibility they are not
+                # If MSs are now created, it will get the info.
                 if a_pass.freqsetup is None:
                     self.get_setup_from_ms()
                     self.store()
 
-                try:
+                if a_pass.freqsetup is not None:
                     s += term.bright_black('Frequency: ') + \
                          f"{a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
                          f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz.\n"
                     s_file += [f"Frequency: {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
                                f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz."]
-                except AttributeError as e:
-                    print(f"WARNING: {e}")
-                    s += term.bright_black('Frequency:  Could not be processed\n')
-                    s_file += ['Frequency:  Could not be processed']
-
-                try:
                     s += term.bright_black('Bandwidth: ') + \
                          f"{a_pass.freqsetup.n_subbands} x " \
                          f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. " \
@@ -1371,10 +1493,9 @@ class Experiment(object):
                     s_file += [f"Bandwidth: {a_pass.freqsetup.n_subbands} x " \
                                f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. " \
                                f"{a_pass.freqsetup.channels} channels each."]
-                except AttributeError as e:
-                    print(f"WARNING: {e}")
-                    s += term.bright_black('Bandwidth:  Could not be processed\n')
-                    s_file += ['Bandwidth:  Could not be processed']
+                else:
+                    s += term.bright_black('Frequency:') + ' -- will get the info at MS time --\n'
+                    s_file += ['Frequency:  Not retrieved yet (will happen at MS creation time)']
 
                 s += term.bright_black('lisfile: ') + f"{a_pass.lisfile}\n"
                 s += term.bright_black('MS file: ') + f"{a_pass.msfile}\n"
@@ -1385,36 +1506,46 @@ class Experiment(object):
             s += term.bold_green('SOURCES\n')
             s_file += ['## SOURCES']
             for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
-                                     (SourceType.fringefinder, SourceType.target, SourceType.calibrator)):
+                                     (SourceType.fringefinder, SourceType.target,
+                                      SourceType.calibrator)):
                 src = [s for s in self.sources if s.type is src_type]
                 key = f"{name}{'' if len(src) == 1 else 's'}: "
                 s += term.bright_black(key) + \
-                     f"{', '.join([s.name+term.red('*') if s.protected else s.name for s in src])}\n"
-                s_file += [f"{key}: {', '.join([s.name+'*' if s.protected else s.name for s in src])}"]
+                     f"{', '.join([s.name+term.red('*') if s.protected else s.name for s in src])}"\
+                     "\n"
+                s_file += [f"{key}: " \
+                           f"{', '.join([s.name+'*' if s.protected else s.name for s in src])}"]
 
-            s += term.bright_black(f"Sources with {term.red('*')} denote the ones that need to be protected.\n")
+            s += term.bright_black(f"Sources with {term.red('*')} denote the " \
+                                   "ones that need to be protected.\n")
             s_file += ["Sources with * denote the ones that need to be protected."]
-            s += term.bright_black('Sources to standardplot: ') + f"{', '.join(self.sources_stdplot)}\n\n"
+            s += term.bright_black('Sources to standardplot: ') + \
+                 f"{', '.join(self.sources_stdplot)}\n\n"
             s_file += [f"Sources to standardplot: {', '.join(self.sources_stdplot)}\n"]
             s += term.bold_green('ANTENNAS\n')
             s_file += ['## ANTENNAS']
             antennas_observing = [ant.name for ant in self.antennas if ant.observed]
             s += term.bright_black(f'Antennas with data ({len(antennas_observing)}):') + \
                  f"{', '.join(antennas_observing)}\n"
-            s_file += [f"Antennas with data ({len(antennas_observing)}): {', '.join(antennas_observing)}"]
+            s_file += [f"Antennas with data ({len(antennas_observing)}): " \
+                       f"{', '.join(antennas_observing)}"]
             missing_ants = [ant.name for ant in self.antennas if not ant.observed]
             s += term.bright_black('Did not observe: ') + \
                  f"{', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}\n\n"
-            s_file += [f"Did not observe: {', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}"]
-            s += term.bright_black('Reference Antenna: ') + f"{', '.join([r.capitalize() for r in self.refant])}\n"
+            s_file += [f"Did not observe: " \
+                       f"{', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}"]
+            s += term.bright_black('Reference Antenna: ') + \
+                 f"{', '.join([r.capitalize() for r in self.refant])}\n"
             s_file += [f"Reference Antenna: {', '.join([r.capitalize() for r in self.refant])}"]
 
             if len(self.antennas.polswap) > 0:
-                s += term.bright_black('Polswapped antennas: ') +  f"{', '.join(self.antennas.polswap)}\n"
+                s += term.bright_black('Polswapped antennas: ') + \
+                     f"{', '.join(self.antennas.polswap)}\n"
                 s_file += [f"Polswapped antennas: {', '.join(self.antennas.polswap)}"]
 
             if len(self.antennas.polconvert) > 0:
-                s += term.bright_black('Polconverted antennas: ') + f"{', '.join(self.antennas.polconvert)}\n"
+                s += term.bright_black('Polconverted antennas: ') + \
+                     f"{', '.join(self.antennas.polconvert)}\n"
                 s_file += [f"Polconverted antennas: {', '.join(self.antennas.polconvert)}"]
 
             if len(self.antennas.onebit) > 0:
@@ -1424,12 +1555,14 @@ class Experiment(object):
             missing_logs = [a.name for a in self.antennas if (not a.logfsfile) and a.observed]
             s += term.bright_black('Missing log files: ') + \
                  f"{', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}\n"
-            s_file += [f"Missing log files: {', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}"]
+            s_file += [f"Missing log files: " \
+                       f"{', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}"]
 
             missing_antabs = [a.name for a in self.antennas if (not a.antabfsfile) and a.observed]
             s += term.bright_black('Missing ANTAB files: ') + \
                  f"{', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"
-            s_file += [f"Missing ANTAB files: {', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"]
+            s_file += [f"Missing ANTAB files: " \
+                       f"{', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"]
 
             # In case of antennas not observing the full bandwidth (this may be per correlator pass)
             ss, ss_file = "", []
@@ -1448,16 +1581,18 @@ class Experiment(object):
                                 ss_file += [f"    {antenna.name}: " \
                                             f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands} " \
                                             f"(in correlator pass {a_pass.lisfile})"]
-            except AttributeError as e:
-                ss += "    No freq. setup information to detect which antennas have a reduced bandwidth."
-                ss_file += ["    No freq. setup information to detect which antennas have a reduced bandwidth."]
 
-            if ss != "":
-                s += term.bright_black('Antennas with smaller bandwidth:\n')
-                s += f" Total: {list(range(self.correlator_passes[0].freqsetup.n_subbands))}\n"
-                s += ss
-                s_file += ['Antennas with smaller bandwidth:']
-                s_file += ss_file
+                if ss != "":
+                    s += term.bright_black('Antennas with smaller bandwidth:\n')
+                    s += f" Total: {list(range(self.correlator_passes[0].freqsetup.n_subbands))}\n"
+                    s += ss
+                    s_file += ['Antennas with smaller bandwidth:']
+                    s_file += ss_file
+            except AttributeError:
+                ss += "    No freq. setup information to detect which antennas " \
+                      "have a reduced bandwidth."
+                ss_file += ["    No freq. setup information to detect which antennas " \
+                            "have a reduced bandwidth."]
 
             s_final = term.wrap(s, width=term.width)
             s_file += ["\n\n## COMMENTS FROM SUP.SCI\n\n\n\n\n"]
@@ -1468,7 +1603,8 @@ class Experiment(object):
                     print(a_ss)
 
                 print(term.move_y(term.height - 3) + \
-                      term.center(term.on_bright_black('press any key to continue (or Q to cancel)')).rstrip())
+                      term.center(term.on_bright_black('press any key to continue ' \
+                                                       '(or Q to cancel)')).rstrip())
                 return term.inkey()#.strip()
 
             if (outputfile is not None) and (not Path(outputfile).exists()):

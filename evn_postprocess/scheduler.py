@@ -13,7 +13,7 @@ class ManualInteractionRequired(Exception):
     pass
 
 
-def dispatcher(exp: experiment.Experiment, functions):
+def dispatcher(exp: experiment.Experiment, functions) -> bool:
     """Runs all functions one-after-the-next-one.
     All functions are expected to only require the {exp} parameter, and to return a bool
     if they run sucessfully or not. It one fails, then the dispatcher will stop, storing the
@@ -22,9 +22,11 @@ def dispatcher(exp: experiment.Experiment, functions):
     try:
         for a_step in functions:
             if (output := a_step(exp)) is None:
-                raise ManualInteractionRequired(f"Stopping for manual intervention at {a_step.__name__}.")
+                raise ManualInteractionRequired(f"Stopping for manual intervention "
+                                                f"at {a_step.__name__}.")
             elif not output:
-                raise RuntimeError(f"The function {a_step.__name__} did not run properly for {exp.expname}.")
+                raise RuntimeError(f"The function {a_step.__name__} did not run "
+                                   f"properly for {exp.expname}.")
     # except RuntimeError: # Not handled, raised to above
     finally:
         exp.store()
@@ -33,7 +35,7 @@ def dispatcher(exp: experiment.Experiment, functions):
     return True
 
 
-def setting_up_environment(exp: experiment.Experiment):
+def setting_up_environment(exp: experiment.Experiment) -> bool:
     """Sets up the environment for the post-processing of the experiment.
     This implies to create the
     """
@@ -45,17 +47,18 @@ def setting_up_environment(exp: experiment.Experiment):
     return output
 
 
-def preparing_lis_files(exp: experiment.Experiment):
+def preparing_lis_files(exp: experiment.Experiment) -> bool:
     """Checks that the .lis file(s) already exists.
     Otherwise it creates it in ccs and copy it to the experiment folder.
     """
-    output = dispatcher(exp, (ccs.create_lis_files, ccs.get_lis_files, eee.get_passes_from_lisfiles))
+    output = dispatcher(exp, (ccs.create_lis_files, ccs.get_lis_files,
+                              eee.get_passes_from_lisfiles))
     exp.last_step = 'lisfile'
     exp.store()
     return output
 
 
-def first_manual_check(exp: experiment.Experiment):
+def first_manual_check(exp: experiment.Experiment) -> bool:
     """It is only executed for complex experiments: those with
     """
     output = dispatcher(exp, (eee.get_passes_from_lisfiles, ))
@@ -69,8 +72,8 @@ def first_manual_check(exp: experiment.Experiment):
         rprint("- If you modify the .lis file, just re-run me with [dim]postprocess[/dim].")
         rprint(f"- If you change the name of the .lis {temp[0]}," \
                "you will need to re-run the previous step with [dim]postprocess run lisfile[/dim].")
-        rprint("- If the info in the .lis file is actually OK, you can skip the checklis step and continue "
-               "with [dim]postprocess run ms[/dim].")
+        rprint("- If the info in the .lis file is actually OK, you can skip the checklis step "
+               "and continue with [dim]postprocess run ms[/dim].")
         raise ManualInteractionRequired('The lis file needs to be manually edited.')
     elif exp.eEVNname is not None:
         rprint(f"\n\n[bold red]{exp.expname} is part of an e-EVN run. "
@@ -78,31 +81,31 @@ def first_manual_check(exp: experiment.Experiment):
         exp.last_step = 'checklis'
         output = None
         exp.store()
-        rprint("[bold]NOTE[/bold]: if you change the name of the .lis file, "
-               "you will need to re-run the step 'lisfile' (with [dim]postprocess run lisfile[/dim]).")
+        rprint("[bold]NOTE[/bold]: if you change the name of the .lis file, you will"
+               "need to re-run the step 'lisfile' (with [dim]postprocess run lisfile[/dim]).")
         raise ManualInteractionRequired('The lis file needs to be manually edited.')
 
     return output
 
 
-def creating_ms(exp: experiment.Experiment):
+def creating_ms(exp: experiment.Experiment) -> bool:
     """Steps from retrieving the cor files to create the MS and standardplots
     """
-    output = dispatcher(exp, (eee.getdata, eee.j2ms2, eee.update_ms_expname, eee.get_metadata_from_ms,
-                              eee.print_exp))
+    output = dispatcher(exp, (eee.getdata, eee.j2ms2, eee.update_ms_expname,
+                              eee.get_metadata_from_ms, eee.print_exp))
     exp.last_step = 'ms'
     exp.store()
     return output
 
 
-def standardplots(exp: experiment.Experiment):
+def standardplots(exp: experiment.Experiment) -> bool:
     output = dispatcher(exp, (eee.standardplots, eee.open_standardplot_files))
     exp.last_step = 'plots'
     exp.store()
     return output
 
 
-def ms_operations(exp: experiment.Experiment):
+def ms_operations(exp: experiment.Experiment) -> bool:
     exp.gui.askMSoperations(exp)
     output = dispatcher(exp, (eee.ysfocus, eee.polswap, eee.flag_weights, eee.onebit,
                               eee.get_metadata_from_ms, eee.update_piletter))
@@ -114,38 +117,35 @@ def ms_operations(exp: experiment.Experiment):
     return output
 
 
-def tconvert(exp: experiment.Experiment):
+def tconvert(exp: experiment.Experiment) -> bool:
     output = dispatcher(exp, (eee.tconvert, eee.polconvert))
-    if len(exp.antennas.polconvert) > 0:
-        # TODO: if polconvert runs, then create again the MS and run standardplots
-        pass
     exp.last_step = 'tconvert'
     exp.store()
     return output
 
 
-def post_polconvert(exp: experiment.Experiment):
+def post_polconvert(exp: experiment.Experiment) -> bool:
     output = dispatcher(exp, (eee.post_polconvert, ))
     exp.last_step = 'post_polconvert'
     exp.store()
     return output
 
 
-def archive(exp: experiment.Experiment):
+def archive(exp: experiment.Experiment) -> bool:
     output = dispatcher(exp, (eee.post_post_polconvert, eee.archive, ))
     exp.last_step = 'archive'
     exp.store()
     return output
 
 
-def antab_editor(exp: experiment.Experiment):
+def antab_editor(exp: experiment.Experiment) -> bool:
     output = dispatcher(exp, (pipe.run_antab_editor,))
     exp.last_step = 'antab'
     exp.store()
     return output
 
 
-def getting_pipeline_files(exp: experiment.Experiment):
+def getting_pipeline_files(exp: experiment.Experiment) -> bool:
     """Retrieves the files that are required to run the EVN Pipeline in the associated experiment
     """
     # THIS MAY ONLY RUN FOR SOME OF THE EXPERIMENTS IN AN E-EVN EXPERIMENT
@@ -157,13 +157,14 @@ def getting_pipeline_files(exp: experiment.Experiment):
     return output
 
 
-def protect_archive_data(exp: experiment.Experiment):
+def protect_archive_data(exp: experiment.Experiment) -> bool:
     """Opens a web browser to the authentification page for EVN experiments
     """
     if len([s.name for s in exp.sources if s.protected]) > 0:
         rprint("[center][bold red]You now need to protect the archived data[/bold red][/center]")
         rprint("Open http://archive.jive.nl/scripts/pipe/admin.php")
-        print(f"And protect the following sources: {', '.join([s.name for s in exp.sources if s.protected])}")
+        print("And protect the following sources: "
+              f"{', '.join([s.name for s in exp.sources if s.protected])}")
         raise ManualInteractionRequired('')
     else:
         rprint("\n\n[green]No sources require protection.[/green]\n\n")
@@ -171,25 +172,28 @@ def protect_archive_data(exp: experiment.Experiment):
     return True
 
 
-def pipeline(exp: experiment.Experiment):
+def pipeline(exp: experiment.Experiment) -> bool:
     output = dispatcher(exp, (pipe.run_pipeline,))
     exp.last_step = 'pipeline'
     exp.store()
     return output
 
 
-def after_pipeline(exp: experiment.Experiment):
+def after_pipeline(exp: experiment.Experiment) -> bool:
     output = dispatcher(exp, (pipe.comment_tasav_files, pipe.pipeline_feedback, pipe.archive))
     exp.last_step = 'postpipe'
     exp.store()
-    rprint('\n\n[bold green][center]Now check manually the Pipeline results in the browser:[/center][/bold green]')
+    rprint("\n\n[bold green][center]Now check manually the Pipeline results in the browser: "
+           "[/center][/bold green]")
     rprint(f"{exp.archive_page}\n")
-    rprint("[red]Protect the results if you haven't done it yet at http://archive.jive.nl/scripts/pipe/admin.php[/red]\n")
+    rprint("[red]Protect the results if you haven't done it yet at "
+           "http://archive.jive.nl/scripts/pipe/admin.php[/red]\n")
     rprint("[bold green]If you are happy with the results:[/bold green]")
     rprint("[green]    1. Update the PI letter manually.[/green]")
     rprint("[green]    2. Run me (`postprocess`) again.[/green]\n")
     rprint("[bold green]If you are NOT happy with the results:[/bold green]")
-    rprint("[green]    1. Re-run the pipeline manually (after modifying the needed input files).[/green]")
+    rprint("[green]    1. Re-run the pipeline manually (after modifying the "
+           "needed input files).[/green]")
     rprint("[green]    2. Run me again with `postprocess run postpipe`.[/green]\n")
     if output:
         raise ManualInteractionRequired('')
@@ -197,7 +201,7 @@ def after_pipeline(exp: experiment.Experiment):
     return output
 
 
-def final_steps(exp: experiment.Experiment):
+def final_steps(exp: experiment.Experiment) -> bool:
     output = dispatcher(exp, (eee.append_antab, pipe.ampcal, eee.create_pipelet, eee.send_letters,
                               eee.antenna_feedback, eee.nme_report))
     exp.last_step = 'last'

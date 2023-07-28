@@ -1,13 +1,14 @@
-#! /usr/bin/env python3
 import os
 import sys
 import subprocess
+from typing import Optional, Union, Iterable, Tuple
+from pathlib import Path
 from astropy import units as u
 from . import process_eee as eee
 from . import process_pipe as pipe
 
 
-def scp(originpath, destpath, timeout=None):
+def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = None) -> Tuple:
     """Does a scp from originpath to destpath. If the process returns an error,
     then it raises ValueError.
     """
@@ -20,25 +21,29 @@ def scp(originpath, destpath, timeout=None):
     return f"scp {originpath} {destpath}", process
 
 
-def ssh(computer, commands, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
+def ssh(computer: str, commands: str, shell: bool = False, stdout: Optional[int] = subprocess.PIPE,
+        stderr: Optional[int] = subprocess.PIPE) -> tuple:
     """Sends a ssh command to the indicated computer.
     Returns the output or raises ValueError in case of errors.
     The output is expected to be in UTF-8 format.
     """
     print("\n\033[1m> " + f"ssh {computer} {commands}" + "\033[0m")
-    process = subprocess.Popen(["ssh", computer, commands], shell=shell, stdout=stdout, stderr=stderr)
+    process = subprocess.Popen(["ssh", computer, commands], shell=shell, stdout=stdout,
+                               stderr=stderr)
     # logger.info(output)
     if (process.returncode != 0) and (process.returncode is not None):
-        raise ValueError(f"Error code {process.returncode} when running ssh {computer}:{commands} in ccs.")
+        raise ValueError(f"Error code {process.returncode} when running " \
+                         f"ssh {computer}:{commands} in ccs.")
 
     if process.communicate()[0] is not None:
         return f"ssh {computer}:{commands}", process.communicate()[0].decode('utf-8')
 
-    return f"ssh {computer}:{commands}"
+    return f"ssh {computer}:{commands}", None
 
 
-def shell_command(command, parameters=None, shell=True, bufsize=-1,
-                  stdout=subprocess.PIPE, stderr=subprocess.PIPE):
+def shell_command(command: str, parameters: Optional[Union[str, list]] = None, shell: bool = True,
+                  bufsize: int = -1, stdout: Optional[int] = subprocess.PIPE,
+                  stderr: Optional[int] = subprocess.PIPE) -> tuple:
     """Runs the provided command in the shell with some arguments if necessary.
     Returns the output of the command, assuming a UTF-8 encoding, or raises ValueError
     if fails. Parameters must be either a single string or a list, if provided.
@@ -61,18 +66,20 @@ def shell_command(command, parameters=None, shell=True, bufsize=-1,
             sys.stdout.flush()
 
     if (process.returncode != 0) and (process.returncode is not None):
-        raise ValueError(f"Error code {process.returncode} when running {command} {parameters} in ccs.")
+        raise ValueError(f"Error code {process.returncode} when running " \
+                         f"{command} {parameters} in ccs.")
 
     return ' '.join(full_shell_command), ''.join(output_lines)
 
 
-def remote_file_exists(host, path):
+def remote_file_exists(host: str, path: str) -> bool:
     """Checks if a file or path exists in a remote computer returning a bool.
     It may raise an Exception.
     """
     # Test does not work if finds multiple files.
     # status = subprocess.call(['ssh', host, f"test -f {path}"])
-    status = subprocess.call(['ssh', host, f"ls {path}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    status = subprocess.call(['ssh', host, f"ls {path}"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if status == 0:
         return True
     elif (status == 1) or (status == 2):
@@ -81,7 +88,7 @@ def remote_file_exists(host, path):
     raise Exception(f"SSH connection to {host} failed.")
 
 
-def grep_remote_file(host, remote_file, word):
+def grep_remote_file(host: str, remote_file: str, word: str) -> str:
     """Runs a grep in a file located in a remote host and returns it.
     It may raise ValueError if there is a problem accessing the host or file.
     """
@@ -90,12 +97,13 @@ def grep_remote_file(host, remote_file, word):
                                stderr=subprocess.PIPE)
     output = process.communicate()[0].decode('utf-8')
     if process.returncode != 0:
-        raise ValueError(f"Errorcode {process.returncode} when searching for {word} in {remote_file} from {host}.")
+        raise ValueError(f"Errorcode {process.returncode} when searching " \
+                         f"for {word} in {remote_file} from {host}.")
 
     return output
 
 
-def create_all_dirs(exp):
+def create_all_dirs(exp) -> bool:
     """Creates all folders (in eee and jop83) for the associated post-processing.
     Input:
         - exp : experiment.Experiment
@@ -105,7 +113,7 @@ def create_all_dirs(exp):
     return True
 
 
-def copy_files(exp):
+def copy_files(exp) -> bool:
     """Copy all files related to the experiment that already exist when the post-processing
     starts. This includes:
     - vix file
@@ -129,7 +137,7 @@ def copy_files(exp):
     return True
 
 
-def update_lis_file(lisfilename, oldexp, newexp):
+def update_lis_file(lisfilename: Union[str, Path], oldexp: str, newexp: str) -> None:
     """Updates the lis file (the header lines) referring to an experiment named oldexp
     to newexp. Note that it does not replace all references to oldexp as some of them
     would point to correlator output files that would keep the name.
@@ -143,13 +151,14 @@ def update_lis_file(lisfilename, oldexp, newexp):
                 # Replace the exp (lower) entries
                 lisfilelines[i] = lisfilelines[i].replace(oldexp.lower(), newexp.lower())
                 # Replace the exp.vix to EXP.vix (as symb link was done)
-                lisfilelines[i] = lisfilelines[i].replace(f"{newexp.lower()}.vix", f"{newexp.upper()}.vix")
+                lisfilelines[i] = lisfilelines[i].replace(f"{newexp.lower()}.vix",
+                                                          f"{newexp.upper()}.vix")
 
     with open(lisfilename, 'w') as lisfile:
         lisfile.write(''.join(lisfilelines))
 
 
-def split_lis_cont_line(fulllisfile):
+def split_lis_cont_line(fulllisfile: str) -> None:
     """Given a lis file, it checks if there are jobs set as prod_cont and prod_line.
     If not, it does nothing. Otherwise, it splits the lis file into two lis files,
     one for the continuum pass and another one for the line pass.
@@ -184,12 +193,12 @@ def split_lis_cont_line(fulllisfile):
         os.remove(fulllisfile)
 
 
-def check_lisfiles(exp):
+def check_lisfiles(exp) -> bool:
     """Checks the existing .lis files to spot possible issues.
     If at least one of the .lis files reports a possible issue (e.g. duplicated scans,
     missing scans, etc), it will return False. Otherwise it will return true.
     """
-    all_good = True
+    all_good: bool = True
     for a_pass in exp.correlator_passes:
         cmd, output = shell_command("checklis.py", a_pass.lisfile.name, shell=True)
         exp.log(f"{cmd}"+"\n#"+output.replace('\n', '\n#'), False)
@@ -197,13 +206,14 @@ def check_lisfiles(exp):
         #      First scan = X
         #       {errors if any otherwise no extra lines}
         #      Last scan = Y
-        temp = [o for o in output.split('\n') if len(o) > 0]  # removing any possible trailing empty line
+        # removing any possible trailing empty line:
+        temp = [o for o in output.split('\n') if len(o) > 0]
         all_good = all_good and (not (len(temp) > 2))
 
     return all_good
 
 
-def update_pipelinable_passes(exp, pipelinable):
+def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
     """Updates the attribute of the CorrelatorPasses from exp to define
     if the specific pass should run in the pipeline or not.
 
@@ -229,7 +239,7 @@ def update_pipelinable_passes(exp, pipelinable):
                     break
 
 
-def station_1bit_in_vix(vexfile):
+def station_1bit_in_vix(vexfile: str) -> bool:
     """Checks if there is any station in the vex file that recorded at 1 bit.
     Note that this/these station(s) may or may not have recorded at 1 bit in this experiment,
     but only at other moment of the run.
@@ -245,7 +255,7 @@ def station_1bit_in_vix(vexfile):
         raise FileNotFoundError(f"{vexfile} file not found.")
 
 
-def extract_tail_standardplots_output(stdplt_output):
+def extract_tail_standardplots_output(stdplt_output: str) -> str:
     """Given a full log output from standardplots, it returns only the last bits that contain
     the information provided by the "r" command.
     """
@@ -263,9 +273,9 @@ def extract_tail_standardplots_output(stdplt_output):
     return '\n'.join(last_lines[::-1])
 
 
-def archive(flag, exp, rest_parameters):
-    """Runs the archive command with the flag and rest_parameters string for the given experiment object
-    (metadata class).
+def archive(flag: str, exp, rest_parameters: str) -> tuple:
+    """Runs the archive command with the flag and rest_parameters string for
+    the given experiment object (metadata class).
     Flag can be -auth, -stnd, -fits,...
     """
     cmd, output = shell_command("archive.pl",
@@ -275,7 +285,7 @@ def archive(flag, exp, rest_parameters):
     return cmd, output
 
 
-def space_available(path):
+def space_available(path) -> u.Quantity:
     """Returns the available space in the disk where the given path is located.
     """
     results = os.statvfs(path)

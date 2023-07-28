@@ -4,13 +4,13 @@ It runs all steps although it requires user interaction to
 verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 """
-
+from typing import Optional, Union, Iterable, Tuple
 from rich import print as rprint
 from . import experiment
 from . import environment as env
 
 
-def create_folders(exp):
+def create_folders(exp) -> bool:
     """Creates the folder required for the post-processing of the experiment
     - @eee: /data0/{exp.supsci}/{exp.upper()}
     """
@@ -24,15 +24,18 @@ def create_folders(exp):
             env.ssh('pipe@jop83', f"mkdir -p {a_dir}")
             exp.log(f"mkdir -p {a_dir}")
 
+    return True
 
-def get_files_from_vlbeer(exp):
+
+def get_files_from_vlbeer(exp) -> bool:
     """Retrieves the antabfs, log, and flag files that should be in vlbeer for the given experiment.
     """
     cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
 
     def scp(exp, ext: str):
         return "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
-               f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}" + r"\*" + f".{ext} ."
+               f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}" + \
+               r"\*" + f".{ext} ."
 
     cmd, output = env.ssh('pipe@jop83', ';'.join([cd, scp(exp, 'flag')]))
     exp.log(cmd)
@@ -57,42 +60,47 @@ def get_files_from_vlbeer(exp):
 
     exp.log(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
     if len(set(exp.antennas.names)-set(exp.antennas.logfsfile)) > 0:
-        exp.log(f"# Missing files for: {', '.join((set(exp.antennas.names)-set(exp.antennas.logfsfile)).intersection(set(exp.antennas.observed)))}\n")
+        exp.log("# Missing files for: " \
+                f"{', '.join((set(exp.antennas.names)-set(exp.antennas.logfsfile)).intersection(set(exp.antennas.observed)))}\n")
     else:
         exp.log("# No missing log files for any station that observed.\n")
 
     exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}")
     if len(set(exp.antennas.names)-set(exp.antennas.antabfsfile)) > 0:
-        exp.log(f"# Missing files for: {', '.join((set(exp.antennas.names)-set(exp.antennas.antabfsfile)).intersection(set(exp.antennas.observed)))}\n")
+        exp.log("# Missing files for: " \
+                f"{', '.join((set(exp.antennas.names)-set(exp.antennas.antabfsfile)).intersection(set(exp.antennas.observed)))}\n")
     else:
         exp.log("# No missing antab files for any station that observed.\n")
 
-    # In case of high-freq observations, some stations added the "opacity_corrected" flag to the POLY=
-    # line, against any standard... Let's remove it so antab_editor (later) can work fine.
+    # In case of high-freq observations, some stations added the "opacity_corrected" flag to
+    #the POLY= line, against any standard... Let's remove it so antab_editor (later) can work fine.
     cmd, output = env.ssh('pipe@jop83',
         f"grep -l ,opacity_corrected /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}*.antabfs")
     the_files = [o for o in output.split('\n') if o != '']  # just to avoid trailing \n
     for a_file in the_files:
         cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/,opacity_corrected//g' " \
-                                       f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}/{a_file}", shell=False)
+                         f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}/{a_file}", \
+                         shell=False)
         exp.log(cmd)
-        antenna = a_file.split('/')[-1].replace('.antabfs', '').replace(exp.expname.lower(), '').capitalize()
+        antenna = a_file.split('/')[-1].replace('.antabfs', '').replace(exp.expname.lower(), \
+                  '').capitalize()
         exp.antennas[antenna].opacity = True
     return True
 
 
-def run_antab_editor(exp):
+def run_antab_editor(exp) -> Optional[bool]:
     """Opens antab_editor.py for the given experiment.
     """
     cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
     cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}"
-    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}"
+    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/" \
+             f"{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}"
     if env.remote_file_exists('pipe@jop83', f"{cdinp}/{exp.expname.lower()}*.antab"):
         print("Antab file already found in {cdinp}.")
         return True
 
-    if env.remote_file_exists('pipe@jop83',
-                    f"{cdtemp}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}*.antab"):
+    if env.remote_file_exists('pipe@jop83', f"{cdtemp}/" \
+            f"{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}*.antab"):
         print("Copying Antab file from {cdtemp} to {cdinp}.")
         cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp}/*.antab {cdinp}/")
         exp.log(cmd)
@@ -108,7 +116,7 @@ def run_antab_editor(exp):
         rprint(f"[bold red]This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}.\n"
               "Please run antab_editor.py manually to include all experiment associated to the run "
               "(using the '-a' option).\n\nThen run the post-processing again.[/bold red]")
-        # I fake it to be sucessful in the object to let it to run seemless in a following iteraction
+        # I fake it to be sucessful in the object to let it run seemless in a following iteraction
         return None
 
     if len(exp.correlator_passes) == 2:
@@ -122,7 +130,7 @@ def run_antab_editor(exp):
     return None
 
 
-def create_uvflg(exp):
+def create_uvflg(exp) -> Optional[bool]:
     """Produces the combined uvflg file containing the full flagging from all telescopes.
     """
     cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}/"
@@ -141,18 +149,21 @@ def create_uvflg(exp):
                 output_tail.append(outline)
 
             exp.log(cmd + '\n# ' + ',\n'.join(output_tail[::-1]).replace('\n', '\n# '))
-            cmd, _ = env.ssh('pipe@jop83', ';'.join([cd, f"cat *uvflgfs > {exp.expname.lower()}.uvflg"]))
+            cmd, _ = env.ssh('pipe@jop83', ';'.join([cd, \
+                             f"cat *uvflgfs > {exp.expname.lower()}.uvflg"]))
             exp.log(cmd)
     else:
         cd = f"/jop83_0/pipe/in/{exp.supsci}/{exp.eEVNname.lower()}"
         if not env.remote_file_exists('pipe@jop83', f"{cd}/{exp.eEVNname.lower()}.uvflg"):
             rprint(f"[bold red]You first need to process the original experiment "
                    f"in this e-EVN run ({exp.eEVNname}).[/bold red]")
-            print("Once you have created the .uvflg file for such expeirment I will be able to run by myself.")
+            print("Once you have created the .uvflg file for such expeirment "
+                  "I will be able to run by myself.")
             return None
 
     cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}"
-    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}" \
+    cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/" \
+             f"{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}" \
              f"/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}.uvflg"
     if len(exp.correlator_passes) > 1:
         for p in range(1, len(exp.correlator_passes) + 1):
@@ -165,8 +176,9 @@ def create_uvflg(exp):
     return True
 
 
-def create_input_file(exp):
-    """Copies the template of an input file for the EVN Pipeline and modifies the standard parameters.
+def create_input_file(exp) -> bool:
+    """Copies the template of an input file for the EVN Pipeline
+    and modifies the standard parameters.
     """
     # First copies the final uvflg and antab files to the input directory
     cdinp = f"/jop83_0/pipe/in/{exp.expname.lower()}/"
@@ -203,12 +215,13 @@ def create_input_file(exp):
                       ["#setup_station = Ef", f"setup_station = {exp.refant[0]}"]]
 
     cmd, _ = env.ssh('pipe@jop83',
-                  "cp /jop83_0/pipe/in/template.inp /jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()),
+                  "cp /jop83_0/pipe/in/template.inp " \
+                  "/jop83_0/pipe/in/{0}/{0}.inp.txt".format(exp.expname.lower()),
                   shell=False)
     exp.log(cmd, False)
     for a_change in to_change:
         cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
-                                    f"{'/jop83_0/pipe/in/{0}/{0}.inp.txt'.format(exp.expname.lower())}", shell=False)
+                 f"{'/jop83_0/pipe/in/{0}/{0}.inp.txt'.format(exp.expname.lower())}", shell=False)
         exp.log(cmd, False)
 
     if len(exp.correlator_passes) > 1:
@@ -226,17 +239,17 @@ def create_input_file(exp):
                           "cp /jop83_0/pipe/in/{0}/{0}_1.inp.txt "
                           "/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt".format(exp.expname.lower(), i))
             exp.log(cmd, False)
-            a_change = [f"experiment = {exp.expname.lower()}_1", f"experiment = {exp.expname.lower()}_{i}"]
+            a_change = [f"experiment = {exp.expname.lower()}_1",
+                        f"experiment = {exp.expname.lower()}_{i}"]
             cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
-                                        f"{'/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt'.format(exp.expname.lower(), i)}",
-                                        shell=False)
+                     f"{'/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt'.format(exp.expname.lower(), i)}",
+                     shell=False)
             exp.log(cmd, False)
 
     return True
 
 
-
-def run_pipeline(exp):
+def run_pipeline(exp) -> Optional[bool]:
     """Runs the EVN Pipeline
     """
     exp.log('# Running the pipeline...', True)
@@ -258,60 +271,69 @@ def run_pipeline(exp):
 
     return True
 
-# Authentification for the credentials
 
-
-def comment_tasav_files(exp):
+def comment_tasav_files(exp) -> bool:
     """Creates the comment and tasav files after the EVN Pipeline has run.
     """
     cdin = f"/jop83_0/pipe/in/{exp.expname.lower()}"
     cdout = f"/jop83_0/pipe/out/{exp.expname.lower()}"
-    if not (env.remote_file_exists('pipe@jop83', f"{cdout}/{exp.expname.lower()}" + r"\*.comment") and
-            env.remote_file_exists('pipe@jop83', f"{cdin}/{exp.expname.lower()}" + r"\*.tasav.txt")):
+    if not (env.remote_file_exists('pipe@jop83', \
+                                   f"{cdout}/{exp.expname.lower()}" + r"\*.comment") and \
+            env.remote_file_exists('pipe@jop83', \
+                                   f"{cdin}/{exp.expname.lower()}" + r"\*.tasav.txt")):
         if len(exp.correlator_passes) > 1:
             for p in range(1, len(exp.correlator_passes) + 1):
                 if exp.correlator_passes[p-1].freqsetup.channels >= 256:
                     # We assume that it is a spectral line experiment
                     cmd = env.ssh('pipe@jop83',
-                                  f"cd {cdout} && comment_tasav_file.py --line {exp.expname.lower()}_{p}")
+                          f"cd {cdout} && comment_tasav_file.py --line {exp.expname.lower()}_{p}")
                 else:
-                    cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}_{p}")
+                    cmd = env.ssh('pipe@jop83',
+                                  f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}_{p}")
+
+                exp.log(cmd)
         else:
             if exp.correlator_passes[0].freqsetup.channels >= 256:
                 cmd = env.ssh('pipe@jop83',
                               f"cd {cdout} && comment_tasav_file.py --line {exp.expname.lower()}")
             else:
-                cmd = env.ssh('pipe@jop83', f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
-        exp.log(cmd)
+                cmd = env.ssh('pipe@jop83',
+                              f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
+            exp.log(cmd)
 
     return True
 
 
-def pipeline_feedback(exp):
+def pipeline_feedback(exp) -> bool:
     """Runs the feedback.pl script after the EVN Pipeline has run.
     """
     cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
     if len(exp.correlator_passes) > 1:
         for p in range(1, len(exp.correlator_passes) + 1):
             cmd = env.ssh('pipe@jop83',
-                          f"{cd} && /jop83_0/pipe/in/marcote/scripts/evn_support/feedback.pl -exp '{exp.expname.lower()}_{p}' "
-                          f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
+                          f"{cd} && /jop83_0/pipe/in/marcote/scripts/evn_support/feedback.pl " \
+                          f"-exp '{exp.expname.lower()}_{p}' " \
+                          f"-jss '{exp.supsci}' -source "
+                          f"'{' '.join([s.name for s in exp.sources])}'", stdout=None)
             exp.log(cmd)
     else:
         cmd = env.ssh('pipe@jop83',
-                      f"{cd} && /jop83_0/pipe/in/marcote/scripts/evn_support/feedback.pl -exp '{exp.expname.lower()}' "
-                      f"-jss '{exp.supsci}' -source '{' '.join([s.name for s in exp.sources])}'", stdout=None)
+                      f"{cd} && /jop83_0/pipe/in/marcote/scripts/evn_support/feedback.pl " \
+                      f"-exp '{exp.expname.lower()}' " \
+                      f"-jss '{exp.supsci}' -source " \
+                      f"'{' '.join([s.name for s in exp.sources])}'", stdout=None)
         exp.log(cmd)
     return True
 
 
-def archive(exp):
+def archive(exp) -> bool:
     """Archives the EVN Pipeline results.
     """
     for f in ('in', 'out'):
         cd = f"cd /jop83_0/pipe/{f}/{exp.expname.lower()}"
-        cmd = env.ssh('jops@jop83', f"{cd} && /export/jive/jops/bin/archive/user/archive.pl -pipe -e "
-                                       f"{exp.expname.lower()}_{exp.obsdate}", stdout=None)
+        cmd = env.ssh('jops@jop83', f"{cd} && /export/jive/jops/bin/archive/user/archive.pl " \
+                                    "-pipe -e " \
+                                    f"{exp.expname.lower()}_{exp.obsdate}", stdout=None)
         exp.log(cmd)
 
     return True
@@ -319,7 +341,7 @@ def archive(exp):
 
 # Here there should be a dialog about checking pipeline results, do them manually...
 
-def ampcal(exp):
+def ampcal(exp) -> bool:
     """Runs the ampcal.sh script to incorporate the gain corrections into the Grafana database.
     """
     cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
@@ -328,10 +350,10 @@ def ampcal(exp):
     return True
 
 
-def get_vlba_antab(exp):
+def get_vlba_antab(exp) -> bool:
     """If the experiment containts VLBA antennas, it retrieves the *cal.vlba file from @ccs.
     """
     # TODO: for VLBA experiments
-    pass
+    return True
 
 
