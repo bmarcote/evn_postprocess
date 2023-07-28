@@ -10,7 +10,7 @@ import glob
 from . import environment
 
 
-def lis_files_in_ccs(exp):
+def lis_files_in_ccs(exp) -> bool:
     """Returns if there are already lis files created in the experiment directory in ccc.
     """
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
@@ -18,7 +18,7 @@ def lis_files_in_ccs(exp):
                                           f"/ccs/expr/{eEVNname}/{eEVNname.lower()}*.lis")
 
 
-def create_lis_files(exp):
+def create_lis_files(exp) -> bool:
     """Creates the lis files in ccs.
     """
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
@@ -31,7 +31,7 @@ def create_lis_files(exp):
     return True
 
 
-def get_lis_files(exp):
+def get_lis_files(exp) -> bool:
     """Retrieves all lis files available in ccs for this experiment.
     """
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname

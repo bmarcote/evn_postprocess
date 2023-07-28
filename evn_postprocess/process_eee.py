@@ -10,6 +10,7 @@ import glob
 import string
 import random
 import traceback
+from typing import Optional, Union, Iterable, Tuple
 from pathlib import Path
 from collections import defaultdict
 import subprocess
@@ -21,7 +22,7 @@ from . import experiment
 from . import environment
 
 
-def create_folders(exp):
+def create_folders(exp) -> bool:
     """Creates the folder required for the post-processing of the experiment
     - @eee: /data0/{supportsci}/{exp.upper()}
 
@@ -40,7 +41,7 @@ def create_folders(exp):
     return True
 
 
-def get_passes_from_lisfiles(exp):
+def get_passes_from_lisfiles(exp) -> bool:
     """Gets all .lis files in the directory, which imply different correlator passes.
     Append this information to the current experiment (exp object),
     together with the MS file associated for each of them.
@@ -60,8 +61,10 @@ def get_passes_from_lisfiles(exp):
                     msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
                     # In case the output FITS IDI name has already been set
                     if '.IDI' in a_lisline:
-                        fitsidiname = [elem.strip() for elem in a_lisline.split() if '.IDI' in elem][0]
-                        to_pipeline = True if ((fitsidiname.split('_')[-2] == '1') or thereis_line) else False
+                        fitsidiname = [elem.strip() for elem in \
+                                       a_lisline.split() if '.IDI' in elem][0]
+                        to_pipeline = True if ((fitsidiname.split('_')[-2] == '1') or \
+                                               thereis_line) else False
                     else:
                         if thereis_line:
                             if '_line' in a_lisfile:
@@ -76,24 +79,27 @@ def get_passes_from_lisfiles(exp):
                             fitsidiname = f"{exp.expname.lower()}_{i+1}_1.IDI"
                             to_pipeline = True if (i == 0) else False
 
-                    passes.append(experiment.CorrelatorPass(a_lisfile, msname, fitsidiname, to_pipeline))
+                    passes.append(experiment.CorrelatorPass(a_lisfile, msname, fitsidiname,
+                                                            to_pipeline))
                     # Replaces the old *.UVF string in the .lis file with the FITS IDI
                     # file name to generate in this pass.
                     if '.UVF' in a_lisline:
-                        environment.shell_command('sed', ['-i', f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile],
-                                                  shell=True, bufsize=None)
+                        environment.shell_command('sed', ['-i',
+                                                  f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile],
+                                                  shell=True, bufsize=-1)
 
     exp.correlator_passes = passes
     return True
 
 
-def getdata(exp):
+def getdata(exp) -> bool:
     """Gets the data into eee from all existing .lis files from the given experiment.
     inputs: exp : experiment.Experiment
     """
     for a_pass in exp.correlator_passes:
         cmd, _ = environment.shell_command("getdata.pl",
-                                           ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
+                                           ["-proj", exp.eEVNname if exp.eEVNname is not None \
+                                                                  else exp.expname,
                                             "-lis", a_pass.lisfile.name],
                                            shell=True, stdout=None,
                                            stderr=subprocess.STDOUT, bufsize=0)
@@ -102,7 +108,7 @@ def getdata(exp):
     return True
 
 
-def j2ms2(exp):
+def j2ms2(exp) -> bool:
     """Runs j2ms2 on all existing .lis files from the given experiment.
     If the MS to produce already exists, then it will not generate it again.
     inputs: exp : experiment.Experiment
@@ -117,7 +123,7 @@ def j2ms2(exp):
             # cmd,output = environment.shell_command("rm", ["-rf", outms], shell=True)
             # exp.log(cmd)
             if environment.space_available(exp.cwd) <= 1.2*u.kbit*int(subprocess.run(
-                                                       f"du -sc */*.cor*", shell=True,
+                                                       "du -sc */*.cor*", shell=True,
                                                        capture_output=True).stdout.decode().split()[-2]):
                 rprint("\n\n[bold red]There is no enough space in the computer to create " \
                        "the MS file[/bold red]")
@@ -144,7 +150,7 @@ def j2ms2(exp):
     return True
 
 
-def update_ms_expname(exp):
+def update_ms_expname(exp) -> bool:
     """For e-EVN experiments, where the .vex-file experiment name does not match the actual
     experiment name, this one must be updated in the created MS file(s).
     """
@@ -157,12 +163,12 @@ def update_ms_expname(exp):
     return True
 
 
-def get_metadata_from_ms(exp):
+def get_metadata_from_ms(exp) -> bool:
     exp.get_setup_from_ms()
     return True
 
 
-def standardplots(exp, do_weights=True):
+def standardplots(exp, do_weights=True) -> bool:
     """Runs the standardplots on the specified experiment using a reference antenna
     and sources to be picked for the auto- and cross-correlations.
     """
@@ -186,18 +192,18 @@ def standardplots(exp, do_weights=True):
                 counter += 1
                 if (counter == 1) and do_weights:
                     cmd, _ = environment.shell_command("standardplots",
-                                                            ["-weight", a_pass.msfile.name, refant, calsources],
-                                                            stdout=None, stderr=subprocess.STDOUT)
+                                               ["-weight", a_pass.msfile.name, refant, calsources],
+                                               stdout=None, stderr=subprocess.STDOUT)
                 else:
                     cmd, _ = environment.shell_command("standardplots",
-                                                            [a_pass.msfile.name, refant, calsources],
-                                                            stdout=None, stderr=subprocess.STDOUT)
+                                               [a_pass.msfile.name, refant, calsources],
+                                               stdout=None, stderr=subprocess.STDOUT)
 
                 exp.log(cmd)
                 # Runs again jplotter but only to retrieve the summary into the output
                 cmd, output = environment.shell_command("echo",
-                                                        [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
-                                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                            [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
+                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 exp.log(environment.extract_tail_standardplots_output(output))
 
         except Exception:
@@ -208,7 +214,8 @@ def standardplots(exp, do_weights=True):
 
     return True
 
-def print_exp(exp):
+
+def print_exp(exp) -> Optional[bool]:
     """Shows in the terminal all metadata related to the given experiment.
     """
     if exp.print_blessed(outputfile='notes.md'):
@@ -217,7 +224,7 @@ def print_exp(exp):
     return None
 
 
-def open_standardplot_files(exp):
+def open_standardplot_files(exp) -> Optional[bool]:
     """Calls gv to open all plots generated by standardplots.
     """
     standardplots = []
@@ -232,7 +239,7 @@ def open_standardplot_files(exp):
         rprint("[bold yellow]You did not want me to open the plots. " \
                "You shall do it manually[/bold yellow]")
         print("Take a look at the produced standard plots:")
-        print("\n".join(["- {a_plot}" for a_plot in standardplots]))
+        print("\n".join([f"- {a_plot}" for a_plot in standardplots]))
         print("[green]Execute me again after that to continue the post-process.[/green]")
         return None
 
@@ -246,7 +253,7 @@ def open_standardplot_files(exp):
     return True
 
 
-def onebit(exp):
+def onebit(exp) -> bool:
     """In case some stations recorded at 1 bit, scales 1-bit data to correct for
     quantization losses in all MS associated with the given experiment name.
     """
@@ -263,28 +270,30 @@ def onebit(exp):
     return True
 
 
-def ysfocus(exp):
+def ysfocus(exp) -> bool:
     for a_pass in exp.correlator_passes:
-        environment.shell_command("ysfocus.py", a_pass.msfile.name, stdout=None, shell=True, stderr=subprocess.STDOUT)
+        environment.shell_command("ysfocus.py", a_pass.msfile.name, stdout=None,
+                                  shell=True, stderr=subprocess.STDOUT)
     return True
 
 
-def polswap(exp):
+def polswap(exp) -> bool:
     """Swaps the polarization of the given antennas for all associated MS files
     to the given experiment.
     """
     if len(exp.antennas.polswap) > 0:
         for a_pass in exp.correlator_passes:
-            environment.shell_command("polswap.py", [a_pass.msfile.name, ','.join(exp.antennas.polswap)],
+            environment.shell_command("polswap.py",
+                                      [a_pass.msfile.name, ','.join(exp.antennas.polswap)],
                                       shell=True, stdout=None, stderr=subprocess.STDOUT)
     return True
 
 
-def flag_weights(exp):
+def flag_weights(exp) -> bool:
     for a_pass in exp.correlator_passes:
         cmd, output = environment.shell_command("flag_weights.py",
-                                                [a_pass.msfile.name, str(a_pass.flagged_weights.threshold)],
-                                                shell=True, stdout=None, stderr=subprocess.STDOUT)
+                                    [a_pass.msfile.name, str(a_pass.flagged_weights.threshold)],
+                                    shell=True, stdout=None, stderr=subprocess.STDOUT)
         exp.log(cmd+"\n# "+output.split('\r')[-1].replace('\n', '\n# ')+"\n")
         # Find the percentage of flagged data and stores it in exp
         str_end = '% data with non-zero'
@@ -295,14 +304,15 @@ def flag_weights(exp):
     return True
 
 
-def update_piletter(exp):
+def update_piletter(exp) -> bool:
     """Updates the PI letter by changing two things:
     - Removing the trailing epoch-related character in the experiment name.
     - Adding the weightthreshold that was used and how much data were flagged.
     """
     weightthreshold = float(exp.correlator_passes[0].flagged_weights.threshold)
     flaggeddata = float(exp.correlator_passes[0].flagged_weights.percentage)
-    polconvert_written = subprocess.call(["grep", "Martí-Vidal,", f"{exp.expname.lower()}.piletter"],
+    polconvert_written = subprocess.call(["grep", "Martí-Vidal,",
+                                          f"{exp.expname.lower()}.piletter"],
                                          shell=False, stdout=subprocess.PIPE) == 0
     with open(f"{exp.expname.lower()}.piletter", 'r') as orifile:
         with open(f"{exp.expname.lower()}.piletter~", 'w') as destfile:
@@ -322,33 +332,37 @@ def update_piletter(exp):
                     for ant in exp.correlator_passes[0].antennas:
                         if (f"{ant.name.capitalize()}:" in tmp_line) and (not ant.observed):
                             tmp_line = tmp_line.replace(f"{ant.name.capitalize()}:",
-                                                        f"{ant.name.capitalize()}: Could not observe.")
+                                                    f"{ant.name.capitalize()}: Could not observe.")
 
                     destfile.write(tmp_line)
                     if ('Further remarks:' in tmp_line) and (not polconvert_written):
                         if len(exp.antennas.polconvert) > 0:
                             destfile.write("\n")
                             if len(exp.antennas.polconvert) > 1:
-                                s = f"s {', '.join(exp.antennas.polconvert[:-1])} and {exp.antennas.polconvert[-1]} "
+                                s = f"s {', '.join(exp.antennas.polconvert[:-1])} and " \
+                                    f"{exp.antennas.polconvert[-1]} "
                             else:
                                 s = f" {exp.antennas.polconvert[0]} "
 
-                            destfile.write(f"- Note that the antenna{s}originally observed linear polarizations, "
-                                           "which were transformed to circular ones during post-processing via the "
-                                           "PolConvert program (Martí-Vidal, et al. 2016, A&A,587, A143). Thanks to "
-                                           "this correction, you can automatically recover the absolute EVPA value "
-                                           "when using the antenna as reference station during fringe-fitting.\n")
+                            destfile.write(f"- Note that the antenna{s}originally observed linear "
+                                           "polarizations, which were transformed to circular "
+                                           "ones during post-processing via the PolConvert "
+                                           "program (Martí-Vidal, et al. 2016, A&A,587, A143). "
+                                           "Thanks to this correction, you can automatically "
+                                           "recover the absolute EVPA value when using the "
+                                           "antenna as reference station during fringe-fitting.\n")
 
                         ants_bw = {}
                         if len(set([cp.freqsetup.n_subbands for cp in exp.correlator_passes])) == 1:
                             for antenna in exp.correlator_passes[0].antennas:
-                                if 0 < len(antenna.subbands) < exp.correlator_passes[0].freqsetup.n_subbands:
+                                if 0 < len(antenna.subbands) < \
+                                        exp.correlator_passes[0].freqsetup.n_subbands:
                                     # In case the antenna observed a consecutive number of subbands
                                     ant_sbs = np.array(antenna.subbands)
                                     ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
                                     if (ant_sbs[1:] == 1).all():
                                         ants_bw[antenna.name] = \
-                                                        [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1}"]
+                                              [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1}"]
                                     else:
                                         ants_bw[antenna.name] = [f"{antenna.subbands}"]
                         else:
@@ -359,15 +373,17 @@ def update_piletter(exp):
                                             ant_sbs = np.array(antenna.subbands)
                                             ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
                                             if (ant_sbs[1:] == 1).all():
-                                                ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-"
-                                                                         f"{max(antenna.subbands)+1} "
-                                                                         f"(in correlator pass #{i+1})"]
+                                                ants_bw[antenna.name] = [
+                                                        f"{min(antenna.subbands)+1}-"
+                                                        f"{max(antenna.subbands)+1} "
+                                                        f"(in correlator pass #{i+1})"]
                                             else:
                                                 ants_bw[antenna.name] = [f"{antenna.subbands} "
-                                                                         f"(in correlator pass #{i+1})"]
+                                                                 f"(in correlator pass #{i+1})"]
                                         else:
                                             ants_bw[antenna.name].append( \
-                                                f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1} "
+                                                f"{min(antenna.subbands)+1}-" \
+                                                f"{max(antenna.subbands)+1} "
                                                 f"(in correlator pass #{i+1})")
 
                         if len(ants_bw) > 0:
@@ -379,7 +395,8 @@ def update_piletter(exp):
                             s = "- Note that "
                             for i,ant_r in enumerate(ants_bw_r):
                                 if i == 0:
-                                    s += f"{', '.join(ants_bw_r[ant_r])} only observed subbands {ant_r}, "
+                                    s += f"{', '.join(ants_bw_r[ant_r])} only observed " \
+                                         f"subbands {ant_r}, "
                                 elif i== len(ants_bw_r)-1:
                                     s += f"and {', '.join(ants_bw_r[ant_r])} subbands {ant_r}, "
                                 else:
@@ -389,9 +406,11 @@ def update_piletter(exp):
                             destfile.write(s)
 
                         s = "- Note that the data from the antenna"
-                        s_end = " have been corrected for opacity in the Tsys/Gain Curve measurements."
+                        s_end = " have been corrected for opacity in the Tsys/Gain Curve " \
+                                "measurements."
                         if len(exp.antennas.opacity) > 1:
-                            s += f"s {', '.join(exp.antennas.opacity[:-1])} and {exp.antennas.opacity[-1]}"
+                            s += f"s {', '.join(exp.antennas.opacity[:-1])} and " \
+                                 f"{exp.antennas.opacity[-1]}"
                             destfile.write(s + s_end)
                         elif len(exp.antennas.opacity) == 1:
                             s += f" {exp.antennas.opacity[0]}"
@@ -400,7 +419,8 @@ def update_piletter(exp):
     os.rename(f"{exp.expname.lower()}.piletter~", f"{exp.expname.lower()}.piletter")
     return True
 
-def tconvert(exp):
+
+def tconvert(exp) -> bool:
     """Runs tConvert in all MS files available in the directory
     """
     for a_pass in exp.correlator_passes:
@@ -415,7 +435,8 @@ def tconvert(exp):
             environment.shell_command("tConvert", ["-v", a_pass.lisfile.name],
                                       stdout=None, stderr=subprocess.STDOUT)
         elif idi_size < 4*u.Tb:
-            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
+            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name,
+                                                   "-o", "chunk_size=4GB"],
                                       stdout=None, stderr=subprocess.STDOUT)
         else:
             if environment.space_available(exp.cwd) <= 1.1*idi_size:
@@ -430,7 +451,7 @@ def tconvert(exp):
     return True
 
 
-def polconvert(exp):
+def polconvert(exp) -> Optional[bool]:
     """Checks if PolConvert is required for any antenna.
     In that case, prepares the templates for running it and (potentially in the future?)
     will run it. For now it just requests the user to run it manually.
@@ -492,7 +513,7 @@ def polconvert(exp):
     return True
 
 
-def post_polconvert(exp):
+def post_polconvert(exp) -> Optional[bool]:
     """Assumes that PolConvert has run, creating the new (corrected) files *IDI*.PCONVERT.
     This function (if indeed PolConvert had run) would move all converted files to the
     standard name (keeping the original ones in a folder (./unconverted_idi_files/),
@@ -517,8 +538,9 @@ def post_polconvert(exp):
     exp.log("mkdir idi_ori")
     exp.log("mv *IDI *IDI? *IDI?? *IDI???  idi_ori/")
     exp.log("zmv '(*).PCONVERT' '$1'")
-    # Creates a new MS with the PolConverted-data in order to plot it to check if the conversion run properly
-    if any( '_1_1' in [pp.name for pp in pconverted_idi]):
+    # Creates a new MS with the PolConverted-data in order to plot it
+    # to check if the conversion run properly
+    if '_1_1' in [pp.name for pp in pconverted_idi]:
         _ = environment.shell_command("idi2ms.py", ['--delete',
                               f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
                               ','.join([idi.name for idi in pconverted_idi])])
@@ -529,24 +551,24 @@ def post_polconvert(exp):
                 if (ant in exp.antennas.names) and (exp.antennas[ant].observed):
                     refant = ant
                     break
-            raise ValueError("Could not find a good reference antenna for standardplots. Please specify it manually")
+            raise ValueError("Could not find a good reference antenna for standardplots. "
+                             "Please specify it manually.")
 
         _ = environment.shell_command("standardplots",
-                                      [f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
-                                       refant, ','.join(exp.sources_stdplot)], stdout=None,
-                                       stderr=subprocess.STDOUT)
+                          [f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
+                           refant, ','.join(exp.sources_stdplot)], stdout=None,
+                           stderr=subprocess.STDOUT)
 
         for a_plot in glob.glob(f"{exp.expname.lower()}-*-pconv-cross*.ps"):
             environment.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
 
     exp.last_step = 'post_polconvert'
-    # Create again a MS from these converted files so I can run standardplots over the corrected data
-    # TODO: Doing it manually for now
     rprint("\n\n[bold green]If PolConvert worked fine, re-run me to continue. " \
            "Otherwise fix it manually before.[/bold green]\n")
     return None
 
-def post_post_polconvert(exp):
+
+def post_post_polconvert(exp) -> bool:
     """When PolConvert run properly and the user continued, it checks if the standardplots from the
     converted MS (exp-pconv.ms) exist and then rename those plots to the usual name.
     """
@@ -561,7 +583,8 @@ def post_post_polconvert(exp):
 
     return True
 
-def set_credentials(exp):
+
+def set_credentials(exp) -> bool:
     """Sets the credentials for the given experiment.
     In case of an NME or test, it does not set any credential.
     Otherwise, it will take the credentials from a .auth file if already exists,
@@ -580,13 +603,14 @@ def set_credentials(exp):
         possible_char = string.digits + string.ascii_letters
         exp.set_credentials(username=exp.expname.lower(),
                             password="".join(random.sample(possible_char, 12)))
-        environment.shell_command("touch", f"{exp.credentials.username}_{exp.credentials.password}.auth")
+        environment.shell_command("touch",
+                                  f"{exp.credentials.username}_{exp.credentials.password}.auth")
         exp.log(f"touch {exp.credentials.username}_{exp.credentials.password}.auth")
 
     return True
 
 
-def create_pipelet(exp):
+def create_pipelet(exp) -> bool:
     """Makes a copy of the PI letter including the credentials to download the experiment.
     If there are no credentials for the experiment (unprotected ones, like the NMEs), then it does
     not create any file.
@@ -597,7 +621,7 @@ def create_pipelet(exp):
     return True
 
 
-def archive(exp):
+def archive(exp) -> bool:
     # Compress all figures from standardplots if they haven't been yet
     if len(glob.glob("*.ps")) > 0:
         # This avoids issues as it seems like gzip freezes when overwriting the same files
@@ -608,7 +632,8 @@ def archive(exp):
         exp.log('gzip *ps')
 
     if (exp.credentials.username is not None) and (exp.credentials.password is not None):
-        environment.archive("-auth", exp, f"-n {exp.credentials.username} -p {exp.credentials.password}")
+        environment.archive("-auth", exp,
+                            f"-n {exp.credentials.username} -p {exp.credentials.password}")
     else:
         assert len(glob.glob("*_*.auth")) == 0, 'No credentials stored but auth file found'
 
@@ -617,23 +642,25 @@ def archive(exp):
     return True
 
 
-def append_antab(exp):
+def append_antab(exp) -> bool:
     """Appends the Tsys and GC information from the experiment ANTAB file into the FITS-IDI files.
     It will also re-archive the files.
 
-    If the ANTAB file is already present in the directory, it will assume that the information was already
-    appended.
+    If the ANTAB file is already present in the directory, it will assume that the information
+    was already appended.
     """
-    fits2check = glob.glob(f"{exp.expname.lower()}_*_*.IDI1") + glob.glob(f"{exp.expname.lower()}_*_*.IDI")
+    fits2check = glob.glob(f"{exp.expname.lower()}_*_*.IDI1") + \
+                 glob.glob(f"{exp.expname.lower()}_*_*.IDI")
     assert len(fits2check) > 0, "Could not find FITS-IDI to append Tsys/GC!"
 
-    if (not all([check_antab_idi.check_consistency(a_fits, verbose=False) for a_fits in fits2check])) \
-       or (len(glob.glob(f"{exp.expname.lower()}*.antab")) == 0):
+    if (not all([check_antab_idi.check_consistency(a_fits, verbose=False) \
+                 for a_fits in fits2check])) \
+                 or (len(glob.glob(f"{exp.expname.lower()}*.antab")) == 0):
         environment.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
         exp.log('append_antab_idi.py')
         if not all([check_antab_idi.check_consistency(a_fits) for a_fits in fits2check]):
             # As now everything should be OK. Means that something failed.
-            rprint(f"\n\n[red bold]The Tsys/GC could not be imported into the FITS-IDI.[/red bold]")
+            rprint("\n\n[red bold]The Tsys/GC could not be imported into the FITS-IDI.[/red bold]")
             return False
     else:
         rprint("[green]ANTAB information already appended into the FITS-IDI files.[/green]")
@@ -642,7 +669,7 @@ def append_antab(exp):
     return True
 
 
-def send_letters(exp):
+def send_letters(exp) -> bool:
     """Remembers you to update the PI letter and send it , and the pipeletter, to the PIs.
     Finally, it runs parsePIletter.
     """
@@ -662,19 +689,23 @@ def send_letters(exp):
     return True
 
 
-def antenna_feedback(exp):
-    rprint("\n[center][bold red] --- Also update the database with the observed issues --- [/bold red][/center]")
-    rprint("[bold]Now it is also time to bookkeep the issues that you may have seen in the antennas at[/bold]")
-    rprint(f"{exp.feedback_page()}\n")
-    rprint("[bold]Also go to the JIVE RedMine to write down the relevant issues with particular antennas[/bold]:")
+def antenna_feedback(exp) -> bool:
+    rprint("\n[center][bold red] --- Also update the database with the observed issues "
+           "--- [/bold red][/center]")
+    rprint("[bold]Now it is also time to bookkeep the issues that you may have "
+           "seen in the antennas at[/bold]")
+    rprint(exp.feedback_page() + "\n")
+    rprint("[bold]Also go to the JIVE RedMine to write down the relevant issues with "
+           "particular antennas[/bold]:")
     rprint("https://jrm.jive.nl/projects/science-support/news\n\n")
     return True
 
 
-def nme_report(exp):
+def nme_report(exp) -> bool:
     if exp.expname[0] == 'N':
         # This is a NME.
-        rprint("[center][bold red]Now it is time to write the NME Report... Good luck![/bold red][/center]")
+        rprint("[center][bold red]Now it is time to write the NME Report..."
+               "Good luck![/bold red][/center]")
     else:
         rprint("[center][bold]Experiment done![/bold][/center]\n")
         print("You may have a coffee/tea after finishing the last tasks!")
