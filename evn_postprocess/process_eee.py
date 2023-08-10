@@ -528,11 +528,9 @@ def post_polconvert(exp) -> Optional[bool]:
 
     idi_ori = Path(exp.cwd / 'idi_ori/')
     idi_ori.mkdir(exist_ok=True)
-    for an_idi in Path(exp.cwd).glob('*IDI*PCONVERT'):
-        Path(an_idi.name.replace('.PCONVERT', '')).rename(idi_ori / an_idi.name)
-
     pconverted_idi = list(Path(exp.cwd).glob('*IDI*.PCONVERT'))
     for an_idi in pconverted_idi:
+        Path(an_idi.name.replace('.PCONVERT', '')).rename(idi_ori / an_idi.name)
         an_idi.rename(an_idi.name.replace('.PCONVERT', ''))
 
     exp.log("mkdir idi_ori")
@@ -540,10 +538,10 @@ def post_polconvert(exp) -> Optional[bool]:
     exp.log("zmv '(*).PCONVERT' '$1'")
     # Creates a new MS with the PolConverted-data in order to plot it
     # to check if the conversion run properly
-    if '_1_1' in [pp.name for pp in pconverted_idi]:
+    if any(['_1_1' in pp.name for pp in pconverted_idi]):
         _ = environment.shell_command("idi2ms.py", ['--delete',
                               f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
-                              ','.join([idi.name for idi in pconverted_idi])])
+                              ','.join([idi.name for idi in pconverted_idi if '_1_1' in idi.name])])
         if exp.refant is not None:
             refant = exp.refant[0] if len(exp.refant) == 1 else f"({'|'.join(exp.refant)})"
         else:
