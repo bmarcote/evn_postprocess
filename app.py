@@ -2,19 +2,18 @@
 """Post-Processing of EVN experiments.
 
 """
-import os
 import sys
 import argparse
 import traceback
 from typing import Optional
-import rich
-from rich_argparse import RichHelpFormatter, RawTextRichHelpFormatter
+from rich import print as rprint
+from rich_argparse import RawTextRichHelpFormatter
 from pathlib import Path
 from datetime import datetime as dt
 # from inspect import signature  # WHAT?  to know how many parameters has each function
 from evn_postprocess import experiment
 from evn_postprocess import scheduler as sch
-from evn_postprocess import dialog
+# from evn_postprocess import dialog
 from evn_postprocess import environment as env
 from evn_postprocess import process_ccs as ccs
 from evn_postprocess import process_eee as eee
@@ -248,7 +247,7 @@ def run(exp: experiment.Experiment, step1: Optional[str] = None, step2: Optional
             the_steps = step_keys[step_keys.index(exp.last_step)+1:]
             exp.log("Starting after the last sucessful step from a previous run " \
                     f"({exp.last_step}).", False)
-            rich.print("[italic]Starting after the last sucessful step from a previous run " \
+            rprint("[italic]Starting after the last sucessful step from a previous run " \
                        f"({exp.last_step})[/italic].")
         # step1 is not None
         elif step2 is None:
@@ -263,15 +262,15 @@ def run(exp: experiment.Experiment, step1: Optional[str] = None, step2: Optional
                                        f"from the list {step_keys}."
             the_steps = step_keys[step_keys.index(step1):step_keys.index(step2)]
             exp.log(f"Running only the following steps: {', '.join(the_steps)}.", False)
-            print(f"Running only the following steps: {', '.join(the_steps)}.")
+            rprint(f"[green]Running only the following steps: {', '.join(the_steps)}[/green]")
     except ValueError:
-        print("ERROR: more than two steps have been introduced.\n"
-              "Only one or two options are expected.")
+        rprint("[bold red]ERROR: more than two steps have been introduced.[/bold red]\n"
+              "[red]Only one or two options are expected.[/red]")
         traceback.print_exc()
         sys.exit(1)
     except KeyError:
-        print("ERROR: the introduced step ({step1}) is not recognized.\n"
-              "Run the program with '-h' to see the expected options.")
+        rprint("[bold red]ERROR: the introduced step ({step1}) is not recognized[/bold red]\n"
+              "[red]Run the program with '-h' to see the expected options.[/red]")
         traceback.print_exc()
         sys.exit(1)
 
@@ -283,13 +282,13 @@ def run(exp: experiment.Experiment, step1: Optional[str] = None, step2: Optional
             exp.last_step = a_step
             exp.store()
     except sch.ManualInteractionRequired:
-        print("\n\nStopped for manual interaction (see above). "
-              "Re-run once you have done your duty.")
+        rprint("\n\n[yellow]Stopped for manual interaction (see above). "
+              "Re-run once you have done your duty.[/yellow]")
         return
 
     exp.last_step = "Finished."
     exp.store()
-    rich.print('\n[italic green]The post-processing has finished properly.[/italic green]')
+    rprint('\n[italic green]The post-processing has finished properly.[/italic green]')
 
 
 def edit(exp: experiment.Experiment, param: str, value: str):
@@ -312,7 +311,7 @@ def edit(exp: experiment.Experiment, param: str, value: str):
     elif param == 'target':
         for src in value.split(','):
             if exp.sources is None:
-                rich.print("[bold red]The sources has still not been initialized[/bold red]")
+                rprint("[bold red]The sources has still not been initialized[/bold red]")
             for exp_src in exp.sources:
                 if exp_src.name == src:
                     exp_src.type = experiment.SourceType.target
@@ -328,7 +327,7 @@ def edit(exp: experiment.Experiment, param: str, value: str):
                     exp_src.type = experiment.SourceType.fringefinder
 
     exp.store()
-    rich.print('[italic green]Changes properly stored for experiment.[/italic green]')
+    rprint('[italic green]Changes properly stored for experiment.[/italic green]')
     sys.exit(0)
 
 
@@ -342,7 +341,7 @@ def info(exp: experiment.Experiment):
 def last(exp: experiment.Experiment):
     """Returns the last step that run successfully from post-process in this experiment.
     """
-    rich.print("\n\n" + f"[italic]The last step that successfully run for this experiment was " \
+    rprint("\n\n" + f"[italic]The last step that successfully run for this experiment was " \
                f"[green]{exp.last_step}[/green][/italic].")
     sys.exit(0)
 
@@ -407,9 +406,9 @@ def main():
             "(not present in MASTER_PROJECTS). " \
             "You may need to manually specify with --expname"
     except ValueError:
-        rich.print(f"[italic red]The assumed eperiment code {args.expname} "
+        rprint(f"[italic red]The assumed eperiment code {args.expname} "
                    "is not recognized.[/italic red]")
-        rich.print('\n' + description)
+        rprint('\n' + description)
         sys.exit(0)
 
     if args.supsci is None:

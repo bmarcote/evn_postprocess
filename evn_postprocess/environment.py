@@ -1,7 +1,7 @@
 import os
 import sys
 import subprocess
-from typing import Optional, Union, Iterable, Tuple
+from typing import Optional, Union, Tuple
 from pathlib import Path
 from astropy import units as u
 from . import process_eee as eee
