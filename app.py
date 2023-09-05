@@ -360,6 +360,8 @@ def main():
                         'from /data0/{supsci}/{EXPNAME}.[/dim]')
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:XXXXX).')
+    parser.add_argument('-s', '--silent', action='store_true', default=False, \
+                        help='Do not open the standardplot files. Just stop for the user to open them manually.')
     parser.add_argument('-v', '--version', action='version',
                         version='%(prog)s {}'.format(__version__))
     subparsers = parser.add_subparsers(help='[bold]If no command is provided, the full ' \
@@ -421,6 +423,7 @@ def main():
 
     exp = experiment.Experiment(args.expname, args.supsci)
     exp.graphics = not args.no_gui
+    exp.silent_mode = args.silent
 
     if exp.exists_local_copy():
         exp = exp.load()
