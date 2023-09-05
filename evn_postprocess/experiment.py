@@ -7,7 +7,6 @@ This also keeps track of the steps that have been condducted in the post-process
 resumed, or restarted.
 """
 import os
-import sys
 import copy
 import numpy as np
 import pickle
@@ -28,7 +27,7 @@ from . import environment as env
 from . import dialog
 
 
-def chunkert(pointer: int, total: int, step: int):
+def chunkert(pointer: int, total: int, step: int) -> tuple:
     while pointer < total:
         n = min(step, total - pointer)
         yield (pointer, n)
@@ -60,7 +59,7 @@ class Credentials(object):
         self._username = username
         self._password = password
 
-    def __iter__(self):
+    def __iter__(self) -> tuple:
         for key in ('username', 'password'):
             yield key, getattr(self, key)
 
@@ -100,7 +99,7 @@ class FlagWeight(object):
         self._th = value
 
     @property
-    def percentage(self):
+    def percentage(self) -> float:
         """Percentage of (non-zero) visibilities that have been flagged when running
         flag_weights.py. A value of -1 means that the amount is not known (e.g. the
         script has not been executed yet).
@@ -115,7 +114,7 @@ class FlagWeight(object):
         self.threshold = threshold
         self.percentage = percentage
 
-    def __iter__(self):
+    def __iter__(self) -> tuple:
         for key in ('threshold', 'percentage'):
             yield key, getattr(self, key)
 
@@ -1260,6 +1259,7 @@ class Experiment(object):
         """Stores the current Experiment into a file in the indicated path. If not provided,
         it will be '.{expname.lower()}.obj' where exp is the name of the experiment.
         """
+        # self.store_json(path)
         if path is not None:
             self._local_copy = path
 
@@ -1269,7 +1269,7 @@ class Experiment(object):
 
     def store_json(self, path: Optional[Path] = None):
         """Stores the current Experiment into a JSON file.
-        If path not prvided, it will be '{expname.lower()}.json'.
+        If path not provided, it will be '{expname.lower()}.json'.
         """
         if path is not None:
             self._local_copy = path
@@ -1288,6 +1288,7 @@ class Experiment(object):
 
         with open(self._local_copy, 'rb') as f:
             obj = pickle.load(f)
+            # obj = json.load(f, cls=ExpJsonEncoder)
 
         return obj
 
@@ -1431,7 +1432,8 @@ class Experiment(object):
             if None not in self.timerange:
                 s += f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"
                 s_file += ['Obs date: ' + self.obsdatetime.strftime('%d/%m/%Y') + \
-                           f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"]
+                           f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} " \
+                           "UTC\n"]
             else:
                 s_file += ['Obs date: ' + self.obsdatetime.strftime('%d/%m/%Y')]
 
@@ -1569,14 +1571,18 @@ class Experiment(object):
             try:
                 if len(set([cp.freqsetup.n_subbands for cp in self.correlator_passes])) == 1:
                     for antenna in self.correlator_passes[0].antennas:
-                        if 0 < len(antenna.subbands) < self.correlator_passes[0].freqsetup.n_subbands:
-                            ss += f"    {antenna.name}: {' '*(3*(antenna.subbands[0]))}{antenna.subbands}\n"
-                            ss_file += [f"    {antenna.name}: {' '*(3*(antenna.subbands[0]))}{antenna.subbands}"]
+                        if 0 < len(antenna.subbands) < \
+                               self.correlator_passes[0].freqsetup.n_subbands:
+                            ss += f"    {antenna.name}: " \
+                                  f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands}\n"
+                            ss_file += [f"    {antenna.name}: " \
+                                        f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands}"]
                 else:
                     for antenna in self.correlator_passes[0].antennas:
                         for i,a_pass in enumerate(self.correlator_passes):
                             if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
-                                ss += f"    {antenna.name}: {' '*(3*(antenna.subbands[0]))}{antenna.subbands} " \
+                                ss += f"    {antenna.name}: " \
+                                      f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands} " \
                                       f"(in correlator pass {a_pass.lisfile})\n"
                                 ss_file += [f"    {antenna.name}: " \
                                             f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands} " \

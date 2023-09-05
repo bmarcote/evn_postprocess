@@ -207,7 +207,7 @@ def standardplots(exp, do_weights=True) -> bool:
                 exp.log(environment.extract_tail_standardplots_output(output))
 
         except Exception:
-            print("WARNING: Standardplots reported an error.")
+            rprint("\n\n[red]Standardplots reported an error![/red]")
             # TODO: these tracebacks should be one level above (in app.py)
             traceback.print_exc()
             return False
@@ -309,8 +309,16 @@ def update_piletter(exp) -> bool:
     - Removing the trailing epoch-related character in the experiment name.
     - Adding the weightthreshold that was used and how much data were flagged.
     """
-    weightthreshold = float(exp.correlator_passes[0].flagged_weights.threshold)
-    flaggeddata = float(exp.correlator_passes[0].flagged_weights.percentage)
+    if len(exp.correlator_passes) == 0:
+        get_passes_from_lisfiles(exp)
+
+    if exp.correlator_passes[0].flagged_weights is None:
+        weightthreshold = -1
+        flaggeddata = -1
+    else:
+        weightthreshold = float(exp.correlator_passes[0].flagged_weights.threshold)
+        flaggeddata = float(exp.correlator_passes[0].flagged_weights.percentage)
+
     polconvert_written = subprocess.call(["grep", "Martí-Vidal,",
                                           f"{exp.expname.lower()}.piletter"],
                                          shell=False, stdout=subprocess.PIPE) == 0
