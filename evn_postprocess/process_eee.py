@@ -551,7 +551,8 @@ def post_polconvert(exp) -> Optional[bool]:
     if any(['_1_1' in pp.name for pp in pconverted_idi]):
         _ = environment.shell_command("idi2ms.py", ['--delete',
                               f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
-                              ','.join([idi.name for idi in pconverted_idi if '_1_1' in idi.name])])
+                              ','.join([idi.name.replace('.PCONVERT', '') for idi in pconverted_idi \
+                                        if '_1_1' in idi.name])])
         if exp.refant is not None:
             refant = exp.refant[0] if len(exp.refant) == 1 else f"({'|'.join(exp.refant)})"
         else:
