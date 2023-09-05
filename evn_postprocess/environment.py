@@ -1,14 +1,15 @@
 import os
 import sys
 import subprocess
-from typing import Optional, Union, Tuple
+from typing import Optional, Union
 from pathlib import Path
 from astropy import units as u
+from rich import print as rprint
 from . import process_eee as eee
 from . import process_pipe as pipe
 
 
-def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = None) -> Tuple:
+def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = None) -> tuple:
     """Does a scp from originpath to destpath. If the process returns an error,
     then it raises ValueError.
     """
@@ -131,6 +132,15 @@ def copy_files(exp) -> bool:
         exists.append(a_file.exists())
 
     if False in exists:
+        if not exists[0]:
+            rprint("\n\n[bold red].vix file not found in ccs[/bold red]")
+            rprint("[red]Check if the file exists or has a different name than expected.[/red]")
+
+        if False in exists[1:3]:
+            rprint("\n\n[bold red]The .expsum and/or .piletter files were not found[/bold red]")
+            rprint("\n\n[red]You may need to create them through jexp, "
+                   "or contact your supervisor[/red]")
+
         raise FileNotFoundError(f"The following files could not be found: "
                                 f"{','.join([f.name for f, b in zip(files, exists) if b])}")
 
