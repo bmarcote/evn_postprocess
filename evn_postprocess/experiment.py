@@ -13,7 +13,7 @@ import pickle
 import json
 import subprocess
 import datetime as dt
-from typing import Optional, Union, Iterable, Any
+from typing import Optional, Union, Iterable, Any, Generator
 from pathlib import Path
 from dataclasses import dataclass
 from collections import defaultdict
@@ -27,7 +27,7 @@ from . import environment as env
 from . import dialog
 
 
-def chunkert(pointer: int, total: int, step: int) -> tuple:
+def chunkert(pointer: int, total: int, step: int) -> Generator[tuple[int, int], Any, Any]:
     while pointer < total:
         n = min(step, total - pointer)
         yield (pointer, n)
@@ -59,7 +59,7 @@ class Credentials(object):
         self._username = username
         self._password = password
 
-    def __iter__(self) -> tuple:
+    def __iter__(self) -> Generator[tuple[str, str], Any, Any]:
         for key in ('username', 'password'):
             yield key, getattr(self, key)
 
@@ -114,7 +114,7 @@ class FlagWeight(object):
         self.threshold = threshold
         self.percentage = percentage
 
-    def __iter__(self) -> tuple:
+    def __iter__(self) -> Generator[tuple[str, float], Any, Any]:
         for key in ('threshold', 'percentage'):
             yield key, getattr(self, key)
 
@@ -174,7 +174,7 @@ class Source(object):
         self._type = sourcetype
         self._protected = protected
 
-    def __iter__(self):
+    def __iter__(self) -> Generator[tuple[str, Union[str, SourceType, bool]], Any, Any]:
         for key in ('name', 'type', 'protected'):
             yield key, getattr(self, key)
 
@@ -199,7 +199,7 @@ class Antenna:
     name: str
     scheduled: bool = True
     observed: bool = False
-    subbands: tuple = ()
+    subbands: tuple[int] = tuple()
     polswap: bool = False
     polconvert: bool = False
     onebit: bool = False
@@ -796,6 +796,17 @@ class Experiment(object):
 
 
     @property
+    def silent_mode(self) -> bool:
+        """Returns if the user wants to avoid opening graphical windows as for standard plots.
+        True means that plots will not be automatically openned.
+        """
+        return self._silent
+
+    @silent_mode.setter
+    def silent_mode(self, do_silently: bool):
+        self._silent = do_silently
+
+    @property
     def graphics(self) -> bool:
         """Returns if the user wants to avoid launching graphical stuff (like opening plots).
         True means no graphical opens should take place.
@@ -851,6 +862,7 @@ class Experiment(object):
         self._special_pars = {}
         self._last_step = None
         self.gui = dialog.Terminal()
+        self._silent = False
         self._graphics = True
         if not self._logs['file'].exists():
             # Writes down some snippets for jplotter in case the standard one fails.

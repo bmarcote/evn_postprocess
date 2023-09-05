@@ -147,6 +147,8 @@ def j2ms2(exp) -> bool:
 
             exp.log(cmd, timestamp=True)
 
+    # Creating a pool to produce the MS files in parallel
+
     return True
 
 

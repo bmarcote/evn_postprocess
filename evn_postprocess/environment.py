@@ -299,5 +299,5 @@ def space_available(path) -> u.Quantity:
     """Returns the available space in the disk where the given path is located.
     """
     results = os.statvfs(path)
-    return (results.f_frsize*results.f_bavail*u.b).to(u.Gb)
+    return (u.Quantity(results.f_frsize*results.f_bavail, unit=u.b)).to(u.Gb)
 
