@@ -1003,7 +1003,8 @@ class Experiment(object):
                     if name not in self.piname:
                         if isinstance(self.piname, list):
                             self.piname += name
-                            assert isinstance(email, list)
+                            if not isinstance(email, list):
+                                raise ValueError("No recognizable email was found in the .expsum file. Please fix this before continue.")
                             self.email += email
                         else:
                             self.piname.append(name)
