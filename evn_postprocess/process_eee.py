@@ -702,8 +702,7 @@ def antenna_feedback(exp) -> bool:
     rprint("\n[center][bold red] --- Also update the database with the observed issues "
            "--- [/bold red][/center]")
     rprint("[bold]Now it is also time to bookkeep the issues that you may have "
-           "seen in the antennas at[/bold]")
-    rprint(exp.feedback_page() + "\n")
+           "seen in the antennas by typing '/feedback' in Mattermost.[/bold]\n")
     rprint("[bold]Also go to the JIVE RedMine to write down the relevant issues with "
            "particular antennas[/bold]:")
     rprint("https://jrm.jive.nl/projects/science-support/news\n\n")

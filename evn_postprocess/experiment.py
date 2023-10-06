@@ -1237,21 +1237,19 @@ class Experiment(object):
             return " -- No associated feedback pages --"
 
         # Folling back the month to the standard session: feb, jun, or oct:
-        # if self.obsdatetime.month // 10 > 0:
-        #     sess_month = 'oct'
-        # elif self.obsdatetime.month // 6 > 0:
-        #     sess_month = 'jun'
-        # elif self.obsdatetime.month // 2 > 0:
-        #     sess_month = 'feb'
-        # else:
-        #     # It can be an out-of-session experiment or an e-EVN with a single experiment
-        #     return " -- No associated feedback pages --"
+        if self.obsdatetime.month // 10 > 0:
+            sess_month = 'oct'
+        elif self.obsdatetime.month // 6 > 0:
+            sess_month = 'jun'
+        elif self.obsdatetime.month // 2 > 0:
+            sess_month = 'feb'
+        else:
+            # It can be an out-of-session experiment or an e-EVN with a single experiment
+            return " -- No associated feedback pages --"
 
         # This should be the url to write, but the "click here" to provide feedback is broken...
-        # return f"http://archive.jive.nl/scripts/getfeed.php?exp={exp.expname.upper()}_{exp.obsdate}\n"
-        return "Type '/feedback' in Mattermost"
-        #"http://old.evlbi.org/session/" \
-        #       f"{sess_month}{self.obsdatetime.strftime('%y').lower()}/{self.expname.lower()}.html"
+        return "http://old.evlbi.org/session/" \
+              f"{sess_month}{self.obsdatetime.strftime('%y').lower()}/{self.expname.lower()}.html"
 
 
     @property
