@@ -72,7 +72,7 @@ def get_passes_from_lisfiles(exp) -> bool:
                             else:
                                 fitsidiname = f"{exp.expname.lower()}_{2*i_lines_done + 1}_1.IDI"
 
-                            to_pipeline = True
+                            to_pipeline = True if i_lines_done == 0 else False
                             if (i % 2 == 0) and (i > 0):
                                 i_lines_done += 1
                         else:

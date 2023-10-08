@@ -4,7 +4,8 @@ It runs all steps although it requires user interaction to
 verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 """
-from typing import Optional, Union, Iterable, Tuple
+import glob
+from typing import Optional
 from rich import print as rprint
 from . import experiment
 from . import environment as env
@@ -119,7 +120,7 @@ def run_antab_editor(exp) -> Optional[bool]:
         # I fake it to be sucessful in the object to let it run seemless in a following iteraction
         return None
 
-    if len(exp.correlator_passes) == 2:
+    if '_line' in ''.join(glob.glob(f"{exp.expname.lower()}*.lis")):
         cmd, _ = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py -l']))
         rprint('\n\n\n[bold red]Run `antab_editor.py -l` manually in pipe.[/bold red]')
     else:
@@ -165,8 +166,8 @@ def create_uvflg(exp) -> Optional[bool]:
     cdtemp = f"/jop83_0/pipe/in/{exp.supsci}/" \
              f"{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}" \
              f"/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}.uvflg"
-    if len(exp.correlator_passes) > 1:
-        for p in range(1, len(exp.correlator_passes) + 1):
+    if len(pipepass := [apass.pipeline for apass in exp.correlator_passes if apass.pipeline]) > 1:
+        for p in range(1, len(pipepass) + 1):
             cmd, _ = env.ssh('pipe@jop83', f"cp {cdtemp} {cdinp}/{exp.expname.lower()}_{p}.uvflg")
             exp.log(cmd)
     else:
@@ -209,7 +210,9 @@ def create_input_file(exp) -> bool:
     if len(pcal) == 0:  # no phase-referencing experiment
         to_change += [["#solint = 0", "solint = 2"]]
 
-    if len(exp.correlator_passes) > 2:
+    pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
+    if (len(exp.correlator_passes) > 2) or \
+       (len((exp.correlator_passes) == 2) and (len(pipepasses) > 1)):
         env.scp(f"{exp.vix}", f"pipe@jop83:/jop83_0/pipe/in/{exp.expname.lower()}/")
         to_change += [["#doprimarybeam = 1", "doprimarybeam = 1"],
                       ["#setup_station = Ef", f"setup_station = {exp.refant[0]}"]]
@@ -224,7 +227,7 @@ def create_input_file(exp) -> bool:
                  f"{'/jop83_0/pipe/in/{0}/{0}.inp.txt'.format(exp.expname.lower())}", shell=False)
         exp.log(cmd, False)
 
-    if len(exp.correlator_passes) > 1:
+    if len(pipepasses) > 1:
         cmd, _ = env.ssh('pipe@jop83',
                       "mv /jop83_0/pipe/in/{0}/{0}.inp.txt "
                       "/jop83_0/pipe/in/{0}/{0}_1.inp.txt".format(exp.expname.lower()))
@@ -234,7 +237,7 @@ def create_input_file(exp) -> bool:
                          f"{'/jop83_0/pipe/in/{0}/{0}_1.inp.txt'.format(exp.expname.lower())}",
                          shell=False)
         exp.log(cmd, False)
-        for i in range(2, len(exp.correlator_passes)+1):
+        for i in range(2, len(pipepasses) + 1):
             cmd, _ = env.ssh('pipe@jop83',
                           "cp /jop83_0/pipe/in/{0}/{0}_1.inp.txt "
                           "/jop83_0/pipe/in/{0}/{0}_{1}.inp.txt".format(exp.expname.lower(), i))
@@ -281,9 +284,10 @@ def comment_tasav_files(exp) -> bool:
                                    f"{cdout}/{exp.expname.lower()}" + r"\*.comment") and \
             env.remote_file_exists('pipe@jop83', \
                                    f"{cdin}/{exp.expname.lower()}" + r"\*.tasav.txt")):
-        if len(exp.correlator_passes) > 1:
-            for p in range(1, len(exp.correlator_passes) + 1):
-                if exp.correlator_passes[p-1].freqsetup.channels >= 256:
+        pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
+        if len(pipepasses) > 1:
+            for p in range(1, len(pipepasses) + 1):
+                if pipepasses[p-1].freqsetup.channels >= 256:
                     # We assume that it is a spectral line experiment
                     cmd = env.ssh('pipe@jop83',
                           f"cd {cdout} && comment_tasav_file.py --line {exp.expname.lower()}_{p}")
@@ -308,8 +312,9 @@ def pipeline_feedback(exp) -> bool:
     """Runs the feedback.pl script after the EVN Pipeline has run.
     """
     cd = f"cd /jop83_0/pipe/out/{exp.expname.lower()}"
-    if len(exp.correlator_passes) > 1:
-        for p in range(1, len(exp.correlator_passes) + 1):
+    pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
+    if len(pipepasses) > 1:
+        for p in range(1, len(pipepasses) + 1):
             cmd = env.ssh('pipe@jop83',
                           f"{cd} && /jop83_0/pipe/in/marcote/scripts/evn_support/feedback.pl " \
                           f"-exp '{exp.expname.lower()}_{p}' " \
