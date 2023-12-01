@@ -127,6 +127,10 @@ def run_antab_editor(exp) -> Optional[bool]:
         cmd, _ = env.ssh('-Y '+'pipe@jop83', ';'.join([cd, 'antab_editor.py']))
         rprint('\n\n\n[bold red]Run antab_editor.py manually in pipe.[/bold red]')
 
+    missing_antabs = [a.name for a in exp.antennas if not a.antabfsfile]
+    if len(missing_antabs) > 0:
+        rprint(f"[red]Note that you are missing ANTAB files from: {', '.join(missing_antabs)}[/red]")
+
     exp.log(cmd)
     return None
 
