@@ -1001,14 +1001,8 @@ class Experiment(object):
                     name = name.strip()
                     email = email.split(')')[0].strip()
                     if name not in self.piname:
-                        if isinstance(self.piname, list):
-                            self.piname += name
-                            if not isinstance(email, list):
-                                raise ValueError("No recognizable email was found in the .expsum file. Please fix this before continue.")
-                            self.email += email
-                        else:
-                            self.piname.append(name)
-                            self.email.append(email)
+                        self.piname.append(name)
+                        self.email.append(email)
                 elif 'scheduled telescopes' in a_line:
                     sched_antennas = a_line.split(':')[1].strip().split(' ')
                     # The antennas will likely not be defined at this point, it checks and adds it
