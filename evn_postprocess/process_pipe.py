@@ -216,7 +216,7 @@ def create_input_file(exp) -> bool:
 
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
     if (len(exp.correlator_passes) > 2) or \
-       (len((exp.correlator_passes) == 2) and (len(pipepasses) > 1)):
+       ((len(exp.correlator_passes) == 2) and (len(pipepasses) > 1)):
         env.scp(f"{exp.vix}", f"pipe@jop83:/jop83_0/pipe/in/{exp.expname.lower()}/")
         to_change += [["#doprimarybeam = 1", "doprimarybeam = 1"],
                       ["#setup_station = Ef", f"setup_station = {exp.refant[0]}"]]
