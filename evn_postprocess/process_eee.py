@@ -539,7 +539,7 @@ def post_polconvert(exp) -> Optional[bool]:
     idi_ori = Path(exp.cwd / 'idi_ori/')
     idi_ori.mkdir(exist_ok=True)
 
-    _ = environment.shell_command("mv", ["-r", "*.IDI", "*.IDI?", "*.IDI??", "*.IDI???", "idi_ori/"])
+    _ = environment.shell_command("mv", ["*.IDI", "*.IDI?", "*.IDI??", "*.IDI???", "*.IDI????", "idi_ori/"])
 
     pconverted_idi = list(Path(exp.cwd).glob('*IDI*.PCONVERT'))
     for an_idi in pconverted_idi:
@@ -547,7 +547,7 @@ def post_polconvert(exp) -> Optional[bool]:
         an_idi.rename(an_idi.name.replace('.PCONVERT', ''))
 
     exp.log("mkdir idi_ori")
-    exp.log("mv *IDI *IDI? *IDI?? *IDI???  idi_ori/")
+    exp.log("mv *IDI *IDI? *IDI?? *IDI??? *IDI???? idi_ori/")
     exp.log("zmv '(*).PCONVERT' '$1'")
     # Creates a new MS with the PolConverted-data in order to plot it
     # to check if the conversion run properly
