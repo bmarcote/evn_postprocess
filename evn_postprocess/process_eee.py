@@ -539,7 +539,9 @@ def post_polconvert(exp) -> Optional[bool]:
     idi_ori = Path(exp.cwd / 'idi_ori/')
     idi_ori.mkdir(exist_ok=True)
 
-    _ = environment.shell_command("mv", ["*.IDI", "*.IDI?", "*.IDI??", "*.IDI???", "*.IDI????", "idi_ori/"])
+    for an_idi in Path(exp.cwd).glob('*.IDI*'):
+        if '.PCONVERT' not in an_idi.name:
+            an_idi.rename(idi_ori / an_idi.name)
 
     pconverted_idi = list(Path(exp.cwd).glob('*IDI*.PCONVERT'))
     for an_idi in pconverted_idi:
