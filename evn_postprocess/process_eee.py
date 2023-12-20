@@ -17,6 +17,8 @@ import subprocess
 import numpy as np
 from astropy import units as u
 from rich import print as rprint
+from concurrent.futures import ProcessPoolExecutor
+from itertools import product
 from evn_support import check_antab_idi
 from . import experiment
 from . import environment
@@ -108,48 +110,52 @@ def getdata(exp) -> bool:
     return True
 
 
+def _j2ms2_correlator_pass(*args) -> bool:
+    exp, a_pass = args
+    with open(a_pass.lisfile) as f:
+        outms = [a for a in f.readline().replace('\n', '').split(' ')
+                 if (('.ms' in a) and ('.UVF' not in a))][0]
+        a_pass.msfile = outms
+
+    if not os.path.isdir(outms):
+        if 'j2ms2' in exp.special_params:
+            cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
+                                                         *exp.special_params['j2ms2']],
+                                               shell=True, stdout=None,
+                                               stderr=subprocess.STDOUT, bufsize=0)
+        else:
+            if exp.eEVNname is None:
+                cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
+                                                             "fo:nosquash_source_table"],
+                                                   shell=True, stdout=None,
+                                                   stderr=subprocess.STDOUT, bufsize=0)
+            else:
+                cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
+                                                   shell=True, stdout=None,
+                                                   stderr=subprocess.STDOUT, bufsize=0)
+
+        exp.log(cmd, timestamp=True)
+
+    return True
+
+
 def j2ms2(exp) -> bool:
     """Runs j2ms2 on all existing .lis files from the given experiment.
     If the MS to produce already exists, then it will not generate it again.
     inputs: exp : experiment.Experiment
     """
-    for i, a_pass in enumerate(exp.correlator_passes):
-        with open(a_pass.lisfile) as f:
-            outms = [a for a in f.readline().replace('\n', '').split(' ')
-                     if (('.ms' in a) and ('.UVF' not in a))][0]
-            exp.correlator_passes[i].msfile = outms
-        if not os.path.isdir(outms):
-            # print('Removing the pre-existing MS file {outms}')
-            # cmd,output = environment.shell_command("rm", ["-rf", outms], shell=True)
-            # exp.log(cmd)
-            if environment.space_available(exp.cwd) <= 1.2*u.kbit*int(subprocess.run(
-                                                       "du -sc */*.cor*", shell=True,
-                                                       capture_output=True).stdout.decode().split()[-2]):
-                rprint("\n\n[bold red]There is no enough space in the computer to create " \
-                       "the MS file[/bold red]")
-                raise IOError("Not enough disk space to create the MS file.")
-
-            if 'j2ms2' in exp.special_params:
-                cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
-                                                             *exp.special_params['j2ms2']],
-                                                   shell=True, stdout=None,
-                                                   stderr=subprocess.STDOUT, bufsize=0)
-            else:
-                if exp.eEVNname is None:
-                    cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
-                                                                 "fo:nosquash_source_table"],
-                                                       shell=True, stdout=None,
-                                                       stderr=subprocess.STDOUT, bufsize=0)
-                else:
-                    cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
-                                                       shell=True, stdout=None,
-                                                       stderr=subprocess.STDOUT, bufsize=0)
-
-            exp.log(cmd, timestamp=True)
+    if environment.space_available(exp.cwd) <= 1.2*u.kbit*int(subprocess.run(
+                                               "du -sc */*.cor*", shell=True,
+                                               capture_output=True).stdout.decode().split()[-2]):
+        rprint("\n\n[bold red]There is no enough space in the computer to create " \
+               "the MS file[/bold red]")
+        raise IOError("Not enough disk space to create the MS file.")
 
     # Creating a pool to produce the MS files in parallel
+    with ProcessPoolExecutor(max_workers=4) as pool:
+        results = pool.map(_j2ms2_correlator_pass, product([exp,], exp.correlator_passes))
 
-    return True
+    return all(results)
 
 
 def update_ms_expname(exp) -> bool:
