@@ -1242,9 +1242,7 @@ class Experiment(object):
             # It can be an out-of-session experiment or an e-EVN with a single experiment
             return " -- No associated feedback pages --"
 
-        # This should be the url to write, but the "click here" to provide feedback is broken...
-        return "http://old.evlbi.org/session/" \
-              f"{sess_month}{self.obsdatetime.strftime('%y').lower()}/{self.expname.lower()}.html"
+        return f"https://services.jive.eu/top/Feedback/experiment/{self.expname.upper()}"
 
 
     @property
