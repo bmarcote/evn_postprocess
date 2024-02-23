@@ -158,8 +158,8 @@ all_steps = {'start': sch.setting_up_environment,
              'postpipe': sch.after_pipeline,
              'last': sch.final_steps}
 
-all_commands = {'dirs': Command(env.create_all_dirs, "Creates folders in eee and jop83: " \
-                        "/data0/{supsci}/{EXP}, jop83:$IN/{exp}, $OUT/{exp}, $IN/{supsci}/{exp}"),
+all_commands = {'dirs': Command(env.create_all_dirs, "Creates folders in eee and archive: " \
+                        "/data0/{supsci}/{EXP}, $PIPE/{exp}/in, $PIPE/{exp}/out, $PIPE/{exp}/{supsci}"),
                 'copyfiles': Command(env.copy_files,
                                      "Copies the .vix, .expsum, .piletter, .key/sum  to eee."),
                 'auth': Command(eee.set_credentials,
