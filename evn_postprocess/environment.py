@@ -105,7 +105,7 @@ def grep_remote_file(host: str, remote_file: str, word: str) -> str:
 
 
 def create_all_dirs(exp) -> bool:
-    """Creates all folders (in eee and jop83) for the associated post-processing.
+    """Creates all folders (in eee and archive) for the associated post-processing.
     Input:
         - exp : experiment.Experiment
     """
@@ -288,7 +288,7 @@ def archive(flag: str, exp, rest_parameters: str) -> tuple:
     the given experiment object (metadata class).
     Flag can be -auth, -stnd, -fits,...
     """
-    cmd, output = shell_command("archive.pl",
+    cmd, output = shell_command("/home/jops/archive2/archive_user_scripts/archive.pl",
                                 [flag, "-e", f"{exp.expname.lower()}_{exp.obsdate}",
                                  rest_parameters], shell=True)
     exp.log(cmd, '# '+'# '.join(output))
