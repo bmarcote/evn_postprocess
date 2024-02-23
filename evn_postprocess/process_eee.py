@@ -152,7 +152,7 @@ def j2ms2(exp) -> bool:
         raise IOError("Not enough disk space to create the MS file.")
 
     # Creating a pool to produce the MS files in parallel
-    with ProcessPoolExecutor(max_workers=4) as pool:
+    with ProcessPoolExecutor(max_workers=6) as pool:
         results = pool.map(_j2ms2_correlator_pass, product([exp,], exp.correlator_passes))
 
     return all(results)
