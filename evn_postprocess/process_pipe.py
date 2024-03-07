@@ -37,6 +37,8 @@ def get_files_from_vlbeer(exp) -> bool:
         return "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}" + \
                r"\*" + f".{ext} ."
+    
+
 
     cmd, output = env.ssh('jops@archive2', ';'.join([cd, scp(exp, 'flag')]))
     exp.log(cmd)
@@ -144,7 +146,7 @@ def create_uvflg(exp) -> Optional[bool]:
     if (exp.eEVNname is None) or (exp.expname == exp.eEVNname):
         cd = f"cd /data/pipe/{exp.expname.lower()}/temp"
         if not env.remote_file_exists('jops@archive2', f"{cd}/{exp.expname.lower()}.uvflg"):
-            cmd, output = env.ssh('jops@archive2', ';'.join([cd, 'uvflgall.csh']))
+            cmd, output = env.ssh('jops@archive2', ';'.join([cd, '~/opt/evn_support//uvflgall.sh']))
             print(output)
             output_tail = []
             for outline in output.split('\n')[::-1]:
@@ -190,11 +192,10 @@ def create_input_file(exp) -> bool:
         return True
 
     # Parameters to modify inside the input file
-    cmd, output = env.ssh('jops@archive2',
-                          f"grep {exp.supsci.lower()} /data/pipe/aips_userno.txt")
+    cmd, output = env.ssh('jops@archive2', f"~/opt/evn_support/aips_userno.py {exp.supsci.lower()}")
     if (output is None) or (output.replace('\n', '').strip() == ''):
         raise ValueError('Could not recover your next AIPS user number (from archive2:/data/pipe/aips_userno.txt)')
-    userno = output.replace('\n', '').split(':')[1].strip()
+    userno = output.replace('\n', '').strip()
 
     bpass = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.fringefinder])
     pcal = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.calibrator])
@@ -219,7 +220,7 @@ def create_input_file(exp) -> bool:
                       ["#setup_station = Ef", f"setup_station = {exp.refant[0]}"]]
 
     cmd, _ = env.ssh('jops@archive2',
-                  "cp /data/pipe/pipe/templates/pipeline.inp.txt " \
+                  "cp /data/pipe/templates/pipeline.inp.txt " \
                   "/data/pipe/{0}/in/{0}.inp.txt".format(exp.expname.lower()),
                   shell=False)
     exp.log(cmd, False)
