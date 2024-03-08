@@ -338,11 +338,8 @@ def archive(exp) -> bool:
     """
     for f in ('in', 'out'):
         cd = f"cd /data/pipe/{exp.expname.lower()}/{f}/"
-        rprint(f"[green]archive.pl is not yet implemented in archive2. Tell Benito.[green]")
-        return None
-        cmd = env.ssh('jops@jop83', f"{cd} && /export/jive/jops/bin/archive/user/archive.pl " \
-                                    "-pipe -e " \
-                                    f"{exp.expname.lower()}_{exp.obsdate}", stdout=None)
+        cmd = env.ssh('jops@archive2', f"{cd} && /home/jops/opt/evn_support/archive.pl " \
+                      f"-pipe -e {exp.expname.lower()}_{exp.obsdate}", stdout=None)
         exp.log(cmd)
 
     return True
