@@ -110,7 +110,7 @@ def getdata(exp) -> bool:
     return True
 
 
-def _j2ms2_correlator_pass(args) -> bool:
+def _j2ms2_correlator_pass(*args) -> bool:
     exp, a_pass = args
     with open(a_pass.lisfile) as f:
         outms = [a for a in f.readline().replace('\n', '').split(' ')
