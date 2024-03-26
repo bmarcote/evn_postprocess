@@ -110,7 +110,7 @@ def getdata(exp) -> bool:
     return True
 
 
-def _j2ms2_correlator_pass(*args) -> bool:
+def _j2ms2_correlator_pass(args) -> bool:
     exp, a_pass = args
     with open(a_pass.lisfile) as f:
         outms = [a for a in f.readline().replace('\n', '').split(' ')
@@ -152,6 +152,7 @@ def j2ms2(exp) -> bool:
         raise IOError("Not enough disk space to create the MS file.")
 
     # Creating a pool to produce the MS files in parallel
+    # rprint(f"[yellow]Number of correlator passes to j2ms2: {len(exp.correlator_passes)}[/yellow]")
     with ProcessPoolExecutor(max_workers=6) as pool:
         results = pool.map(_j2ms2_correlator_pass, product([exp,], exp.correlator_passes))
 
