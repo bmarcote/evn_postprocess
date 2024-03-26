@@ -321,8 +321,8 @@ def update_piletter(exp) -> bool:
         get_passes_from_lisfiles(exp)
 
     if exp.correlator_passes[0].flagged_weights is None:
-        weightthreshold = -1
-        flaggeddata = -1
+        weightthreshold: Union[int, float] = -1
+        flaggeddata: Union[int, float] = -1
     else:
         weightthreshold = float(exp.correlator_passes[0].flagged_weights.threshold)
         flaggeddata = float(exp.correlator_passes[0].flagged_weights.percentage)
@@ -598,8 +598,7 @@ def post_post_polconvert(exp) -> bool:
     stdplot_files = glob.glob('*-pconv*.ps')
     if len(stdplot_files) > 0:
         for stdplot_file in stdplot_files:
-            stdplot_file = Path(stdplot_file)
-            stdplot_file.rename(str(stdplot_file).replace('-pconv', ''))
+            Path(stdplot_file).rename(stdplot_file.replace('-pconv', ''))
 
     return True
 
