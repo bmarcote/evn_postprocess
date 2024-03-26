@@ -1,0 +1,11 @@
+ccs:
+  user: jops
+  host: ccs
+  datapath: /ccs/expr/
+eee:
+  datapath: /data0/
+pipe:
+  user: pipe
+  host: jop83
+  datapath: /jop83_0/pipe/
+
