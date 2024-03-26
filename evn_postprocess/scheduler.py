@@ -79,7 +79,6 @@ def first_manual_check(exp: experiment.Experiment) -> bool:
         rprint(f"\n\n[bold red]{exp.expname} is part of an e-EVN run. "
                "Please edit manually the lis file now.[/bold red]")
         exp.last_step = 'checklis'
-        output = None
         exp.store()
         rprint("[bold]NOTE[/bold]: if you change the name of the .lis file, you will"
                "need to re-run the step 'lisfile' (with [dim]postprocess run lisfile[/dim]).")

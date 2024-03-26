@@ -260,7 +260,7 @@ def run(exp: experiment.Experiment, step1: Optional[str] = None, step2: Optional
             assert step1 is not None
             assert step2 in step_keys, f"The introduced step2 {step2} is not recognized " \
                                        f"from the list {step_keys}."
-            the_steps = step_keys[step_keys.index(step1):step_keys.index(step2)]
+            the_steps = step_keys[step_keys.index(step1):step_keys.index(step2)+1]
             exp.log(f"Running only the following steps: {', '.join(the_steps)}.", False)
             rprint(f"[green]Running only the following steps: {', '.join(the_steps)}[/green]")
     except ValueError:
@@ -297,7 +297,7 @@ def edit(exp: experiment.Experiment, param: str, value: str):
     assert param in edit_params, f"The provided PARAM {param} is not recognized. " \
                                  f"Only the following values are allow: {', '.join(edit_params)}"
     if param == 'refant':
-        exp.refant = value.strip().capitalize()
+        exp.refant = [v.capitalize().strip() for v in value.split(',')]
     elif param == 'calsour':
         exp.sources_stdplot = [cs.strip() for cs in value.split(',')]
     elif param == 'onebit':
