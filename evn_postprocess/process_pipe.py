@@ -37,7 +37,7 @@ def get_files_from_vlbeer(exp) -> bool:
         return "scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                f"{exp.obsdatetime.strftime('%b%y').lower()}/{exp.expname.lower()}" + \
                r"\*" + f".{ext} ."
-    
+
 
 
     cmd, output = env.ssh('jops@archive2', ';'.join([cd, scp(exp, 'flag')]))
