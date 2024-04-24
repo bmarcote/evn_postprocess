@@ -282,6 +282,7 @@ def comment_tasav_files(exp) -> bool:
     """
     cdin = f"/data/pipe/{exp.expname.lower()}/in"
     cdout = f"/data/pipe/{exp.expname.lower()}/out"
+    path = "/home/jops/opt/evn_support"
     if not (env.remote_file_exists('jops@archive2', \
                                    f"{cdout}/{exp.expname.lower()}" + r"\*.comment") and \
             env.remote_file_exists('jops@archive2', \
@@ -289,22 +290,22 @@ def comment_tasav_files(exp) -> bool:
         pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
         if len(pipepasses) > 1:
             for p in range(1, len(pipepasses) + 1):
-                if pipepasses[p-1].freqsetup.channels >= 256:
+                if pipepasses[p-1].freqsetup.channels >= 512:
                     # We assume that it is a spectral line experiment
                     cmd = env.ssh('jops@archive2',
-                          f"cd {cdout} && comment_tasav_file.py --line {exp.expname.lower()}_{p}")
+                          f"cd {cdin} && {path}/comment_tasav_file.py --line {exp.expname.lower()}_{p}", stdout=None)
                 else:
                     cmd = env.ssh('jops@archive2',
-                                  f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}_{p}")
+                                  f"cd {cdin} && {path}/comment_tasav_file.py {exp.expname.lower()}_{p}", stdout=None)
 
                 exp.log(cmd)
         else:
-            if exp.correlator_passes[0].freqsetup.channels >= 256:
+            if exp.correlator_passes[0].freqsetup.channels >= 512:
                 cmd = env.ssh('jops@archive2',
-                              f"cd {cdout} && comment_tasav_file.py --line {exp.expname.lower()}")
+                              f"cd {cdin} && {path}/comment_tasav_file.py --line {exp.expname.lower()}", stdout=None)
             else:
                 cmd = env.ssh('jops@archive2',
-                              f"cd {cdout} && comment_tasav_file.py {exp.expname.lower()}")
+                              f"cd {cdin} && {path}/comment_tasav_file.py {exp.expname.lower()}", stdout=None)
             exp.log(cmd)
 
     return True
