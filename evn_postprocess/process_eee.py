@@ -449,11 +449,11 @@ def tconvert(exp) -> bool:
                                                   capture_output=True).stdout.decode().split()[0])
 
         if idi_size < 20*u.Gb:
-            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name],
+            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
                                       stdout=None, stderr=subprocess.STDOUT)
         elif idi_size < 4*u.Tb:
             environment.shell_command("tConvert", ["-v", a_pass.lisfile.name,
-                                                   "-o", "chunk_size=4GB"],
+                                                   "-o", "chunk_size=8GB"],
                                       stdout=None, stderr=subprocess.STDOUT)
         else:
             if environment.space_available(exp.cwd) <= 1.1*idi_size:
