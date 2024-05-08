@@ -190,7 +190,7 @@ def standardplots(exp, do_weights=True) -> bool:
         try:
             if a_pass.pipeline:
                 if exp.refant is not None:
-                    refant = exp.refant[0] if len(exp.refant) == 1 else f"{'|'.join(exp.refant)}"
+                    refant = exp.refant[0] if len(exp.refant) == 1 else f"'{'|'.join(exp.refant)}'"
                 else:
                     for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
                         if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
