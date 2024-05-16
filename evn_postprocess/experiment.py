@@ -493,7 +493,7 @@ class CorrelatorPass(object):
 
 
     @property
-    def freqsetup(self) -> Union[Subbands,None]:
+    def freqsetup(self) -> Optional[Subbands]:
         return self._freqsetup
 
 
