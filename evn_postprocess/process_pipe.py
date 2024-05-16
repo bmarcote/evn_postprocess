@@ -78,6 +78,7 @@ def get_files_from_vlbeer(exp) -> bool:
     cmd, output = env.ssh('pipe@jop83',
         f"grep -l ,opacity_corrected /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}*.antabfs")
     the_files = [o for o in output.split('\n') if o != '']  # just to avoid trailing \n
+    # TODO: also fix Ef POLY=1.0, / values
     for a_file in the_files:
         cmd, _ = env.ssh('pipe@jop83', f"sed -i 's/,opacity_corrected//g' " \
                          f"/jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}/{a_file}", \
@@ -87,6 +88,35 @@ def get_files_from_vlbeer(exp) -> bool:
                   '').capitalize()
         exp.antennas[antenna].opacity = True
     return True
+
+
+def get_vlba_antab(exp) -> Optional[bool]:
+    """Retrieves the cal (antab) files from VLBA if needed, and copies the VLBA gains, into the archive temp folder
+    for the given experiment.
+    """
+    if exp.expname.lower()[0] != 'g':
+        return True
+
+    cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
+
+    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, f"scp jops@eee:/data0/tsys/vlba_gains.key ."]))
+    exp.log(cmd)
+    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, "scp jops@ccs:/ccs/var/log2vex/logexp_date/" \
+                                                      f"{exp.expname.upper()}_{exp.obsdatetime.strftime('%Y%m%d')}" \
+                                                      f"/{exp.expname.lower()}cal.vlba ."]))
+    exp.log(cmd)
+    return True
+     
+    # TODO: grep here which antennas are in the cal (e.g. grep TSYS XX) and update the values.
+    
+
+                # if ext == 'log':
+                #     exp.antennas[ant].logfsfile = True
+                # elif ext == 'antabfs':
+                #     exp.antennas[ant].antabfsfile = True
+                #
+
+
 
 
 def run_antab_editor(exp) -> Optional[bool]:
