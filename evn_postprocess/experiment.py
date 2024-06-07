@@ -1142,7 +1142,7 @@ class Experiment(object):
             try:
                 env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                         f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.key", \
-                        ".", timeout=10)
+                        ".", timeout=30)
                 self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                          f"{self.obsdatetime.strftime('%b%y').lower()}/" \
                          f"{self.expname.lower()}.key .")
@@ -1170,7 +1170,7 @@ class Experiment(object):
             try:
                 env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                         f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum", \
-                        ".", timeout=10)
+                        ".", timeout=30)
                 self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                          f"{self.obsdatetime.strftime('%b%y').lower()}/" \
                          f"{self.expname.lower()}.sum .")
