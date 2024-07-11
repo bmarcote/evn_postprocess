@@ -238,8 +238,8 @@ def create_input_file(exp) -> bool:
                   ["refant = Ef, Mc, Nt", f"refant = {', '.join(exp.refant)}"],
                   ["plotref = Ef", f"plotref = {', '.join(exp.refant)}"],
                   ["bpass = 3C345, 3C454.3", f"bpass = {bpass}"],
-                  ["phaseref = 3C454.3", f"phaseref = {pcal}  # VERIFY THIS MANUALLY"],
-                  ["target = J2254+1341", f"target = {targets}  # VERIFY THIS MANUALLY"]]
+                  ["phaseref = 3C454.3", f"phaseref = {pcal}"],
+                  ["target = J2254+1341", f"target = {targets}"]]
 
     if len(pcal) == 0:  # no phase-referencing experiment
         to_change += [["#solint = 0", "solint = 2"]]
