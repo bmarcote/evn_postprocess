@@ -78,7 +78,7 @@ def get_files_from_vlbeer(exp) -> bool:
     # In case of high-freq observations, some stations added the "opacity_corrected" flag to
     #the POLY= line, against any standard... Let's remove it so antab_editor (later) can work fine.
     cmd, output = env.ssh('jops@archive2',
-        f"grep -l ,opacity_corrected /data/pipe/{exp.expname.lower()}/temp/{exp.expname.lower()}*.antabfs")
+        f"grep -l ',opacity_corrected' /data/pipe/{exp.expname.lower()}/temp/{exp.expname.lower()}*.antabfs")
     the_files = [o for o in output.split('\n') if o != '']  # just to avoid trailing \n
     for a_file in the_files:
         cmd, _ = env.ssh('jops@archive2', f"sed -i 's/,opacity_corrected//g' " \
@@ -89,6 +89,34 @@ def get_files_from_vlbeer(exp) -> bool:
                   '').capitalize()
         exp.antennas[antenna].opacity = True
     return True
+
+
+def get_vlba_antab(exp) -> Optional[bool]:
+    """Retrieves the cal (antab) files from VLBA if needed, and copies the VLBA gains, into the archive temp folder
+    for the given experiment.
+    """
+    if exp.expname.lower()[0] != 'g':
+        return True
+
+    cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
+
+    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, "scp jops@eee:/data0/tsys/vlba_gains.key ."]))
+    exp.log(cmd)
+    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, "scp jops@ccs:/ccs/var/log2vex/logexp_date/" \
+                                                      f"{exp.expname.upper()}_{exp.obsdatetime.strftime('%Y%m%d')}" \
+                                                      f"/{exp.expname.lower()}cal.vlba ."]))
+    exp.log(cmd)
+    return True
+
+    # TODO: grep here which antennas are in the cal (e.g. grep TSYS XX) and update the values.
+
+
+                # if ext == 'log':
+                #     exp.antennas[ant].logfsfile = True
+                # elif ext == 'antabfs':
+                #     exp.antennas[ant].antabfsfile = True
+                #
+
 
 
 def run_antab_editor(exp) -> Optional[bool]:
@@ -194,23 +222,43 @@ def create_input_file(exp) -> bool:
     # Parameters to modify inside the input file
     cmd, output = env.ssh('jops@archive2', f"~/opt/evn_support/aips_userno.py {exp.supsci.lower()}")
     if (output is None) or (output.replace('\n', '').strip() == ''):
-        raise ValueError('Could not recover your next AIPS user number (from archive2:/data/pipe/aips_userno.txt)')
+        exp.log('ERROR: Could not recover your next AIPS user number (from archive2:/data/pipe/aips_userno.txt)')
+        rprint('[red bold]Could not recover your next AIPS user number " \
+                "(from archive2:/data/pipe/aips_userno.txt)[/red bold]')
+        # raise ValueError('Could not recover your next AIPS user number (from archive2:/data/pipe/aips_userno.txt)')
+
     userno = output.replace('\n', '').strip()
 
     bpass = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.fringefinder])
     pcal = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.calibrator])
     targets = ', '.join([s.name for s in exp.sources if (s.type is experiment.SourceType.target) or
                          (s.type is experiment.SourceType.other)])
+
+
+
     to_change = [["experiment = n05c3", f"experiment = {exp.expname.lower()}"],
                   ["userno = 3602", f"userno = {userno}"],
                   ["refant = Ef, Mc, Nt", f"refant = {', '.join(exp.refant)}"],
                   ["plotref = Ef", f"plotref = {', '.join(exp.refant)}"],
-                  ["bpass = 3C345, 3C454.3", f"bpass = {bpass}"],
-                  ["phaseref = 3C454.3", f"phaseref = {pcal}  # VERIFY THIS MANUALLY"],
-                  ["target = J2254+1341", f"target = {targets}  # VERIFY THIS MANUALLY"]]
+                  ["bpass = 3C345, 3C454.3", f"bpass = {bpass}"]]
 
-    if len(pcal) == 0:  # no phase-referencing experiment
+    if len(pcal) == 0: # no phase-referencing experiment
         to_change += [["#solint = 0", "solint = 2"]]
+        to_change += [["phaseref = 3C454.3", "#phaseref ="],
+                      ["target = J2254+1341", "#target ="],
+                      ["#sources=", f"sources = {targets}, {bpass}"]]
+    elif len(targets) == 2*len(pcal):
+        pcals = []
+        for p in pcal:
+            pcals.append(p)
+            pcals.append(p)
+
+        to_change += [["phaseref = 3C454.3", f"phaseref = {','.join(pcals)}"],
+                      ["target = J2254+1341", f"target = {targets}"]]
+    else:
+        to_change += [["phaseref = 3C454.3", f"phaseref = {pcal}"],
+                      ["target = J2254+1341", f"target = {targets}"]]
+
 
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
     if (len(exp.correlator_passes) > 2) or \

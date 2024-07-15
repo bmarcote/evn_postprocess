@@ -64,7 +64,7 @@ class Credentials(object):
             yield key, getattr(self, key)
 
 
-    def json(self) -> dict[str, Optional[str]]:
+    def json(self) -> dict[str, str]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -72,7 +72,7 @@ class Credentials(object):
         """
         d = dict()
         for key, val in self.__iter__():
-            d[key] = val
+            d[key] = val if val is not None else ''
 
         return d
 
@@ -178,13 +178,13 @@ class Source(object):
         for key in ('name', 'type', 'protected'):
             yield key, getattr(self, key)
 
-    def json(self) -> dict[str, Union[str, SourceType, bool]]:
+    def json(self) -> dict[str, Union[str,bool]]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
         human-readable output.
         """
-        d = dict()
+        d: dict[str, Union[str, bool]] = dict()
         for key, val in self.__iter__():
             if isinstance(val, SourceType):
                 d[key] = val.name
@@ -199,7 +199,7 @@ class Antenna:
     name: str
     scheduled: bool = True
     observed: bool = False
-    subbands: tuple[int] = tuple()
+    subbands: tuple = tuple()
     polswap: bool = False
     polconvert: bool = False
     onebit: bool = False
@@ -213,9 +213,9 @@ class Antennas(object):
     """
     def __init__(self, antennas: Optional[list[Antenna]] = None):
         if antennas is not None:
-            self._antennas = copy.deepcopy(antennas)
+            self._antennas: list[Antenna] = copy.deepcopy(antennas)
         else:
-            self._antennas: list[Antenna] = []
+            self._antennas = []
 
         self._niter : int = -1
 
@@ -308,7 +308,7 @@ class Antennas(object):
         return f"Antennas([{','.join(self.names)}])\n Scheduled: {','.join(self.scheduled)}\n " \
                f"Observed: {','.join(self.observed)}\n " + s
 
-    def json(self) -> dict[str, Union[str, bool, tuple]]:
+    def json(self) -> dict[str, dict[str, Any]]:
         """Returns a dict with all attributes of the object.
         I define this method to use instead of .__dict__ as the later only reporst
         the internal variables (e.g. _username instead of username) and I want a better
@@ -489,7 +489,7 @@ class CorrelatorPass(object):
 
     @flagged_weights.setter
     def flagged_weights(self, flagweight: FlagWeight):
-        self._flagged_weights = flagweight
+        self._flagged_weights: Union[FlagWeight,None] = flagweight
 
 
     @property
@@ -501,7 +501,7 @@ class CorrelatorPass(object):
     def freqsetup(self, new_freqsetup: Subbands):
         """Sets the frequency setup for the given correlator pass.
         """
-        self._freqsetup = new_freqsetup
+        self._freqsetup: Union[Subbands, None] = new_freqsetup
 
 
     def __init__(self, lisfile: str, msfile: str, fitsidifile: str, pipeline: bool = True,
@@ -636,8 +636,8 @@ class Experiment(object):
         starttime, endtime = times
         assert isinstance(starttime, dt.datetime)
         assert isinstance(endtime, dt.datetime)
-        self._startime = starttime
-        self._endtime = endtime
+        self._startime: Union[dt.datetime, None] = starttime
+        self._endtime: Union[dt.datetime, None] = endtime
 
 
     @property
@@ -685,7 +685,7 @@ class Experiment(object):
 
     @sources_stdplot.setter
     def sources_stdplot(self, stdplot_sources: list[str]):
-        self._src_stdplot = copy.deepcopy(stdplot_sources)
+        self._src_stdplot: Union[list[str], None] = copy.deepcopy(stdplot_sources)
 
 
     @property
@@ -779,8 +779,8 @@ class Experiment(object):
 
 
     @last_step.setter
-    def last_step(self, last_step: str):
-        self._last_step = last_step
+    def last_step(self, last_step: Union[str, None]):
+        self._last_step: Union[str, None] = last_step
 
 
     @property
@@ -849,17 +849,17 @@ class Experiment(object):
         # Attributes not known until the MS file is created
         self._startime = None
         self._endtime = None
-        self._sources: list[Source] = []
+        self._sources = []
         self._antennas = Antennas()
         self._credentials = Credentials(None, None)
         self._passes = []
         logpath = self.cwd / "logs"
         logpath.mkdir(parents=True, exist_ok=True)
         self._logs = {'dir': logpath, 'file': self.cwd / "processing.log"}
-        self._checklist = {}
+        self._checklist: dict[str, bool] = {}
         self._local_copy = self.cwd / f"{self.expname.lower()}.obj"
         self.parse_masterprojects()
-        self._special_pars = {}
+        self._special_pars: dict[str, list[str]] = {}
         self._last_step = None
         self.gui = dialog.Terminal()
         self._silent = False
@@ -1142,7 +1142,7 @@ class Experiment(object):
             try:
                 env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                         f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.key", \
-                        ".", timeout=10)
+                        ".", timeout=30)
                 self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                          f"{self.obsdatetime.strftime('%b%y').lower()}/" \
                          f"{self.expname.lower()}.key .")
@@ -1170,7 +1170,7 @@ class Experiment(object):
             try:
                 env.scp(f"evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                         f"{self.obsdatetime.strftime('%b%y').lower()}/{self.expname.lower()}.sum", \
-                        ".", timeout=10)
+                        ".", timeout=30)
                 self.log(f"scp evn@vlbeer.ira.inaf.it:vlbi_arch/" \
                          f"{self.obsdatetime.strftime('%b%y').lower()}/" \
                          f"{self.expname.lower()}.sum .")
@@ -1211,7 +1211,7 @@ class Experiment(object):
 
 
     @property
-    def checklist(self) -> dict:
+    def checklist(self) -> dict[str, bool]:
         return self._checklist
 
 
