@@ -152,6 +152,7 @@ def j2ms2(exp) -> bool:
         raise IOError("Not enough disk space to create the MS file.")
 
     # Creating a pool to produce the MS files in parallel
+    # rprint(f"[yellow]Number of correlator passes to j2ms2: {len(exp.correlator_passes)}[/yellow]")
     with ProcessPoolExecutor(max_workers=6) as pool:
         results = pool.map(_j2ms2_correlator_pass, product([exp,], exp.correlator_passes))
 
@@ -189,7 +190,7 @@ def standardplots(exp, do_weights=True) -> bool:
         try:
             if a_pass.pipeline:
                 if exp.refant is not None:
-                    refant = exp.refant[0] if len(exp.refant) == 1 else f"({'|'.join(exp.refant)})"
+                    refant = exp.refant[0] if len(exp.refant) == 1 else f"'{'|'.join(exp.refant)}'"
                 else:
                     for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
                         if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
@@ -321,8 +322,8 @@ def update_piletter(exp) -> bool:
         get_passes_from_lisfiles(exp)
 
     if exp.correlator_passes[0].flagged_weights is None:
-        weightthreshold = -1
-        flaggeddata = -1
+        weightthreshold: Union[int, float] = -1
+        flaggeddata: Union[int, float] = -1
     else:
         weightthreshold = float(exp.correlator_passes[0].flagged_weights.threshold)
         flaggeddata = float(exp.correlator_passes[0].flagged_weights.percentage)
@@ -448,11 +449,11 @@ def tconvert(exp) -> bool:
                                                   capture_output=True).stdout.decode().split()[0])
 
         if idi_size < 20*u.Gb:
-            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name],
+            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
                                       stdout=None, stderr=subprocess.STDOUT)
         elif idi_size < 4*u.Tb:
             environment.shell_command("tConvert", ["-v", a_pass.lisfile.name,
-                                                   "-o", "chunk_size=4GB"],
+                                                   "-o", "chunk_size=8GB"],
                                       stdout=None, stderr=subprocess.STDOUT)
         else:
             if environment.space_available(exp.cwd) <= 1.1*idi_size:
@@ -598,8 +599,7 @@ def post_post_polconvert(exp) -> bool:
     stdplot_files = glob.glob('*-pconv*.ps')
     if len(stdplot_files) > 0:
         for stdplot_file in stdplot_files:
-            stdplot_file = Path(stdplot_file)
-            stdplot_file.rename(str(stdplot_file).replace('-pconv', ''))
+            Path(stdplot_file).rename(stdplot_file.replace('-pconv', ''))
 
     return True
 

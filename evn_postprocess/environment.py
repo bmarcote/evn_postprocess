@@ -218,7 +218,7 @@ def check_lisfiles(exp) -> bool:
         #      Last scan = Y
         # removing any possible trailing empty line:
         temp = [o for o in output.split('\n') if len(o) > 0]
-        all_good = all_good and (not (len(temp) > 2))
+        all_good = all_good and (not (len(temp) > 2)) and (all(['No scans in' not in t for t in temp]))
 
     return all_good
 
