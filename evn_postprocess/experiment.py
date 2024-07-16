@@ -1277,8 +1277,9 @@ class Experiment(object):
         if path is not None:
             self._local_copy = path
 
-        with open(self._local_copy, 'wb') as f:
-            json.dump(self.json(), f, cls=ExpJsonEncoder, indent=4)
+        # TODO: do the json storing
+        # with open(self._local_copy, 'wb') as f:
+        #     json.dump(self.json(), f, cls=ExpJsonEncoder, indent=4)
 
 
     def load(self, path: Optional[Path] = None):
