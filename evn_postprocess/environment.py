@@ -288,7 +288,7 @@ def archive(flag: str, exp, rest_parameters: str) -> tuple:
     the given experiment object (metadata class).
     Flag can be -auth, -stnd, -fits,...
     """
-    cmd, output = shell_command("/home/jops/archive2/archive_user_scripts/archive.pl",
+    cmd, output = shell_command("/home/jops/scripts/archive.pl",
                                 [flag, "-e", f"{exp.expname.lower()}_{exp.obsdate}",
                                  rest_parameters], shell=True)
     exp.log(cmd, '# '+'# '.join(output))
