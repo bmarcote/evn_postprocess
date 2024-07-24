@@ -387,7 +387,7 @@ def archive(exp) -> bool:
     """
     for f in ('in', 'out'):
         cd = f"cd /data/pipe/{exp.expname.lower()}/{f}/"
-        cmd = env.ssh('jops@archive.jive.eu', f"{cd} && /home/jops/opt/evn_support/archive.pl " \
+        cmd = env.ssh('jops@archive.jive.eu', f"{cd} && /home/jops/bin/archive.pl " \
                       f"-pipe -e {exp.expname.lower()}_{exp.obsdate}", stdout=None)
         exp.log(cmd)
 
