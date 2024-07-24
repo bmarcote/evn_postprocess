@@ -1109,12 +1109,12 @@ class Experiment(object):
     @property
     def expsum(self) -> Path:
         """Returns the (Path object) to the .expsum file related to the experimet.
-        If the files does not exist in the experiment dir (in eee), is retrieved from jop83.
+        If the files does not exist in the experiment dir (in eee), is retrieved from archive.
         """
         expsumfilepath = self.cwd / f"{self.expname.lower()}.expsum"
         if not expsumfilepath.exists():
-            env.scp(f"jops@jop83:piletters/{self.expname.lower()}.expsum", '.')
-            self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.expsum .")
+            env.scp(f"jops@archive.jive.eu:piletters/{self.expname.lower()}.expsum", '.')
+            self.log(f"scp jops@archive.jive.eu:piletters/{self.expname.lower()}.expsum .")
 
         return expsumfilepath
 
@@ -1122,12 +1122,12 @@ class Experiment(object):
     @property
     def piletter(self) -> Path:
         """Returns the (Path object) to the .piletter file related to the experimet.
-        If the files does not exist in the experiment dir (in eee), is retrieved from jop83.
+        If the files does not exist in the experiment dir (in eee), is retrieved from archive.
         """
         piletterpath = self.cwd / f"{self.expname.lower()}.piletter"
         if not piletterpath.exists():
-            env.scp(f"jops@jop83:piletters/{self.expname.lower()}.piletter", '.')
-            self.log(f"scp jops@jop83:piletters/{self.expname.lower()}.piletter .")
+            env.scp(f"jops@archive.jive.eu:piletters/{self.expname.lower()}.piletter", '.')
+            self.log(f"scp jops@archive.jive.eu:piletters/{self.expname.lower()}.piletter .")
 
         return piletterpath
 
