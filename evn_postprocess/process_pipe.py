@@ -98,11 +98,11 @@ def get_vlba_antab(exp) -> Optional[bool]:
     if exp.expname.lower()[0] != 'g':
         return True
 
-    cd = f"cd /jop83_0/pipe/in/{exp.supsci}/{exp.expname.lower()}"
+    cd = f"cd /data/pipe/{exp.expname.lower()}/temp/"
 
-    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, "scp jops@eee:/data0/tsys/vlba_gains.key ."]))
+    cmd, _ = env.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@eee:/data0/tsys/vlba_gains.key ."]))
     exp.log(cmd)
-    cmd, output = env.ssh('pipe@jop83', ';'.join([cd, "scp jops@ccs:/ccs/var/log2vex/logexp_date/" \
+    cmd, _ = env.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@ccs:/ccs/var/log2vex/logexp_date/" \
                                                       f"{exp.expname.upper()}_{exp.obsdatetime.strftime('%Y%m%d')}" \
                                                       f"/{exp.expname.lower()}cal.vlba ."]))
     exp.log(cmd)
