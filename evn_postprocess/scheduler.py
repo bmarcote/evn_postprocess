@@ -161,7 +161,7 @@ def protect_archive_data(exp: experiment.Experiment) -> bool:
     """
     if len([s.name for s in exp.sources if s.protected]) > 0:
         rprint("[center][bold red]You now need to protect the archived data[/bold red][/center]")
-        rprint("Open http://archive.jive.nl/scripts/pipe/admin.php")
+        rprint("Open https://archive.jive.eu/scripts/pipe/admin.php")
         print("And protect the following sources: "
               f"{', '.join([s.name for s in exp.sources if s.protected])}")
         raise ManualInteractionRequired('')
@@ -186,7 +186,7 @@ def after_pipeline(exp: experiment.Experiment) -> bool:
            "[/center][/bold green]")
     rprint(f"{exp.archive_page}\n")
     rprint("[red]Protect the results if you haven't done it yet at "
-           "http://archive.jive.nl/scripts/pipe/admin.php[/red]\n")
+           "https://archive.jive.eu/scripts/pipe/admin.php[/red]\n")
     rprint("[bold green]If you are happy with the results:[/bold green]")
     rprint("[green]    1. Update the PI letter manually.[/green]")
     rprint("[green]    2. Run me (`postprocess`) again.[/green]\n")

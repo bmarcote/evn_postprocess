@@ -1249,7 +1249,7 @@ class Experiment(object):
     def archive_page(self) -> str:
         """Returns the url link to the EVN Archive pages for the experiment.
         """
-        return f"http://archive.jive.nl/scripts/arch.php?exp={self.expname.upper()}"
+        return f"https://archive.jive.eu/scripts/arch.php?exp={self.expname.upper()}"
 
 
     def exists_local_copy(self) -> bool:
@@ -1463,8 +1463,8 @@ class Experiment(object):
                  f"{term.link(self.archive_page, self.archive_page)}\n"
             s_file += [f"EVN Archive Link: {self.archive_page}\n"]
             s += term.bright_black('Protection Link: ') +\
-                 term.link('http://archive.jive.nl/scripts/pipe/admin.php',
-                           'http://archive.jive.nl/scripts/pipe/admin.php') + '\n'
+                 term.link('https://archive.jive.eu/scripts/pipe/admin.php',
+                           'https://archive.jive.eu/scripts/pipe/admin.php') + '\n'
             s += term.bright_black('Last run step: ') + f"{self.last_step}\n\n"
             s += term.bold_green('CREDENTIALS\n')
             s += term.bright_black('Username: ') + f"{self.credentials.username}\n"
