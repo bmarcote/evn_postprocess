@@ -174,7 +174,10 @@ def create_uvflg(exp) -> Optional[bool]:
     if (exp.eEVNname is None) or (exp.expname == exp.eEVNname):
         cd = f"cd /data/pipe/{exp.expname.lower()}/temp"
         if not env.remote_file_exists('jops@archive.jive.eu', f"{cd}/{exp.expname.lower()}.uvflg"):
-            cmd, output = env.ssh('jops@archive.jive.eu', ';'.join([cd, '~/opt/evn_support//uvflgall.sh']))
+            # cmd, output = env.ssh('jops@archive.jive.eu',
+            #                       '"'+';'.join([cd, '/home/jops/opt/evn_support/uvflgall.sh'])+'"')
+            cmd, output = env.ssh('jops@archive.jive.eu',
+                                  ';'.join([cd, '/home/jops/opt/evn_support/uvflgall.sh']))
             print(output)
             output_tail = []
             for outline in output.split('\n')[::-1]:
