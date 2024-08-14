@@ -908,9 +908,9 @@ class Experiment(object):
             if (i > 0) and ('_line' not in ''.join(glob.glob(f"{self.expname.lower()}*.lis"))):
                 # then this is just a multiphase center with all setups identical. Do not loop
                 # through all MSs.
-                a_pass.antennas = self.correlator_passes.antennas
-                a_pass.sources = self.correlator_passes.sources
-                a_pass.freqsetup = self.correlator_passes.freqsetup
+                a_pass.antennas = self.correlator_passes[0].antennas
+                a_pass.sources = self.correlator_passes[0].sources
+                a_pass.freqsetup = self.correlator_passes[0].freqsetup
                 continue
 
             a_pass.antennas = Antennas()
