@@ -253,8 +253,7 @@ def create_input_file(exp) -> bool:
     elif len(targets) == 2*len(pcal):
         pcals = []
         for p in pcal:
-            pcals.append(p)
-            pcals.append(p)
+            pcals += [p, p]
 
         to_change += [["phaseref = 3C454.3", f"phaseref = {','.join(pcals)}"],
                       ["target = J2254+1341", f"target = {targets}"]]
