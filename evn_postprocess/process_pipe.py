@@ -232,10 +232,10 @@ def create_input_file(exp) -> bool:
 
     userno = output.replace('\n', '').strip()
 
-    bpass = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.fringefinder])
-    pcal = ', '.join([s.name for s in exp.sources if s.type is experiment.SourceType.calibrator])
-    targets = ', '.join([s.name for s in exp.sources if (s.type is experiment.SourceType.target) or
-                         (s.type is experiment.SourceType.other)])
+    bpass = [s.name for s in exp.sources if s.type is experiment.SourceType.fringefinder]
+    pcal = [s.name for s in exp.sources if s.type is experiment.SourceType.calibrator]
+    targets = [s.name for s in exp.sources if (s.type is experiment.SourceType.target) or
+                         (s.type is experiment.SourceType.other)]
 
 
 
@@ -243,23 +243,23 @@ def create_input_file(exp) -> bool:
                   ["userno = 3602", f"userno = {userno}"],
                   ["refant = Ef, Mc, Nt", f"refant = {', '.join(exp.refant)}"],
                   ["plotref = Ef", f"plotref = {', '.join(exp.refant)}"],
-                  ["bpass = 3C345, 3C454.3", f"bpass = {bpass}"]]
+                  ["bpass = 3C345, 3C454.3", f"bpass = {', '.join(bpass)}"]]
 
     if len(pcal) == 0: # no phase-referencing experiment
         to_change += [["#solint = 0", "solint = 2"]]
         to_change += [["phaseref = 3C454.3", "#phaseref ="],
                       ["target = J2254+1341", "#target ="],
-                      ["#sources=", f"sources = {targets}, {bpass}"]]
+                      ["#sources=", f"sources = {', '.join(targets)}, {', '.join(bpass)}"]]
     elif len(targets) == 2*len(pcal):
         pcals = []
         for p in pcal:
             pcals += [p, p]
 
         to_change += [["phaseref = 3C454.3", f"phaseref = {','.join(pcals)}"],
-                      ["target = J2254+1341", f"target = {targets}"]]
+                      ["target = J2254+1341", f"target = {', '.join(targets)}"]]
     else:
-        to_change += [["phaseref = 3C454.3", f"phaseref = {pcal}"],
-                      ["target = J2254+1341", f"target = {targets}"]]
+        to_change += [["phaseref = 3C454.3", f"phaseref = {', '.join(pcal)}"],
+                      ["target = J2254+1341", f"target = {', '.join(targets)}"]]
 
 
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
