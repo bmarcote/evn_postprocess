@@ -7,6 +7,7 @@ This also keeps track of the steps that have been condducted in the post-process
 resumed, or restarted.
 """
 import os
+import glob
 import copy
 import numpy as np
 import pickle
@@ -903,7 +904,15 @@ class Experiment(object):
         """Obtains the time range, antennas, sources, and frequencies of the observation
         from all existing passes with MS files and incorporate them into the current object.
         """
-        for a_pass in self.correlator_passes:
+        for i,a_pass in enumerate(self.correlator_passes):
+            if (i > 0) and ('_line' not in ''.join(glob.glob(f"{self.expname.lower()}*.lis"))):
+                # then this is just a multiphase center with all setups identical. Do not loop
+                # through all MSs.
+                a_pass.antennas = self.correlator_passes.antennas
+                a_pass.sources = self.correlator_passes.sources
+                a_pass.freqsetup = self.correlator_passes.freqsetup
+                continue
+
             a_pass.antennas = Antennas()
             try:
                 with pt.table(a_pass.msfile.name, readonly=True, ack=False) as ms:
@@ -1237,7 +1246,8 @@ class Experiment(object):
         elif self.obsdatetime.month // 6 > 0:
             sess_month = 'jun'
         elif self.obsdatetime.month // 2 > 0:
-            sess_month = 'feb'
+            sess_month = 'feb'  # typing: ignore
+            # This is no longer in use, but I keep it in case it goes back
         else:
             # It can be an out-of-session experiment or an e-EVN with a single experiment
             return " -- No associated feedback pages --"
