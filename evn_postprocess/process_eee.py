@@ -280,6 +280,9 @@ def onebit(exp) -> bool:
 
 
 def ysfocus(exp) -> bool:
+    if ('Ys' not in exp.antennas.names) and ('Ho' not in exp.antennas.names) and ('Hb' not in exp.antennas.names):
+        return True
+
     for a_pass in exp.correlator_passes:
         environment.shell_command("ysfocus.py", a_pass.msfile.name, stdout=None,
                                   shell=True, stderr=subprocess.STDOUT)
