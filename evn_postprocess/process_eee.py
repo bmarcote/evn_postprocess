@@ -275,7 +275,7 @@ def onebit(exp) -> bool:
     elif environment.station_1bit_in_vix(exp.vix):
         print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} "
               "but no station specified to be corrected.\n\n")
-        return False
+        return None
     return True
 
 
