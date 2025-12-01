@@ -1,0 +1,29 @@
+[project]
+name = "evn-postprocess"
+version = "2.0.0a5"
+description = "Suite to run internal processing of EVN observations"
+readme = "README.md"
+authors = [
+    { name = "Benito Marcote", email = "marcote@jive.eu" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "astropy",
+    "blessed",
+    # "evn_support",
+    "luguru",
+    "multidict",
+    "numpy",
+    "ply",
+    "pyrap",
+    "rich",
+    "rich-argparse",
+]
+
+[project.scripts]
+postprocess = "evn_postprocess.main:main"
+msops = "evn_postprocess.mstools.main:main"
+
+[build-system]
+requires = ["uv_build>=0.9.3,<0.10.0"]
+build-backend = "uv_build"
