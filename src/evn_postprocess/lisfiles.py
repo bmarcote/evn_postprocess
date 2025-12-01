@@ -2,7 +2,7 @@ import os
 import glob
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from luguru import logger
+from loguru import logger
 from . import experiment, utils
 from .experiment import Server
 

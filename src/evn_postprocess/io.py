@@ -5,21 +5,22 @@ import datetime as dt
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from rich import print as rprint
-from . import utils, experiment
+from . import utils
+from .experiment import Experiment, Server, Servers
 
 
-def get_init_files(exp: experiment.Experiment, servers: experiment.Servers) -> bool:
+def get_init_files(exp: Experiment, servers: Servers) -> bool:
     """Retrieves the files related to this experiment as .vix (or .vox), .piletter and .expsum.
     
     Args:
-        exp (experiment.Experiment): Experiment object containing experiment metadata.
-        servers (experiment.Servers): Server configuration objects.
+        exp (Experiment): Experiment object containing experiment metadata.
+        servers (Servers): Server configuration objects.
 
     Returns:
         bool: True if the files were retrieved successfully, False otherwise.
     """
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
-    piletter_server = servers['piletter']
+    piletter_server = servers['piletters']
     piletter_path = piletter_server.path / f"{exp.expname.lower()}.piletter"
     expsum_path = piletter_server.path / f"{exp.expname.lower()}.expsum"
     def fetch_piletter():
@@ -36,12 +37,10 @@ def get_init_files(exp: experiment.Experiment, servers: experiment.Servers) -> b
         remote_host = f"{ccs_server.user}@{ccs_server.host}"
         # Try .vox first, fallback to .vix
         for ext in ['vox', 'vix']:
-            file_path = base_path / f"{eEVNname.lower()}.{ext}"
-            if any(file_path.exists()):
+            if (file_path := base_path / f"{eEVNname.lower()}.{ext}").exists():
                 break
 
             if utils.remote_file_exists(remote_host, file_path):
-
                 utils.scp(f"{remote_host}:{file_path}", '.')
                 break
     
@@ -55,6 +54,9 @@ def get_init_files(exp: experiment.Experiment, servers: experiment.Servers) -> b
             future.result()
     
     for ext in ('vox', 'vix'):
+        if Path(f"{exp.expname.upper()}.vix").exists():
+            break
+
         if (apath := Path(f"{eEVNname.lower()}.{ext}")).exists():
             apath.symlink_to(f"{exp.expname.upper()}.vix")
             break
@@ -62,13 +64,13 @@ def get_init_files(exp: experiment.Experiment, servers: experiment.Servers) -> b
     return all([piletter_path.exists(), expsum_path.exists(), Path(f"{exp.expname.upper()}.vix").exists()])
 
 
-def get_vlbeer_files(expname: str, obsdate: dt.date, server: experiment.Server) -> bool:
+def get_vlbeer_files(expname: str, obsdate: dt.date, server: Server) -> bool:
     """Retrieves the .key and .sum observing files from vlbeer.
     
     Args:
         expname (str): Experiment name.
         obsdate (datetime.date): Observation date.
-        server (experiment.Server): Server object with vlbeer connection information.
+        server (Server): Server object with vlbeer connection information.
 
     Returns:
         bool: True if the files were retrieved successfully, False otherwise.
@@ -95,7 +97,7 @@ def get_vlbeer_files(expname: str, obsdate: dt.date, server: experiment.Server) 
     return all([p.exists() for p in files])
 
 
-def parse_masterprojects(expname: str, server: experiment.Server) -> tuple[str, str | None]:
+def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]:
         """Obtains the observing epoch from the file in the server (traditionally MASTER_PROJECTS.LIS).
         In case of being an e-EVN experiment, it will add that information.
 
@@ -109,7 +111,7 @@ def parse_masterprojects(expname: str, server: experiment.Server) -> tuple[str, 
         
         Args:
             expname (str): Experiment name to search for.
-            server (experiment.Server): Server object with MASTER_PROJECTS.LIS location.
+            server (Server): Server object with MASTER_PROJECTS.LIS location.
         
         Returns:
             tuple[str, str | None]:
@@ -152,13 +154,13 @@ def parse_masterprojects(expname: str, server: experiment.Server) -> tuple[str, 
         return obsdate, eEVNname
 
 
-def get_jexp_info(expname: str, server: experiment.Server) -> dict[str, str | None]:
+def get_jexp_info(expname: str, server: Server) -> dict[str, str | None]:
     """Retrieves the information from the jexp file associated to the experiment,
     whose location should be defined in the introduced server.
 
     Args:
         expname (str): The experiment name (case insensitive).
-        server (experiment.Server): Server where the jexp file can be found.
+        server (Server): Server where the jexp file can be found.
 
     Returns:
         dict[str, str | None]: Dictionary containing all information described in the jexp file.
@@ -197,12 +199,12 @@ class StationFeedback:
     comment: str
 
 
-def get_station_feedback_info(expname: str, server: experiment.Server) -> dict[str, StationFeedback]:
+def get_station_feedback_info(expname: str, server: Server) -> dict[str, StationFeedback]:
     """Retrieves the information that stations reported in the station feedback database.
 
     Args:
         expname (str): The experiment name (case insensitive).
-        server (experiment.Server): Server where the station feedback database can be found.
+        server (Server): Server where the station feedback database can be found.
 
     Returns:
         dict[str, StationFeedback]: Dictionary containing the station codename as key, and

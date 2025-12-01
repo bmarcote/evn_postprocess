@@ -190,7 +190,7 @@ class Antenna:
     name: str
     observed: bool = True
     subbands: tuple = ()
-    weights: np.ndarray = np.array([])
+    weights: tuple = ()
 
 
 class Antennas(list):

@@ -1,8 +1,8 @@
 """Tools subpackage for MS file manipulation."""
-from mstools import misc
-from mstools.msdata import Ms, ObsEpoch, Source, Sources, Antenna, Antennas, FreqSetup
-from mstools.mounts import print_mounts, modify_mounts, fix_yebes_mount, fix_hobart_mount
-from mstools.operations import (
+from . import misc
+from .msdata import Ms, ObsEpoch, Source, Sources, Antenna, Antennas, FreqSetup
+from .mounts import print_mounts, modify_mounts, fix_yebes_mount, fix_hobart_mount
+from .operations import (
     polswap,
     copy_pol,
     scale1bit,

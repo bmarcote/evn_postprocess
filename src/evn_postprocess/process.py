@@ -16,12 +16,11 @@ from pathlib import Path
 from collections import defaultdict
 import subprocess
 import numpy as np
-from luguru import logger
+from loguru import logger
 from astropy import units as u
 from rich import print as rprint
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from itertools import product
-from evn_support import check_antab_idi
 from . import experiment
 from . import utils
 from . import mstools
@@ -768,6 +767,62 @@ def protect_experiment_files(exp: experiment.Experiment) -> bool:
     return True
 
 
+def has_Tsys(fitsfile):
+    """Checks if the FITS-IDI file has the SYSTEM_TEMPERATURE table.
+    """
+    with fits.open(fitsfile) as hdu:
+        return 'SYSTEM_TEMPERATURE' in hdu
+
+
+def has_GC(fitsfile):
+    """Checks if the FITS-IDI file has the GAIN_CURVE table.
+    """
+    with fits.open(fitsfile) as hdu:
+        return 'GAIN_CURVE' in hdu
+
+
+def check_consistency(fitsfile, verbose=True):
+    """Check if all FITS-IDI files associated to an experiment has the right
+    tables that they should have.
+
+    Arguments
+        - fitsfile : str
+            FITS-IDI file name to check. It should be the first FITS-IDI file
+            in case there are multiple (e.g. only exp_1_1.IDI1 even if there are
+            multiple *.IDIn, n > 1).
+            The rest of files would be not expected to have the tables.
+
+    Returns
+        - bool whenever everything is as expected.
+    """
+    if isinstance(fitsfile, str):
+        fitsfile = Path(fitsfile)
+
+    if not fitsfile.exists():
+        raise FileNotFoundError(f"The FITS-IDI file {fitsfile} could not be found.")
+
+    all_good = True
+    if has_Tsys(fitsfile):
+        if verbose:
+            pprint(f"[green]{fitsfile} has SYSTEM_TEMPERATURE table.[/green]")
+    else:
+        if verbose:
+            pprint(f"[red]{fitsfile} does not have SYSTEM_TEMPERATURE table.[/red]")
+
+        all_good = False
+
+    if has_GC(fitsfile):
+        if verbose:
+            pprint("[green]Has GAIN_CURVE table.[/green]")
+    else:
+        if verbose:
+            pprint("[red]Does not have GAIN_CURVE table.[/red]")
+
+        all_good = False
+
+    return all_good
+
+
 
 def append_antab(exp) -> bool:
     """Appends the Tsys and GC information from the experiment ANTAB file into the FITS-IDI files.
@@ -780,12 +835,12 @@ def append_antab(exp) -> bool:
                  glob.glob(f"{exp.expname.lower()}_*_*.IDI")
     assert len(fits2check) > 0, "Could not find FITS-IDI to append Tsys/GC!"
 
-    if (not all([check_antab_idi.check_consistency(a_fits, verbose=False) \
+    if (not all([check_consistency(a_fits, verbose=False) \
                  for a_fits in fits2check])) \
                  or (len(glob.glob(f"{exp.expname.lower()}*.antab")) == 0):
         utils.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
         exp.log('append_antab_idi.py')
-        if not all([check_antab_idi.check_consistency(a_fits) for a_fits in fits2check]):
+        if not all([check_consistency(a_fits) for a_fits in fits2check]):
             # As now everything should be OK. Means that something failed.
             rprint("\n\n[red bold]The Tsys/GC could not be imported into the FITS-IDI.[/red bold]")
             return False
