@@ -10,186 +10,229 @@ import glob
 import string
 import random
 import traceback
+from importlib import resources
 from typing import Optional, Union
 from pathlib import Path
 from collections import defaultdict
 import subprocess
 import numpy as np
+from luguru import logger
 from astropy import units as u
 from rich import print as rprint
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from itertools import product
 from evn_support import check_antab_idi
 from . import experiment
-from . import environment
+from . import utils
+from . import mstools
 
 
-def create_folders(exp) -> bool:
-    """Creates the folder required for the post-processing of the experiment
-    - @eee: /data0/{supportsci}/{exp.upper()}
+def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
+    """Updates the attribute of the CorrelatorPasses from exp to define
+    if the specific pass should run in the pipeline or not.
 
-    Inputs
-        - expname: str
-            Experiment name (case insensitive).
-        - supsci: str
-            Surname of the assigned support scientist.
+    Args:
+        exp (experiment.Experiment): Experiment object.
+        pipelinable (Union[list, dict]): Either a list of bool (same length as exp.correlator_passes)
+            or a dict with lisfile as key and bool as value.
+    
+    Returns:
+        None
     """
-    expdir = Path(f"/data0/{exp.supsci.lower()}/{exp.expname.upper()}")
-    if not expdir.exists():
-        expdir.mkdir(parents=True)
-        exp.log(f"mkdir /data0/{exp.supsci.lower()}/{exp.expname.upper()}")
-        print(f"Directory '/data0/{exp.supsci.lower()}/{exp.expname.upper()}' has been created.")
+    if isinstance(pipelinable, list):
+        assert len(pipelinable) == len(exp.correlator_passes)
+        for i, is_pipelinable in enumerate(pipelinable):
+            assert isinstance(is_pipelinable, bool)
+            exp.correlator_passes[i].pipeline = is_pipelinable
+    elif isinstance(pipelinable, dict):
+        for a_lisfile in pipelinable:
+            for a_exppass in exp.correlator_passes:
+                if a_exppass.lisfile == a_lisfile:
+                    a_exppass.pipeline = pipelinable[a_lisfile]
+                    break
 
+
+
+def archive(exp: experiment.Experiment) -> bool:
+    """Runs the archive command for all -auth, -stnd, -fits,...
+    """
+    # Compress all figures from standardplots if they haven't been yet
+    if len(glob.glob("*.ps")) > 0:
+        # This avoids issues as it seems like gzip freezes when overwriting the same files
+        if len(glob.glob("*.ps.gz")) > 0:
+            utils.shell_command("rm -rf", "*ps.gz", shell=True)
+
+        utils.shell_command("gzip", "*ps", shell=True)
+
+    if exp.credentials is not None:
+        utils.shell_command("archive.pl", ["-auth", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
+                                                 "-n", exp.credentials.username, "-p", exp.credentials.password])
+    else:
+        assert len(glob.glob("*_*.auth")) == 0, 'No credentials stored but auth file found'
+
+    utils.shell_command("archive.pl", ["-stnd", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}", "*ps.gz"])
+    utils.shell_command("archive.pl", ["-stnd", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
+                                       f"{exp.expname.lower()}.piletter"])
+    utils.shell_command("archive.pl", ["-fits", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}", "*IDI*"])
     return True
 
 
-def get_passes_from_lisfiles(exp) -> bool:
-    """Gets all .lis files in the directory, which imply different correlator passes.
-    Append this information to the current experiment (exp object),
-    together with the MS file associated for each of them.
-    """
-    lisfiles = glob.glob(f"{exp.expname.lower()}*.lis")
-    thereis_line = True if '_line' in ''.join(lisfiles) else False
-    i_lines_done = 0
-    passes = []
-    if len(lisfiles) > 1:
-        lisfiles.sort()
-
-    for i, a_lisfile in enumerate(lisfiles):
-        with open(a_lisfile, 'r') as lisfile:
-            for a_lisline in lisfile.readlines():
-                if '.ms' in a_lisline:  # The header line
-                    # there is only one .ms input there
-                    msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
-                    # In case the output FITS IDI name has already been set
-                    if '.IDI' in a_lisline:
-                        fitsidiname = [elem.strip() for elem in \
-                                       a_lisline.split() if '.IDI' in elem][0]
-                        to_pipeline = True if ((fitsidiname.split('_')[-2] == '1') or \
-                                               thereis_line) else False
-                    else:
-                        if thereis_line:
-                            if '_line' in a_lisfile:
-                                fitsidiname = f"{exp.expname.lower()}_{2*i_lines_done + 2}_1.IDI"
-                            else:
-                                fitsidiname = f"{exp.expname.lower()}_{2*i_lines_done + 1}_1.IDI"
-
-                            to_pipeline = True if i_lines_done == 0 else False
-                            if (i % 2 == 0) and (i > 0):
-                                i_lines_done += 1
-                        else:
-                            fitsidiname = f"{exp.expname.lower()}_{i+1}_1.IDI"
-                            to_pipeline = True if (i == 0) else False
-
-                    passes.append(experiment.CorrelatorPass(a_lisfile, msname, fitsidiname,
-                                                            to_pipeline))
-                    # Replaces the old *.UVF string in the .lis file with the FITS IDI
-                    # file name to generate in this pass.
-                    if '.UVF' in a_lisline:
-                        environment.shell_command('sed', ['-i',
-                                                  f"'s/{msname}.UVF/{fitsidiname}/g'", a_lisfile],
-                                                  shell=True, bufsize=-1)
-
-    exp.correlator_passes = passes
-    return True
-
-
-def getdata(exp) -> bool:
+def getdata(exp: experiment.Experiment) -> bool:
     """Gets the data into eee from all existing .lis files from the given experiment.
-    inputs: exp : experiment.Experiment
+    
+    Args:
+        exp (experiment.Experiment): Experiment object with correlator passes.
+    
+    Returns:
+        bool: True if data was retrieved successfully.
     """
-    for a_pass in exp.correlator_passes:
-        cmd, _ = environment.shell_command("getdata.pl",
-                                           ["-proj", exp.eEVNname if exp.eEVNname is not None \
-                                                                  else exp.expname,
-                                            "-lis", a_pass.lisfile.name],
-                                           shell=True, stdout=None,
-                                           stderr=subprocess.STDOUT, bufsize=0)
-        exp.log(cmd)
+    def _fetch_pass(a_pass):
+        utils.shell_command("getdata.pl",
+                            ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
+                             "-lis", a_pass.lisfile.name],
+                            shell=True,
+                            stdout=None,
+                            stderr=subprocess.STDOUT,
+                            bufsize=0)
+
+    if len(exp.correlator_passes) == 0:
+        rprint("[bold yellow]No correlator passes found to fetch[/bold yellow]")
+        return True
+
+    with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
+        futures = [executor.submit(_fetch_pass, a_pass) for a_pass in exp.correlator_passes]
+        for fut in futures:
+            # Propagate any exception raised in the worker thread
+            fut.result()
 
     return True
 
 
-def _j2ms2_correlator_pass(args) -> bool:
-    exp, a_pass = args
-    with open(a_pass.lisfile) as f:
-        outms = [a for a in f.readline().replace('\n', '').split(' ')
-                 if (('.ms' in a) and ('.UVF' not in a))][0]
-        a_pass.msfile = outms
-
-    if not os.path.isdir(outms):
-        if 'j2ms2' in exp.special_params:
-            cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
-                                                         *exp.special_params['j2ms2']],
-                                               shell=True, stdout=None,
-                                               stderr=subprocess.STDOUT, bufsize=0)
-        else:
-            if exp.eEVNname is None:
-                cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name,
-                                                             "fo:nosquash_source_table"],
-                                                   shell=True, stdout=None,
-                                                   stderr=subprocess.STDOUT, bufsize=0)
-            else:
-                cmd, _ = environment.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
-                                                   shell=True, stdout=None,
-                                                   stderr=subprocess.STDOUT, bufsize=0)
-
-        exp.log(cmd, timestamp=True)
-
-    return True
-
-
-def j2ms2(exp) -> bool:
+def j2ms2(exp: experiment.Experiment) -> bool:
     """Runs j2ms2 on all existing .lis files from the given experiment.
     If the MS to produce already exists, then it will not generate it again.
-    inputs: exp : experiment.Experiment
+    
+    Args:
+        exp (experiment.Experiment): Experiment object with correlator passes.
+    
+    Returns:
+        bool: True if all MS files were created successfully.
+    
+    Raises:
+        IOError: If there is not enough disk space to create the MS files.
     """
-    if environment.space_available(exp.cwd) <= 1.2*u.kbit*int(subprocess.run(
+    if utils.space_available(Path.cwd()) <= 1.2*u.kbit*int(subprocess.run(
                                                "du -sc */*.cor*", shell=True,
                                                capture_output=True).stdout.decode().split()[-2]):
         rprint("\n\n[bold red]There is no enough space in the computer to create " \
                "the MS file[/bold red]")
         raise IOError("Not enough disk space to create the MS file.")
 
-    # Creating a pool to produce the MS files in parallel
-    # rprint(f"[yellow]Number of correlator passes to j2ms2: {len(exp.correlator_passes)}[/yellow]")
-    with ProcessPoolExecutor(max_workers=6) as pool:
+    def _j2ms2_correlator_pass(args: tuple[experiment.Experiment, experiment.CorrelatorPass]) -> bool:
+        exp, a_pass = args
+        if not os.path.isdir(a_pass.msfile):
+            if exp.eEVNname is None:
+                utils.shell_command("j2ms2", ["-v", str(a_pass.lisfile),
+                                              "fo:nosquash_source_table"],
+                                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+            else:
+                utils.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
+                                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+
+        return True
+
+    with ProcessPoolExecutor(max_workers=10) as pool:
         results = pool.map(_j2ms2_correlator_pass, product([exp,], exp.correlator_passes))
 
     return all(results)
 
 
-def update_ms_expname(exp) -> bool:
+def update_ms_expname(exp: experiment.Experiment) -> bool:
     """For e-EVN experiments, where the .vex-file experiment name does not match the actual
     experiment name, this one must be updated in the created MS file(s).
+    
+    Args:
+        exp (experiment.Experiment): Experiment object.
+    
+    Returns:
+        bool: True if experiment names were updated successfully.
     """
     if (exp.eEVNname is not None) and (exp.eEVNname != exp.expname):
-        for a_pass in exp.correlator_passes:
-            environment.shell_command("expname.py", [a_pass.msfile.name, exp.expname],
-                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            exp.log(f"expname.py {a_pass.msfile} {exp.expname}")
+        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 10)) as executor:
+            futures = [executor.submit(mstools.change_project_name, a_pass.msfile, exp.expname) 
+                       for a_pass in exp.correlator_passes]
+            for fut in futures:
+                fut.result()
 
     return True
 
 
-def get_metadata_from_ms(exp) -> bool:
-    exp.get_setup_from_ms()
+def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
+    """Extracts metadata from MS files and populates the experiment object.
+    
+    Args:
+        exp (experiment.Experiment): Experiment object to populate with MS metadata.
+    
+    Returns:
+        bool: True if metadata was extracted successfully.
+    """
+    def _get_ms_metadata(exp: experiment.Experiment, a_pass: experiment.CorrelatorPass):
+        ms = mstools.Ms(a_pass.msfile, runstats=True)
+        for ant in ms.antennas:
+            a_pass.antennas[ant.name].observed = ant.observed
+            a_pass.antennas[ant.name].subbands = ant.subbands
+            a_pass.antennas[ant.name].weights = ant.weights
+        
+        a_pass.freqsetup = experiment.Subbands(subbands=ms.freqsetup.nspw, channels=ms.freqsetup.nchan,
+                                               frequency=ms.freqsetup.meanfreq, bandwidth=ms.freqsetup.bandwidth,
+                                               polarizations=ms.freqsetup.polarizations)
+        for scanno in ms.scans:
+            scannumbers = [int(s.scanno.replace('No', '')) for s in a_pass.scans]
+            a_pass.scans[scannumbers.index(scanno)].stations_observed = list(ms.scans[scanno])
+        
+    def _update_mpc_pass(a_pass: experiment.CorrelatorPass):
+            a_pass.antennas = exp.correlator_passes[0].antennas
+            a_pass.sources = exp.correlator_passes[0].sources
+            a_pass.freqsetup = exp.correlator_passes[0].freqsetup
+
+    if len(exp.correlator_passes) > 1 and not exp.spectral_line:
+        # then this is just a multiphase center with all setups identical. Do not loop
+        # through all MSs.
+        _get_ms_metadata(exp, exp.correlator_passes[0])
+        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes)-1, 10)) as executor:
+            futures = [executor.submit(_update_mpc_pass, a_pass) for a_pass in exp.correlator_passes[1:]]
+            for fut in futures:
+                fut.result()
+    else:
+        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 10)) as executor:
+            futures = [executor.submit(_get_ms_metadata, exp, a_pass) 
+                    for a_pass in exp.correlator_passes]
+            for fut in futures:
+                fut.result()
+
+    exp.store()
     return True
 
 
-def standardplots(exp, do_weights=True) -> bool:
+def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
     """Runs the standardplots on the specified experiment using a reference antenna
     and sources to be picked for the auto- and cross-correlations.
+    
+    Args:
+        exp (experiment.Experiment): Experiment object.
+        do_weights (bool): Whether to include weight plots. Default True.
+    
+    Returns:
+        bool: True if standardplots completed successfully, False otherwise.
     """
     # TODO: to be fully rewritten
     # To run for all correlator passes that will be pipelined.
     # Then once all of them finish, open the plots and ask user.
-    calsources = ','.join(exp.sources_stdplot)
     counter = 0
     for a_pass in exp.correlator_passes:
         try:
             if a_pass.pipeline:
-                if exp.refant is not None:
+                if exp.refant:
                     refant = exp.refant[0] if len(exp.refant) == 1 else f"'{'|'.join(exp.refant)}'"
                 else:
                     for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
@@ -200,20 +243,20 @@ def standardplots(exp, do_weights=True) -> bool:
                                      "Please specify it manually.")
                 counter += 1
                 if (counter == 1) and do_weights:
-                    cmd, _ = environment.shell_command("standardplots",
-                                               ["-weight", a_pass.msfile.name, refant, calsources],
-                                               stdout=None, stderr=subprocess.STDOUT)
+                    utils.shell_command("standardplots",
+                                        ["-weight", a_pass.msfile.name, refant, ','.join(exp.sources.fringefinder)],
+                                        stdout=None, stderr=subprocess.STDOUT)
                 else:
-                    cmd, _ = environment.shell_command("standardplots",
-                                               [a_pass.msfile.name, refant, calsources],
-                                               stdout=None, stderr=subprocess.STDOUT)
+                    utils.shell_command("standardplots",
+                                        [a_pass.msfile.name, refant, ','.join(exp.sources.fringefinder)],
+                                        stdout=None, stderr=subprocess.STDOUT)
 
-                exp.log(cmd)
                 # Runs again jplotter but only to retrieve the summary into the output
-                cmd, output = environment.shell_command("echo",
-                                            [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
-                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                exp.log(environment.extract_tail_standardplots_output(output))
+                output = utils.shell_command("echo",
+                                             [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
+                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                with open('logs/standardplots.log', 'a') as f:
+                    f.write(output)
 
         except Exception:
             rprint("\n\n[red]Standardplots reported an error![/red]")
@@ -224,13 +267,10 @@ def standardplots(exp, do_weights=True) -> bool:
     return True
 
 
-def print_exp(exp) -> Optional[bool]:
+def print_exp(exp: experiment.Experiment, display_in_terminal: bool = True) -> bool:
     """Shows in the terminal all metadata related to the given experiment.
     """
-    if exp.print_blessed(outputfile='notes.md'):
-        return True
-
-    return None
+    return exp.print_blessed(outputfile='notes.md', display_in_terminal=display_in_terminal)
 
 
 def open_standardplot_files(exp) -> Optional[bool]:
@@ -254,7 +294,7 @@ def open_standardplot_files(exp) -> Optional[bool]:
 
     try:
         for a_plot in standardplots:
-            environment.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
+            utils.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
     except Exception as e:
         print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")
         return None
@@ -262,57 +302,100 @@ def open_standardplot_files(exp) -> Optional[bool]:
     return True
 
 
-def onebit(exp) -> bool:
+def onebit(exp: experiment.Experiment) -> bool:
     """In case some stations recorded at 1 bit, scales 1-bit data to correct for
     quantization losses in all MS associated with the given experiment name.
+    
+    Args:
+        exp (experiment.Experiment): Experiment object with antenna information.
+    
+    Returns:
+        bool: True if scaling was applied successfully, None if user intervention needed.
     """
     # Sanity check
     if len(exp.antennas.onebit) > 0:
-        for a_pass in exp.correlator_passes:
-            environment.shell_command("scale1bit.py",
-                                      [a_pass.msfile.name, ' '.join(exp.antennas.onebit)],
-                                      shell=True, stdout=None, stderr=subprocess.STDOUT)
-    elif environment.station_1bit_in_vix(exp.vix):
-        print(f"\n\n{'#'*10}\n#Traces of 1bit station found in {exp.vix} "
-              "but no station specified to be corrected.\n\n")
-        return None
+        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
+            futures = [executor.submit(mstools.scale1bit, a_pass.msfile, exp.antennas.onebit)
+                      for a_pass in exp.correlator_passes]
+            for fut in futures:
+                fut.result()  # Propagate any exceptions
+    elif utils.station_1bit_in_vix(exp.vixfile):
+        print(f"\n\n[red]{'#'*10}\n#Traces of 1bit station found in {exp.vixfile} "
+              "but no station specified to be corrected.[/red]\n\n")
+        return False
+
     return True
 
 
-def ysfocus(exp) -> bool:
+def ysfocus(exp: experiment.Experiment) -> bool:
+    """Fix mount types for Yebes and Hobart antennas.
+    
+    Args:
+        exp (experiment.Experiment): Experiment object.
+    
+    Returns:
+        bool: True if mount types were fixed successfully.
+    """
     if ('Ys' not in exp.antennas.names) and ('Ho' not in exp.antennas.names) and ('Hb' not in exp.antennas.names):
         return True
 
-    for a_pass in exp.correlator_passes:
-        environment.shell_command("ysfocus.py", a_pass.msfile.name, stdout=None,
-                                  shell=True, stderr=subprocess.STDOUT)
+    def _fix_mounts(a_pass):
+        if 'Ys' in exp.antennas.names:
+            mstools.fix_yebes_mount(a_pass.msfile)
+        if ('Ho' in exp.antennas.names) or ('Hb' in exp.antennas.names):
+            mstools.fix_hobart_mount(a_pass.msfile)
+
+    with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
+        futures = [executor.submit(_fix_mounts, a_pass) for a_pass in exp.correlator_passes]
+        for fut in futures:
+            fut.result()  # Propagate any exceptions
     return True
 
 
-def polswap(exp) -> bool:
+def polswap(exp: experiment.Experiment) -> bool:
     """Swaps the polarization of the given antennas for all associated MS files
     to the given experiment.
+    
+    Args:
+        exp (experiment.Experiment): Experiment object with polswap antenna information.
+    
+    Returns:
+        bool: True if polarization swap was applied successfully.
     """
     if len(exp.antennas.polswap) > 0:
-        for a_pass in exp.correlator_passes:
-            environment.shell_command("polswap.py",
-                                      [a_pass.msfile.name, ','.join(exp.antennas.polswap)],
-                                      shell=True, stdout=None, stderr=subprocess.STDOUT)
+        def _polswap_pass(a_pass):
+            for antenna in exp.antennas.polswap:
+                mstools.polswap(a_pass.msfile, antenna)
+
+        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
+            futures = [executor.submit(_polswap_pass, a_pass) for a_pass in exp.correlator_passes]
+            for fut in futures:
+                fut.result()  # Propagate any exceptions
     return True
 
 
-def flag_weights(exp) -> bool:
-    for a_pass in exp.correlator_passes:
-        cmd, output = environment.shell_command("flag_weights.py",
-                                    [a_pass.msfile.name, str(a_pass.flagged_weights.threshold)],
-                                    shell=True, stdout=None, stderr=subprocess.STDOUT)
-        exp.log(cmd+"\n# "+output.split('\r')[-1].replace('\n', '\n# ')+"\n")
-        # Find the percentage of flagged data and stores it in exp
-        str_end = '% data with non-zero'
-        str_start = 'execution).'
-        if '% data with non-zero weights' in output:
-            a_pass.flagged_weights.percentage = float(output[output.find(str_start) +
-                                                      len(str_start):output.find(str_end)])
+def flag_weights(exp: experiment.Experiment) -> bool:
+    """Flags visibilities based on weight thresholds for all correlator passes.
+    
+    Args:
+        exp (experiment.Experiment): Experiment object with flagged_weights information.
+    
+    Returns:
+        bool: True if weight flagging was applied successfully.
+    """
+    def _flag_weights_pass(a_pass):
+        total_vis, pct_total, pct_nonzero = mstools.flag_weights(
+            a_pass.msfile, 
+            a_pass.flagged_weights.threshold
+        )
+        a_pass.flagged_weights.percentage = pct_nonzero
+        exp.log(f"flag_weights: {a_pass.msfile.name} threshold={a_pass.flagged_weights.threshold}\n"
+                f"# {pct_total:.2f}% total flagged, {pct_nonzero:.2f}% non-zero weights flagged\n")
+
+    with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
+        futures = [executor.submit(_flag_weights_pass, a_pass) for a_pass in exp.correlator_passes]
+        for fut in futures:
+            fut.result()  # Propagate any exceptions
     return True
 
 
@@ -321,9 +404,6 @@ def update_piletter(exp) -> bool:
     - Removing the trailing epoch-related character in the experiment name.
     - Adding the weightthreshold that was used and how much data were flagged.
     """
-    if len(exp.correlator_passes) == 0:
-        get_passes_from_lisfiles(exp)
-
     if exp.correlator_passes[0].flagged_weights is None:
         weightthreshold: Union[int, float] = -1
         flaggeddata: Union[int, float] = -1
@@ -452,23 +532,52 @@ def tconvert(exp) -> bool:
                                                   capture_output=True).stdout.decode().split()[0])
 
         if idi_size < 20*u.Gb:
-            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
+            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
                                       stdout=None, stderr=subprocess.STDOUT)
         elif idi_size < 4*u.Tb:
-            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name,
+            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name,
                                                    "-o", "chunk_size=8GB"],
                                       stdout=None, stderr=subprocess.STDOUT)
         else:
-            if environment.space_available(exp.cwd) <= 1.1*idi_size:
+            if utils.space_available(exp.cwd) <= 1.1*idi_size:
                 rprint("\n\n[bold red]There is no enough space in the computer to create " \
                        "the FITS-IDI files[/bold red]")
                 raise IOError("Not enough disk space to create the FITS-IDI files.")
 
-            environment.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o",
+            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o",
                                       f"chunk_size={int(idi_size.to(u.Tb).value)}GB"],
                                       stdout=None, stderr=subprocess.STDOUT)
 
     return True
+
+
+def prepare_polconvert(exp: experiment.Experiment, output_template: Path = Path('polconvert_inputs.toml')) -> bool:
+    """Checks if PolConvert is required for any antenna.
+    In that case, prepares the templates for running it and (potentially in the future?)
+    will run it. For now it just requests the user to run it manually.
+    """
+    with resources.as_file(resources.files("templates").joinpath("polconvert_inputs.toml.template")) as template:
+        template_content = Path(template).read_text()
+
+    logger.debug("Creating the template file for polconvert (polconvert_inputs.toml)")
+
+    # Use only antennas that observed the same subbands as the antennas to PolConvert (at least)
+    subbands_to_polconvert = set().union(*(exp.antennas[p].subbands for p in exp.antennas.polconvert))
+    include_ants = []
+    for ant in exp.antennas:
+        if (ant not in exp.antennas.polconvert) and subbands_to_polconvert.issubset(set(ant.subbands)) and ant.observed:
+                include_ants.append(ant.name)
+
+    template_content = template_content.format(expname=exp.expname.lower(), refant=f"'{exp.refant[0].upper()}'",
+                                               linants=f"[{', '.join([f"'{ant.upper()}'" for ant in exp.antennas.polconvert])}]",
+                                               exclude_ants=f"[{', '.join([f"'{ant.name.upper()}'" for ant in exp.antennas \
+                                                                           if ant.name not in include_ants])}]",
+                                               do_if=f"[{', '.join([str(s) for s in subbands_to_polconvert])}]",
+                                               time_range=[],
+                                               chanavg=16, timeavg=30, solve_weight=0.001)
+
+    output_template.write_text(template_content)
+    return output_template.exists()
 
 
 def polconvert(exp) -> Optional[bool]:
@@ -480,7 +589,7 @@ def polconvert(exp) -> Optional[bool]:
         polconv_inp = Path('./polconvert_inputs.toml')
         if not polconv_inp.exists():
             exp.log("cp ~/polconvert/polconvert_inputs.toml ./polconvert_inputs.toml")
-            environment.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.toml',
+            utils.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.toml',
                                       './polconvert_inputs.toml'], shell=True, stdout=None)
 
             with open(polconv_inp, 'r') as pcfile:
@@ -564,7 +673,7 @@ def post_polconvert(exp) -> Optional[bool]:
     # Creates a new MS with the PolConverted-data in order to plot it
     # to check if the conversion run properly
     if any(['_1_1' in pp.name for pp in pconverted_idi]):
-        _ = environment.shell_command("idi2ms.py", ['--delete',
+        _ = utils.shell_command("idi2ms.py", ['--delete',
                               f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
                               ','.join([idi.name.replace('.PCONVERT', '') for idi in pconverted_idi \
                                         if '_1_1' in idi.name])])
@@ -578,13 +687,13 @@ def post_polconvert(exp) -> Optional[bool]:
             raise ValueError("Could not find a good reference antenna for standardplots. "
                              "Please specify it manually.")
 
-        _ = environment.shell_command("standardplots",
+        _ = utils.shell_command("standardplots",
                           [f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
                            refant, ','.join(exp.sources_stdplot)], stdout=None,
                            stderr=subprocess.STDOUT)
 
         for a_plot in glob.glob(f"{exp.expname.lower()}-*-pconv-cross*.ps"):
-            environment.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
+            utils.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
 
     exp.last_step = 'post_polconvert'
     rprint("\n\n[bold green]If PolConvert worked fine, re-run me to continue. " \
@@ -626,43 +735,38 @@ def set_credentials(exp) -> bool:
         possible_char = string.digits + string.ascii_letters
         exp.set_credentials(username=exp.expname.lower(),
                             password="".join(random.sample(possible_char, 12)))
-        environment.shell_command("touch",
+        utils.shell_command("touch",
                                   f"{exp.credentials.username}_{exp.credentials.password}.auth")
         exp.log(f"touch {exp.credentials.username}_{exp.credentials.password}.auth")
 
     return True
 
 
-def create_pipelet(exp) -> bool:
-    """Makes a copy of the PI letter including the credentials to download the experiment.
-    If there are no credentials for the experiment (unprotected ones, like the NMEs), then it does
-    not create any file.
-    If the file exists, it will be overwritten.
+def protect_experiment_files(exp: experiment.Experiment) -> bool:
+    """Sets the protection status for pipeline plots in the EVN Archive
+    
+    This function uses the auth_pipe.py script to set protection status for various 
+    pipeline plot types (BANDPASS, CPOL, FRING_DELAY, etc.) for the entire experiment.
+    
+    Args:
+        exp: Experiment object containing experiment metadata
+        
+    Returns:
+        bool: True if protection was successfully set, False otherwise
     """
-    environment.shell_command("pipelet.py", [exp.expname.lower(), exp.supsci.lower()])
-    exp.log(f"pipelet.py {exp.expname.lower()} {exp.supsci.lower()}")
+    if not [s.name for s in exp.sources if s.protected]:
+        logger.info("No protection required for this experiment.")
+        return True
+
+    try:
+        utils.shell_command("auth_pipe.py", ["-e", exp.expname, "-s", [s.name for s in exp.sources if s.protected],
+                            "-p", "source"])
+    except ValueError:
+        logger.error("Could not protect experiment files in archive")
+        return False
+
     return True
 
-
-def archive(exp) -> bool:
-    # Compress all figures from standardplots if they haven't been yet
-    if len(glob.glob("*.ps")) > 0:
-        # This avoids issues as it seems like gzip freezes when overwriting the same files
-        if len(glob.glob("*.ps.gz")) > 0:
-            environment.shell_command("rm -rf", "*ps.gz", shell=True)
-
-        environment.shell_command("gzip", "*ps", shell=True)
-        exp.log('gzip *ps')
-
-    if (exp.credentials.username is not None) and (exp.credentials.password is not None):
-        environment.archive("-auth", exp,
-                            f"-n {exp.credentials.username} -p {exp.credentials.password}")
-    else:
-        assert len(glob.glob("*_*.auth")) == 0, 'No credentials stored but auth file found'
-
-    environment.archive("-stnd", exp, "*ps.gz")
-    environment.archive("-fits", exp, "*IDI*")
-    return True
 
 
 def append_antab(exp) -> bool:
@@ -679,7 +783,7 @@ def append_antab(exp) -> bool:
     if (not all([check_antab_idi.check_consistency(a_fits, verbose=False) \
                  for a_fits in fits2check])) \
                  or (len(glob.glob(f"{exp.expname.lower()}*.antab")) == 0):
-        environment.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
+        utils.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
         exp.log('append_antab_idi.py')
         if not all([check_antab_idi.check_consistency(a_fits) for a_fits in fits2check]):
             # As now everything should be OK. Means that something failed.
@@ -688,7 +792,6 @@ def append_antab(exp) -> bool:
     else:
         rprint("[green]ANTAB information already appended into the FITS-IDI files.[/green]")
 
-    environment.archive("-fits", exp, f"{exp.expname.lower()}_*_*.IDI*")
     return True
 
 
@@ -696,7 +799,6 @@ def send_letters(exp) -> bool:
     """Remembers you to update the PI letter and send it , and the pipeletter, to the PIs.
     Finally, it runs parsePIletter.
     """
-    environment.archive("-stnd", exp, f"{exp.expname.lower()}.piletter")
     print("\n\n\n")
     rprint("[center][bold red] --- Send the PI letter --- [/bold red][/center]")
     pi = "\n"

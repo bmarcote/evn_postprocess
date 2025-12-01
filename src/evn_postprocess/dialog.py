@@ -1,10 +1,10 @@
 import abc
 import sys
 from . import experiment
-from . import environment
+from . import utils 
 
 class Dialog(object, metaclass=abc.ABCMeta):
-    """Abstract class that implements the basic functionallity for any
+    """Abstract class that implements the basic functionality for any
     User Interface required for the post-processing.
     """
     @abc.abstractmethod
@@ -17,11 +17,14 @@ class Dialog(object, metaclass=abc.ABCMeta):
         - Antennas that recorded one-bit data and require the conversion to two-bit.
         - Antennas that require to run PolConvert because they recorded linear polarization.
 
-        These parameters needs to be loaded into the respective parameters inside the exp
+        These parameters need to be loaded into the respective parameters inside the exp
         object (passed to the function).
-
-        It should return a bool indicating if the dialog and recording of the parameters
-        went sucessfully.
+        
+        Args:
+            exp (experiment.Experiment): Experiment object to update with user-provided parameters.
+        
+        Returns:
+            bool: True if the dialog and recording of the parameters went successfully.
         """
         raise NotImplementedError('users must define this function to use this base class')
 
@@ -30,8 +33,14 @@ class Terminal(Dialog):
 
     def ask_for_antennas(self, exp, asking_text):
         """Asks for a list of antennas and parses them.
-        It returns None if none are specified or a Python list of the introduced antennas.
         It verifies that all introduced antennas are included in the experiment.
+        
+        Args:
+            exp (experiment.Experiment): Experiment object containing valid antenna names.
+            asking_text (str): Text prompt to display to the user.
+        
+        Returns:
+            list[str]: List of antenna names provided by the user, or empty list if none specified.
         """
         antennas = []
         while True:
@@ -65,9 +74,12 @@ class Terminal(Dialog):
 
         These parameters are loaded into the respective parameters inside the exp
         object (passed to the function).
-
-        It returns a bool indicating if the dialog and recording of the parameters
-        went sucessfully.
+        
+        Args:
+            exp (experiment.Experiment): Experiment object to update with user-provided parameters.
+        
+        Returns:
+            bool: True if the dialog and recording of the parameters went successfully.
         """
         print("\n\n\n### Please answer to the following questions:\n")
         while True:
@@ -86,7 +98,7 @@ class Terminal(Dialog):
         polswap = self.ask_for_antennas(exp, "\n\033[1mAntennas for polswap (comma or " \
                                         "Fspace separated)\n\033[0m(possible antennas are: "
                                              f"{', '.join(exp.antennas.names)})\n\033[1m>\033[0m ")
-        if environment.station_1bit_in_vix(exp.vix):
+        if utils.station_1bit_in_vix(exp.vix):
             onebit = self.ask_for_antennas(exp, "\n\033[1mAntennas that recorded one-bit " \
                                                 "data:\n> \033[0m")
         else:
