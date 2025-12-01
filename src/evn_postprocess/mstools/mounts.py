@@ -1,6 +1,6 @@
 from rich import print as rprint
-import misc
-from msdata import Ms
+from . import misc
+from .msdata import Ms
 
 
 def print_mounts(msfile: str, verbose: bool = True):

@@ -21,6 +21,7 @@ from dataclasses import dataclass, asdict, fields
 from collections import defaultdict
 from pyrap import tables as pt
 from enum import Enum
+from loguru import logger
 from astropy import units as u
 from astropy import coordinates as coord
 from rich import print as rprint
@@ -28,9 +29,8 @@ from rich import progress
 import blessed
 from . import dialog
 from . import vex
-from . import io 
+# from .io import parse_masterprojects  # copied function here to avoid circular importing
 from . import mstools 
-from .workflow import Task
 
 
 
@@ -75,10 +75,79 @@ def retrieve_servers() -> Servers:
         FileNotFoundError: If the computers.toml file cannot be found.
     """
     # TODO: jump from home dir, jops home dir...
-    with open(Path(os.getenv('XDG_CONFIG_HOME', Path.home() / '.config')) / 'evn' / 'computers.toml', 'rb') as f:
+    if (configpath := (Path(os.getenv('XDG_CONFIG_HOME', Path.home())) / 'evn_postproc')).exists():
+        pass
+    elif (configpath := (Path(os.path.expanduser('~jops')) / '.config/evn_postproc')).exists():
+        pass
+    else:
+        raise FileNotFoundError("No such file or directory: .config/evn_postproc/computers.toml neither in local user nor jops")
+
+    with open(configpath / 'computers.toml', 'rb') as f:
         servers = tomllib.load(f)
     
     return Servers([Server(name=s, user=servers[s]['user'], host=servers[s]['host'], path=Path(servers[s]['path'])) for s in servers])
+
+
+def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]:
+        """Obtains the observing epoch from the file in the server (traditionally MASTER_PROJECTS.LIS).
+        In case of being an e-EVN experiment, it will add that information.
+
+        The expected file should be a text file with one line per experiment, with expname (capital case) in the first
+        column, followed by the observing epoch (YYMMDD format) in the second column.
+        If the entry refers to an e-EVN observation (with multiple experiments in the same run), then it will have
+        extra columns indicating all experiments within the run.
+
+        Each of the extra columns will have the experiment name in the first column in a different line,
+        followed again by the observing epoch.
+        
+        Args:
+            expname (str): Experiment name to search for.
+            server (Server): Server object with MASTER_PROJECTS.LIS location.
+        
+        Returns:
+            tuple[str, str | None]:
+                - The observing epoch of the experiment (YYMMDD format).
+                - The e-EVN name if it is an e-EVN experiment, None otherwise.
+        """
+        logger.debug(f"Trying to read the experiment {expname} from {server.user}@{server.host}:{server.path}")
+        process = subprocess.run(['ssh', f"{server.user}@{server.host}", f"grep {expname} {server.path}"], capture_output=True)
+        if process.returncode == 1:
+            raise ValueError(f"Errorcode 1 when reading {server.path} in {server.host}."
+                             + f"\n{expname} was not found not in the EVN database.")
+        elif process.returncode == 2:
+            raise ValueError(f"Errorcode 2 when reading {server.path} in {server.host}."
+                             + f"\nCould not access the remote file.")
+        elif process.returncode > 2:
+            raise ValueError(f"Errorcode {process.returncode} when reading MASTER_PROJECTS.LIS.")
+
+        output = [s for s in process.stdout.decode('utf-8').split('\n') if s]
+        logger.debug(f"Entry in the database: {', '.join(output)}")
+
+        if len(output) == 2:
+            logger.debug(f"{expname} is an e-EVN experiment")
+            # It is an e-EVN experiment!
+            # One line will have EXP EPOCH.
+            # The other one eEXP EPOCH EXP1 EXP2..
+            entry_full, entry_exp = (0, 1) if len(output[0]) > len(output[1]) else (1, 0)
+            obsdate = output[entry_exp].split()[1]
+            eEVNname = output[entry_full].split()[0]
+            logger.debug(f"From the e-EVN run {eEVNname} observed on {obsdate}.")
+        elif len(output) == 1:
+            expline = output[0].split()
+            if len(expline) > 2:
+                # This is an e-EVN, this experiment was the first one (so e-EVN is called the same)
+                eEVNname = expline[0]
+                obsdate = expline[1]
+                logger.debug(f"{expname} is an e-EVN experiment (run with the same name on {obsdate})")
+            else:
+                eEVNname = None
+                obsdate = expline[1]
+                logger.debug(f"{expname} is an regular EVN experiment observed on {obsdate}")
+        else:
+            raise ValueError(f"{expname} not found in {server.host}:{server.path}, or server not reachable.")
+        
+        return obsdate, eEVNname
+
 
 
 def retrieve_expname() -> str:
@@ -89,7 +158,7 @@ def retrieve_expname() -> str:
     """
     potential_experiment = Path.cwd().name
     # It will throw an exception if the experiment is not found
-    _ = io.parse_masterprojects(potential_experiment, retrieve_servers()['master_projects'])
+    _ = parse_masterprojects(potential_experiment, retrieve_servers()['master_projects'])
     return potential_experiment
     
 
@@ -253,7 +322,7 @@ class Antenna:
     logfsfile: bool = False
     antabfsfile: bool = False
     opacity: bool = False  # if data have opacity correction in the ANTAB file
-    weights: np.ndarray = np.array([])
+    weights: tuple = ()
 
 
 class Antennas(object):
@@ -366,8 +435,8 @@ class Scan:
     starttime: dt.datetime
     duration_s: int
     source: str
-    stations_scheduled: list[str]
-    stations_observed: list[str] = []
+    stations_scheduled: tuple[str]
+    stations_observed: tuple[str] = ()
 
 
 class Scans(list[Scan]):
@@ -394,7 +463,6 @@ class Subbands:
     polarizations: tuple[mstools.misc.Stokes]
 
 
-@dataclass
 class CorrelatorPass:
     """Defines one correlator pass for a given experiment.
     It contains all relevant information that is pass-depended, e.g. associated .lis and
@@ -413,37 +481,42 @@ class CorrelatorPass:
         sources : list[Source]
             List of sources present in this correlator pass.
     """
-    lisfile: Path
-    msfile: Path
-    fitsidifile: str
-    pipeline: bool
-    scans: Scans = Scans()
-    sources: Sources = Sources()
-    antennas: Antennas = Antennas()
-    flagged_weights: Optional[FlagWeight] = None
-    freqsetup: Optional[Subbands] = None
+    def __init__(self, lisfile: Path, msfile: Path, fitsidifile: str, pipeline: bool, scans: Scans | None = None,
+                 sources: Sources | None = None, antennas: Antennas | None = None, flagged_weights: FlagWeight | None = None,
+                 freqsetup: Subbands | None = None):
+        self.lisfile = lisfile
+        self.msfile = msfile
+        self.fitsidifile = fitsidifile
+        self.pipeline = pipeline
+        self.scans: Scans = scans if scans is not None else Scans()
+        self.antennas: Antennas = antennas if antennas is not None else Antennas()
+        self.flagged_weights = flagged_weights
+        self.freqsetup = freqsetup
 
 
-
-@dataclass
 class Experiment:
     """Defines and EVN experiment with all relevant metadata.
     """
-    expname: str
-    obsdate: dt.date
-    supsci: str
-    dirs: Dirs
-    eEVNname: Optional[str] = None
-    steps: list[Task] = []
-    pi: list[PI] = []
-    credentials: Credentials | None = None
-    sources: Sources = Sources()
-    antennas: Antennas = Antennas()
-    scans: Scans = Scans()
-    refant: list[str] = []
-    spectral_line: bool = False   # Meaning there is a spectral line correlation (not just continuum)
-    correlator_passes: list[CorrelatorPass] = []
-    _log_file: Path = Path("logs/processing.log")
+    def __init__(self, expname: str, obsdate: dt.date, supsci: str, dirs: Dirs, eEVNname: str | None = None,
+                 steps: list | None = None, pi: list[PI] | None = None, credentials: Credentials | None = None,
+                 sources: Sources | None = None, antennas: Optional[Antennas] = None, scans: Optional[Scans] = None,
+                 refant: Optional[list[str]] = None, spectral_line: bool = False,
+                 correlator_passes: Optional[list[CorrelatorPass]] = None):
+        self.expname = expname
+        self.obsdate = obsdate
+        self.supsci = supsci
+        self.dirs = dirs
+        self.eEVNname = eEVNname
+        self.steps = steps if steps else []
+        self.pi = pi if pi else []
+        self.credentials = credentials
+        self.sources = sources if sources else Sources()
+        self.antennas = antennas if antennas else Antennas()
+        self.scans = scans if scans else Scans()
+        self.refant = refant if refant else []
+        self.spectral_line = spectral_line
+        self.correlator_passes = correlator_passes if correlator_passes else []
+        self._log_file: Path = self.dirs.logs / 'processing.log'
 
     def write_log_file(self):
         # Writes down some snippets for jplotter in case the standard one fails.

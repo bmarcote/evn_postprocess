@@ -9,7 +9,7 @@ from datetime import datetime as dt
 from pathlib import Path
 from dataclasses import dataclass
 from importlib.metadata import version
-from luguru import logger
+from loguru import logger
 from rich import print as rprint
 from . import experiment
 from . import io
@@ -383,8 +383,12 @@ def run_isolated_task(task_name: str, expname: str | None = None):
     return globals()[task_name](exp)
 
 
-def run_workflow(exp: experiment.Experiment, archive: bool = True):
+def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool = False):
     # TODO:  OPTION 'from' and 'to' steps.
+
+    logger.add(exp.dirs['log'] / 'post_process.log', colorize=True,
+               level="DEBUG" if debug else "INFO", backtrace=True)
+
     logger.info(f"\n\n\n{'#'*37}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
                 f"# Running on {dt.today().strftime('%d %b %Y %H:%M')} by {exp.supsci}.\n"
                 f"Using evn_postprocess version {version('evn_postprocess')}.")

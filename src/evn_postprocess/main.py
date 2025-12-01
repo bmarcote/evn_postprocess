@@ -129,6 +129,8 @@ def main():
                         help='Directory to run the post-processing. By default in /data/exp/<expname>.')
     parser.add_argument('-a', '--no-archive', action='store_false', default=True,
                         help='Skip the archive part of the files to the EVN archive.')
+    parser.add_argument('--debug', action='store_true', default=False,
+                        help='Debug mode: shows a more verbose output')
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:XXXXX).')
     parser.add_argument('-v', '--version', action='version',
@@ -163,7 +165,7 @@ def main():
         if args.j2ms2par is not None:
             exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
             exp.store()
-        workflow.run_workflow(exp, args.no_archive)
+        workflow.run_workflow(exp, args.no_archive, debug=args.debug)
     elif args.subpar == 'info':
         exp.print_blessed(outputfile=None)
     elif args.subpar == 'list':
