@@ -27,10 +27,9 @@ from astropy import coordinates as coord
 from rich import print as rprint
 from rich import progress
 import blessed
-from . import dialog
 from . import vex
 # from .io import parse_masterprojects  # copied function here to avoid circular importing
-from . import mstools 
+from . import mstools
 
 
 
@@ -45,11 +44,11 @@ class Server:
 
 class Servers(list[Server]):
     """A list of Server objects with additional helper methods."""
-    
+
     def names(self) -> list[str]:
         """Returns a list of all server names."""
         return [server.name for server in self]
-    
+
     def __getitem__(self, key: Union[int, str]) -> Server:
         """Get a server by index (int) or by name (str)."""
         if isinstance(key, int):
@@ -67,25 +66,26 @@ def retrieve_servers() -> Servers:
     """Retrieves the servers configuration from the environment.
     It will first search under the $XDG_CONFIG_HOME, $HOME/.config, or ~jops/.config directories.
     It should try to find the evnpostpro/computers.toml file. Raising an exception if it cannot be found.
-    
+
     Returns:
         Servers: A list of Server objects
-    
+
     Raises:
         FileNotFoundError: If the computers.toml file cannot be found.
     """
-    # TODO: jump from home dir, jops home dir...
     if (configpath := (Path(os.getenv('XDG_CONFIG_HOME', Path.home())) / 'evn_postproc')).exists():
         pass
     elif (configpath := (Path(os.path.expanduser('~jops')) / '.config/evn_postproc')).exists():
         pass
     else:
-        raise FileNotFoundError("No such file or directory: .config/evn_postproc/computers.toml neither in local user nor jops")
+        raise FileNotFoundError("No such file or directory: .config/evn_postproc/computers.toml neither "
+                                "in local user nor jops")
 
     with open(configpath / 'computers.toml', 'rb') as f:
         servers = tomllib.load(f)
-    
-    return Servers([Server(name=s, user=servers[s]['user'], host=servers[s]['host'], path=Path(servers[s]['path'])) for s in servers])
+
+    return Servers([Server(name=s, user=servers[s]['user'], host=servers[s]['host'],
+                           path=Path(servers[s]['path'])) for s in servers])
 
 
 def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]:
@@ -99,24 +99,25 @@ def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]
 
         Each of the extra columns will have the experiment name in the first column in a different line,
         followed again by the observing epoch.
-        
+
         Args:
             expname (str): Experiment name to search for.
             server (Server): Server object with MASTER_PROJECTS.LIS location.
-        
+
         Returns:
             tuple[str, str | None]:
                 - The observing epoch of the experiment (YYMMDD format).
                 - The e-EVN name if it is an e-EVN experiment, None otherwise.
         """
         logger.debug(f"Trying to read the experiment {expname} from {server.user}@{server.host}:{server.path}")
-        process = subprocess.run(['ssh', f"{server.user}@{server.host}", f"grep {expname} {server.path}"], capture_output=True)
+        process = subprocess.run(['ssh', f"{server.user}@{server.host}", f"grep {expname} {server.path}"],
+                                 capture_output=True)
         if process.returncode == 1:
             raise ValueError(f"Errorcode 1 when reading {server.path} in {server.host}."
                              + f"\n{expname} was not found not in the EVN database.")
         elif process.returncode == 2:
             raise ValueError(f"Errorcode 2 when reading {server.path} in {server.host}."
-                             + f"\nCould not access the remote file.")
+                             + "\nCould not access the remote file.")
         elif process.returncode > 2:
             raise ValueError(f"Errorcode {process.returncode} when reading MASTER_PROJECTS.LIS.")
 
@@ -145,14 +146,13 @@ def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]
                 logger.debug(f"{expname} is an regular EVN experiment observed on {obsdate}")
         else:
             raise ValueError(f"{expname} not found in {server.host}:{server.path}, or server not reachable.")
-        
-        return obsdate, eEVNname
 
+        return obsdate, eEVNname
 
 
 def retrieve_expname() -> str:
     """Returns the experiment name, assuming it is the name of the current directory.
-    
+
     Returns:
         str: The experiment name
     """
@@ -160,11 +160,11 @@ def retrieve_expname() -> str:
     # It will throw an exception if the experiment is not found
     _ = parse_masterprojects(potential_experiment, retrieve_servers()['master_projects'])
     return potential_experiment
-    
+
 
 def retrieve_username() -> str:
     """Returns the username of the current user.
-    
+
     Returns:
         str: The username, or 'unknown' if not able to retrieve it.
     """
@@ -325,93 +325,61 @@ class Antenna:
     weights: tuple = ()
 
 
-class Antennas(object):
+class Antennas(list[Antenna]):
     """List of antennas (Antenna class)
     """
-    def __init__(self, antennas: Optional[list[Antenna]] = None):
-        if antennas is not None:
-            self._antennas: list[Antenna] = copy.deepcopy(antennas)
-        else:
-            self._antennas = []
-
-        self._niter : int = -1
-
-    def add(self, new_antenna: Antenna):
-        if new_antenna.name in self.names:
-            raise KeyError(f"The antenna {new_antenna.name} is already in the list of antennas.")
-
-        self._antennas.append(new_antenna)
-
     @property
     def names(self) -> list[str]:
-        return [a.name for a in self._antennas]
+        return [a.name for a in self]
 
     @property
     def sites(self) -> list[str]:
-        return [a.site for a in self._antennas]
+        return [a.site for a in self]
 
     @property
     def scheduled(self) -> list[str]:
-        return [a.name for a in self._antennas if a.scheduled]
+        return [a.name for a in self if a.scheduled]
 
     @property
     def observed(self) -> list[str]:
-        return [a.name for a in self._antennas if a.observed]
+        return [a.name for a in self if a.observed]
 
     @property
     def subbands(self) -> list[tuple[int]]:
-        return [a.subbands for a in self._antennas if a.observed]
+        return [a.subbands for a in self if a.observed]
 
     @property
     def polswap(self) -> list[str]:
-        return [a.name for a in self._antennas if a.polswap]
+        return [a.name for a in self if a.polswap]
 
     @property
     def polconvert(self) -> list[str]:
-        return [a.name for a in self._antennas if a.polconvert]
+        return [a.name for a in self if a.polconvert]
 
     @property
     def onebit(self) -> list[str]:
-        return [a.name for a in self._antennas if a.onebit]
+        return [a.name for a in self if a.onebit]
 
     @property
     def logfsfile(self) -> list[str]:
-        return [a.name for a in self._antennas if a.logfsfile]
+        return [a.name for a in self if a.logfsfile]
 
     @property
     def antabfsfile(self) -> list[str]:
-        return [a.name for a in self._antennas if a.antabfsfile]
+        return [a.name for a in self if a.antabfsfile]
 
     @property
     def opacity(self) -> list[str]:
-        return [a.name for a in self._antennas if a.opacity]
+        return [a.name for a in self if a.opacity]
 
-    def __len__(self) -> int:
-        return len(self._antennas)
+    def __getitem__(self, key: str | int) -> Antenna:
+        if isinstance(key, str):
+            return self[self.names.index(key)]
+        else:
+            return self[key]
 
-    def __getitem__(self, key: str) -> Antenna:
-        return self._antennas[self.names.index(key)]
-
-    def __delitem__(self, key: str) -> None:
-        return self._antennas.remove(self[key])
-
-    def __iter__(self) -> Iterable[Antenna]:
-        self._niter = -1
-        for ant in self._antennas:
-            yield ant
-
-    def __next__(self) -> Antenna:
-        if self._niter < self.__len__()-1:
-            self._niter += 1
-            return self._antennas[self._niter]
-
-        raise StopIteration
-
-    def __reversed__(self) -> list[Antenna]:
-        return self._antennas[::-1]
-
-    def __contains__(self, key: str) -> bool:
-        return key in self.names
+    def __contains__(self, key: str | Antenna) -> bool:
+        return key in self.names if isinstance(key, str) else key in self
 
     def __str__(self) -> str:
         s = ""
@@ -556,7 +524,7 @@ class Experiment:
         """Extracts information from the VEX file."""
         if not self.vixfile.exists():
             raise FileNotFoundError(f"VEX file {self.vixfile} not found")
-        
+
         vex_data = vex.Vex(self.vixfile)
         for ant_code in vex_data['STATION']:
             self.antennas.append(Antenna(name=ant_code, site=vex_data['STATION'][ant_code]['SITE']))

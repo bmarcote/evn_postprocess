@@ -9,19 +9,19 @@ import astropy.units as u
 def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = None) -> bool:
     """Does a scp from originpath to destpath. If the process returns an error,
     then it raises ValueError.
-    
+
     Args:
         originpath (str): Source path (can include user@host: prefix for remote).
         destpath (str): Destination path.
         timeout (Optional[Union[float, int]]): Timeout in seconds for the scp command. Default None.
-    
+
     Returns:
         bool: True if the scp command succeeded.
-    
+
     Raises:
         ValueError: If the scp command returns a non-zero exit code.
     """
-    rprint(f"\n[bold]> scp {originpath} {destpath}[/bold]")
+    rprint(f"[bold]> scp {originpath} {destpath}[/bold]")
     process = subprocess.run(["scp", originpath, destpath], shell=False,
                               stdout=None, stderr=subprocess.PIPE, timeout=timeout)
     if process.returncode != 0:
@@ -34,17 +34,17 @@ def ssh(computer: str, commands: str, shell: bool = False, stdout: Optional[int]
         stderr: Optional[int] = subprocess.PIPE) -> str | None:
     """Sends a ssh command to the indicated computer.
     The output is expected to be in UTF-8 format.
-    
+
     Args:
         computer (str): Computer/host to connect to (can include user@ prefix).
         commands (str): Command(s) to execute on the remote computer.
         shell (bool): Whether to use shell mode. Default False.
         stdout (Optional[int]): Standard output redirection. Default subprocess.PIPE.
         stderr (Optional[int]): Standard error redirection. Default subprocess.PIPE.
-    
+
     Returns:
         str | None: Output from the command in UTF-8 format, or None if no output.
-    
+
     Raises:
         ValueError: If the ssh command returns a non-zero exit code.
     """
@@ -64,7 +64,7 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
                   stderr: Optional[int] = subprocess.PIPE) -> str:
     """Runs the provided command in the shell with some arguments if necessary.
     Parameters must be either a single string or a list, if provided.
-    
+
     Args:
         command (str): Command to execute.
         parameters (Optional[Union[str, list]]): Command parameters as string or list. Default None.
@@ -72,10 +72,10 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
         bufsize (int): Buffer size for subprocess. Default -1.
         stdout (Optional[int]): Standard output redirection. Default subprocess.PIPE.
         stderr (Optional[int]): Standard error redirection. Default subprocess.PIPE.
-    
+
     Returns:
         str: Output of the command in UTF-8 encoding.
-    
+
     Raises:
         ValueError: If the command returns a non-zero exit code.
     """
@@ -104,14 +104,14 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
 
 def remote_file_exists(host: str, path: str) -> bool:
     """Checks if a file or path exists in a remote computer.
-    
+
     Args:
         host (str): Remote host to check (can include user@ prefix).
         path (str): Path to check on the remote host.
-    
+
     Returns:
         bool: True if the file/path exists, False otherwise.
-    
+
     Raises:
         Exception: If SSH connection to the host fails.
     """
@@ -129,15 +129,15 @@ def remote_file_exists(host: str, path: str) -> bool:
 
 def grep_remote_file(host: str, remote_file: str, word: str) -> str:
     """Runs a grep in a file located in a remote host and returns the result.
-    
+
     Args:
         host (str): Remote host (can include user@ prefix).
         remote_file (str): Path to the file on the remote host.
         word (str): Word/pattern to search for.
-    
+
     Returns:
         str: Output from grep command in UTF-8 format.
-    
+
     Raises:
         ValueError: If there is a problem accessing the host or file.
     """
@@ -156,13 +156,13 @@ def station_1bit_in_vix(vexfile: str | Path) -> bool:
     """Checks if there is any station in the vex file that recorded at 1 bit.
     Note that this/these station(s) may or may not have recorded at 1 bit in this experiment,
     but only at other moment of the run.
-    
+
     Args:
         vexfile (str | Path): Path to the VEX file to check.
-    
+
     Returns:
         bool: True if at least one station recorded at 1 bit, False otherwise.
-    
+
     Raises:
         FileNotFoundError: If the VEX file is not found.
     """
@@ -180,10 +180,10 @@ def station_1bit_in_vix(vexfile: str | Path) -> bool:
 def extract_tail_standardplots_output(stdplt_output: str) -> str:
     """Given a full log output from standardplots, it returns only the last bits that contain
     the information provided by the "r" command.
-    
+
     Args:
         stdplt_output (str): Full log output from standardplots.
-    
+
     Returns:
         str: Extracted tail containing the "r" command output.
     """
@@ -203,10 +203,10 @@ def extract_tail_standardplots_output(stdplt_output: str) -> str:
 
 def space_available(path) -> u.Quantity:
     """Returns the available space in the disk where the given path is located.
-    
+
     Args:
         path: Path to check (string or Path object).
-    
+
     Returns:
         astropy.units.Quantity: Available space in gigabytes.
     """

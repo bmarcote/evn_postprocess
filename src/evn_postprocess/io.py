@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import datetime as dt
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from loguru import logger
 from rich import print as rprint
 from . import utils
 from .experiment import Experiment, Server, Servers
@@ -11,7 +12,7 @@ from .experiment import Experiment, Server, Servers
 
 def get_init_files(exp: Experiment, servers: Servers) -> bool:
     """Retrieves the files related to this experiment as .vix (or .vox), .piletter and .expsum.
-    
+
     Args:
         exp (Experiment): Experiment object containing experiment metadata.
         servers (Servers): Server configuration objects.
@@ -26,24 +27,34 @@ def get_init_files(exp: Experiment, servers: Servers) -> bool:
     def fetch_piletter():
         if not piletter_path.exists():
             utils.scp(f"{piletter_server.user}@{piletter_server.host}:{piletter_path}", '.')
-    
+            logger.debug(f"{piletter_path} was not found. Retrieved from {piletter_server.host}.")
+
     def fetch_expsum():
         if not expsum_path.exists():
             utils.scp(f"{piletter_server.user}@{piletter_server.host}:{expsum_path}", '.')
-    
+            logger.debug(f"{expsum_path} was not found. Retrieved from {piletter_server.host}.")
+
     def fetch_vix_or_vox():
         ccs_server = servers['ccs']
         base_path = Path(str(ccs_server.path).format(expname=eEVNname))
         remote_host = f"{ccs_server.user}@{ccs_server.host}"
         # Try .vox first, fallback to .vix
+        if Path(f"{exp.expname.upper()}.vix").exists():
+            logger.debug(f"{exp.expname.upper()}.vix already exists.")
+            return
+
         for ext in ['vox', 'vix']:
             if (file_path := base_path / f"{eEVNname.lower()}.{ext}").exists():
-                break
+                file_path.symlink_to(f"{exp.expname.upper()}.vix")
+                logger.debug(f"Symlink {file_path} -> {exp.expname.upper()}.vix created.")
+                return
 
             if utils.remote_file_exists(remote_host, file_path):
                 utils.scp(f"{remote_host}:{file_path}", '.')
-                break
-    
+                file_path.symlink_to(f"{exp.expname.upper()}.vix")
+                logger.debug(f"{file_path} was not found. Retrieved from {remote_host}.")
+                return
+
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = [
             executor.submit(fetch_piletter),
@@ -52,21 +63,13 @@ def get_init_files(exp: Experiment, servers: Servers) -> bool:
         ]
         for future in futures:
             future.result()
-    
-    for ext in ('vox', 'vix'):
-        if Path(f"{exp.expname.upper()}.vix").exists():
-            break
-
-        if (apath := Path(f"{eEVNname.lower()}.{ext}")).exists():
-            apath.symlink_to(f"{exp.expname.upper()}.vix")
-            break
 
     return all([piletter_path.exists(), expsum_path.exists(), Path(f"{exp.expname.upper()}.vix").exists()])
 
 
-def get_vlbeer_files(expname: str, obsdate: dt.date, server: Server) -> bool:
+def get_vlbeer_sched_files(expname: str, obsdate: dt.date, server: Server) -> bool:
     """Retrieves the .key and .sum observing files from vlbeer.
-    
+
     Args:
         expname (str): Experiment name.
         obsdate (datetime.date): Observation date.
@@ -76,19 +79,22 @@ def get_vlbeer_files(expname: str, obsdate: dt.date, server: Server) -> bool:
         bool: True if the files were retrieved successfully, False otherwise.
     """
     files = [Path(f"{expname.lower()}.key"), Path(f"{expname.lower()}.sum")]
-    
+
     def fetch_file(a_file: Path):
         try:
             utils.scp(f"{server.user}@{server.host}:{Path(str(server.path).format(obsdate=obsdate)) / a_file}",
                             ".", timeout=120)
+            logger.debug("Retrieved {a_file.name} from vlbeer")
         except subprocess.TimeoutExpired:
-            rprint(f"\n[bold yellow]Could not retrieve {a_file.name} from vlbeer.[/bold yellow]")
+            rprint(f"[bold yellow]Could not retrieve {a_file.name} from vlbeer.[/bold yellow]")
             # Because a zero-sized file will be there
             a_file.unlink(missing_ok=True)
+            logger.warning("Could not retrieve {a_file.name} from vlbeer")
         except ValueError:
-            rprint(f"\n[bold yellow]Could not find {a_file.name} in vlbeer.[/bold yellow]")
+            rprint(f"[bold yellow]Could not find {a_file.name} in vlbeer.[/bold yellow]")
             a_file.unlink(missing_ok=True)
-    
+            logger.warning("Could not retrieve {a_file.name} from vlbeer")
+
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(fetch_file, a_file) for a_file in files]
         for future in futures:
@@ -108,18 +114,18 @@ def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]
 
         Each of the extra columns will have the experiment name in the first column in a different line,
         followed again by the observing epoch.
-        
+
         Args:
             expname (str): Experiment name to search for.
             server (Server): Server object with MASTER_PROJECTS.LIS location.
-        
+
         Returns:
             tuple[str, str | None]:
                 - The observing epoch of the experiment (YYMMDD format).
                 - The e-EVN name if it is an e-EVN experiment, None otherwise.
         """
-        process = subprocess.Popen(["ssh", f"{server.user}@{server.host}", f"grep {expname} {server.path}"], shell=False, 
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(["ssh", f"{server.user}@{server.host}", f"grep {expname} {server.path}"],
+                                   shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output = process.communicate()[0].decode('utf-8')
         if process.returncode != 0:
             raise ValueError(f"Errorcode {process.returncode} when reading MASTER_PROJECTS.LIS."
@@ -150,7 +156,7 @@ def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]
             obsdate = expline[1].strip()[2:]
         else:
             raise ValueError(f"{expname} not found in (ccs) MASTER_PROJECTS.LIS or server not reachable.")
-        
+
         return obsdate, eEVNname
 
 
@@ -166,7 +172,7 @@ def get_jexp_info(expname: str, server: Server) -> dict[str, str | None]:
         dict[str, str | None]: Dictionary containing all information described in the jexp file.
     """
     temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.jex')
-    utils.scp(f"{server.user}@{server.host}:" + str(server.path / f"{expname.lower()}.jex"), 
+    utils.scp(f"{server.user}@{server.host}:" + str(server.path / f"{expname.lower()}.jex"),
                     temp_file.name)
     with open(temp_file.name, 'r') as f:
         jexp_content = f.read()
@@ -176,11 +182,11 @@ def get_jexp_info(expname: str, server: Server) -> dict[str, str | None]:
         line = line.strip()
         if not line or line.startswith('#'):
             continue
-    
+
         # Remove trailing semicolon if present
         if line.endswith(';'):
             line = line[:-1]
-    
+
         # Split by '=' to get key-value pairs
         if '=' in line:
             key, value = line.split('=', 1)
