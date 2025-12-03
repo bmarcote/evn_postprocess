@@ -27,7 +27,7 @@ class Task(object):
     command: str
     doc: str
     done: bool = False
- 
+
 
 _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
                         "Creates the directory structure to post-process the experiment. "
@@ -60,7 +60,7 @@ _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
 
 def create_folder_structure() -> experiment.Dirs:
     """Creates the folder structure required for post-processing.
-    
+
     Returns:
         Iterable[Path]: List of created folders.
     """
@@ -69,19 +69,22 @@ def create_folder_structure() -> experiment.Dirs:
                                        'pipeline': "pipeline", 'pipe_in': "pipeline/in", 'pipe_out': "pipeline/out",
                                        'pipe_temp': "pipeline/temp"}.items()}
     for folder in folders.values():
-        Path(folder).mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Created folder {folder}")
-    
-    return experiment.Dirs(**folders)
+        if not folder.exists():
+            Path(folder).mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Created folder {folder}")
+        else:
+            logger.debug(f"Folder {folder} already exists. Skipped creation.")
+
+        return experiment.Dirs(**folders)
 
 
 def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
     """Initializes an experiment object with all the relevant metadata, obtained from MASTER_PROJECTS.LIS.
-    
+
     Args:
         expname (str): Experiment name.
         supsci (str): Support scientist name assigned to this experiment.
-        
+
     Returns:
         bool: True if experiment was initialized successfully.
     """
@@ -92,7 +95,7 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
         rprint("[red]Expected to be found at ~jops/.config/evn/computers.toml, "
                "or in your local .config directory.[/red]")
         sys.exit(1)
-        
+
     if experiment.Experiment.exists(expname):
         logger.debug(f"Recovering previously-stored experiment {expname} from file")
         return experiment.Experiment.load(expname)
@@ -105,7 +108,7 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
         rprint("[red]Run the program from the experiment folder in /data/exp or use --expname[/red]")
         rprint("[red]Or at least it was not found in MASTER_PROJECTS.LIS[/red]")
         sys.exit(1)
-    
+
     exp = experiment.Experiment(expname, dt.strptime(obsdate, "%y%m%d").date(), supsci,
                                 create_folder_structure(), eEVNname)
     try:
@@ -114,7 +117,8 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
         logger.error("Could not retrieve init files from this experiment (vox/vix, piletter, or expsum)")
         sys.exit(1)
 
-    io.get_vlbeer_files(exp.expname if exp.eEVNname is None else exp.eEVNname, exp.obsdate, servers['vlbeer'])
+    io.get_vlbeer_sched_files(exp.expname if exp.eEVNname is None else exp.eEVNname,
+                              exp.obsdate, servers['vlbeer'])
     exp.get_info_from_vex()
     jexp_info = io.get_jexp_info(exp.expname, servers['jexp'])
     assert jexp_info['piname'] is not None, "piname is None"
@@ -136,24 +140,24 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
                 src_type = experiment.SourceType.fringefinder
             case _:
                 src_type = experiment.SourceType.other
-        
+
         exp.sources[src_name].type = src_type
         exp.sources[src_name].protected = src_protected.strip() == 'X'
 
     # TODO: implement this one!
     # io.get_station_feedback_info(exp.expname, servers['station_feedback'])
-    
+
     exp.store()
     return exp
 
 
 def retrieve_lisfiles(exp: experiment.Experiment) -> bool:
     """Retrieves and processes .lis files from ccs.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object.
         server (experiment.Server): Server object with ccs connection information.
-    
+
     Returns:
         bool: True if lis files were retrieved and processed successfully.
     """
@@ -166,10 +170,10 @@ def retrieve_lisfiles(exp: experiment.Experiment) -> bool:
 
 def check_lisfiles(exp: experiment.Experiment) -> bool:
     """Checks and sets up correlator passes from .lis files.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object with correlator passes.
-    
+
     Returns:
         bool: True if all lis files are valid.
     """
@@ -183,10 +187,10 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
 
 def create_msfile(exp: experiment.Experiment) -> bool:
     """Creates MS files from .lis files using j2ms2.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object.
-    
+
     Returns:
         bool: True if MS files were created successfully.
     """
@@ -196,17 +200,17 @@ def create_msfile(exp: experiment.Experiment) -> bool:
     if all(p.msfile.exists() for p in exp.correlator_passes):
         logger.debug("MS files already exist. Skipping creation.")
         return True
-    
+
     return process.getdata(exp) & process.j2ms2(exp) & process.update_ms_expname(exp) & process.get_metadata_from_ms(exp) & process.print_exp(exp, display_in_terminal=False)
 
 
 def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) -> bool:
     """Creates standardplots from MS files.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object.
         do_weights (bool): Whether to include weight plots. Default True.
-    
+
     Returns:
         bool: True if standardplots were created successfully.
     """
@@ -216,26 +220,26 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
 
 def msops(exp: experiment.Experiment) -> bool:
     """Applies MS operations including weight flagging, polswap, and 1-bit scaling.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object.
-    
+
     Returns:
         bool: True if all MS operations completed successfully.
     """
     if all(Path().glob(f"{p.fitsidifile}*") for p in exp.correlator_passes):
         logger.debug("FITS IDI files already exist. Skipping creation.")
         return True
-    
+
     return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) & process.tconvert(exp)
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
     """Handles PolConvert if needed.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object.
-    
+
     Returns:
         bool: True if PolConvert completed successfully, False if manual intervention needed.
     """
@@ -254,16 +258,16 @@ def polconvert(exp: experiment.Experiment) -> bool:
     if not result:
         rprint("[red]PolConvert doesn't look to have reached a good solution. Try to run it manually[/red]")
         sys.exit(1)
-    
+
     return process.post_post_polconvert(exp)
 
 
 def msops_post(exp: experiment.Experiment) -> bool:
     """Applies MS operations including weight flagging, polswap, and 1-bit scaling.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object.
-    
+
     Returns:
         bool: True if all MS operations completed successfully.
     """
@@ -272,7 +276,7 @@ def msops_post(exp: experiment.Experiment) -> bool:
 
 def antfiles(exp: experiment.Experiment) -> bool:
     """Retrieves antenna files from vlbeer for pipeline processing.
-    
+
     Args:
         expobj_file: Path to experiment JSON file
     """
@@ -287,7 +291,7 @@ def antfiles(exp: experiment.Experiment) -> bool:
             logger.error("uvflg creation needs manual intervention.")
             rprint("[bold red]STOPPED PROCESS:[/bold red] [red]uvflg creation needs manual intervention.[/red]")
             return False
-    
+
         for afile in Path(exp.dirs.pipe_temp).glob("*.antab"):
             shutil.copy(afile, exp.dirs.pipe_in / afile.name)
 
@@ -311,7 +315,7 @@ def antfiles(exp: experiment.Experiment) -> bool:
 
 def run_pipeline(exp: experiment.Experiment) -> bool:
     """Prepares input files for EVN Pipeline.
-    
+
     Args:
         expobj_file: Path to experiment JSON file
     """
@@ -320,7 +324,7 @@ def run_pipeline(exp: experiment.Experiment) -> bool:
 
 def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
     """Creates diagnostic files after pipeline completion.
-    
+
     Args:
         expobj_file: Path to experiment JSON file
     """
@@ -329,7 +333,7 @@ def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
 
 def pre_archive(exp: experiment.Experiment) -> bool:
     """Appends Tsys/GC information to FITS-IDI files.
-    
+
     Args:
         expobj_file: Path to experiment JSON file
     """
@@ -338,7 +342,7 @@ def pre_archive(exp: experiment.Experiment) -> bool:
 
 def archive(exp: experiment.Experiment) -> bool:
     """Archives experiment files to the EVN archive.
-    
+
     Args:
         expobj_file: Path to experiment JSON file
     """
@@ -352,7 +356,7 @@ def list_tasks(exp: experiment.Experiment | None = None, print_docs: bool = Fals
     Args
         exp : experiment.Experiment | None
             The experiment associatd to this post-processing. If not provided, it will just list the general tasks.
-        print_docs : bool = True 
+        print_docs : bool = True
             In addition to list the tasks, it will also print the documentation associated to each one.
     """
     rprint("\n\n[bold]Tasks to be executed in post-processing:[/bold]")
@@ -379,7 +383,7 @@ def run_isolated_task(task_name: str, expname: str | None = None):
         rprint(f"[bold red]Could not find the stored information for {expname if expname is not None else Path().name}"
                "[/bold red].\n[red]Maybe the experiment was never initialized?[/red]")
         sys.exit(1)
-    
+
     return globals()[task_name](exp)
 
 
@@ -403,6 +407,6 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
         if not globals()[step.command](exp):
             logger.error(f"Step {step.name} failed.")
             return False
-    
+
     rprint(f"[italic green]The processing of {exp.expname} seems to have finalized properly.[/italic green]")
     return True
