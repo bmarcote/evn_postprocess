@@ -96,9 +96,9 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
                "or in your local .config directory.[/red]")
         sys.exit(1)
 
-    if experiment.Experiment.exists(expname):
-        logger.debug(f"Recovering previously-stored experiment {expname} from file")
-        return experiment.Experiment.load(expname)
+    #if experiment.Experiment.exists(expname):
+    #    logger.debug(f"Recovering previously-stored experiment {expname} from file")
+    #    return experiment.Experiment.load(expname)
 
     try:
         obsdate, eEVNname = io.parse_masterprojects(expname, servers['master_projects'])
@@ -162,7 +162,7 @@ def retrieve_lisfiles(exp: experiment.Experiment) -> bool:
         bool: True if lis files were retrieved and processed successfully.
     """
     if Path().glob(f"{exp.expname.lower()}*.lis"):
-        logger.debug("Lis files already exist. Skipping retrieval.")
+        logger.debug(".lis files already exist. Skipping retrieval.")
         return True
 
     return lisfiles.create_lis_files(exp) & lisfiles.get_lis_files(exp) & lisfiles.get_passes_from_lisfiles(exp)
@@ -177,6 +177,10 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if all lis files are valid.
     """
+    if all(p.msfile.exists() for p in exp.correlator_passes):
+        logger.debug("MS files already exist. Skipping checklis.")
+        return True
+
     if not lisfiles.check_lisfiles(exp):
         # TODO: In case of e-EVN runs, it needs to do it!
         logger.error("Issues found in .lis files. Please check the files.")
@@ -197,11 +201,18 @@ def create_msfile(exp: experiment.Experiment) -> bool:
     # Re-doing again in case the lis files were updated externally
     lisfiles.get_passes_from_lisfiles(exp)
 
-    if all(p.msfile.exists() for p in exp.correlator_passes):
-        logger.debug("MS files already exist. Skipping creation.")
-        return True
+    if not all(p.msfile.exists() for p in exp.correlator_passes):
+        if not process.getdata(exp):
+            return False
 
-    return process.getdata(exp) & process.j2ms2(exp) & process.update_ms_expname(exp) & process.get_metadata_from_ms(exp) & process.print_exp(exp, display_in_terminal=False)
+        if not process.j2ms2(exp):
+            return False 
+
+        process.update_ms_expname(exp)
+    else:
+        logger.debug("MS files already exist. Skipping creation.")
+
+    return process.get_metadata_from_ms(exp)
 
 
 def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) -> bool:
@@ -346,11 +357,11 @@ def archive(exp: experiment.Experiment) -> bool:
     Args:
         expobj_file: Path to experiment JSON file
     """
-    return process.set_credentials(exp) & process.protect_experiment_files(exp) & \
+    return process.set_credentials(exp) & process.protect_experiment_files(exp) & process.print_exp(exp, display_in_terminal=False) & \
            process.archive(exp) & process.send_letters(exp) & process.antenna_feedback(exp) & process.nme_report(exp)
 
 
-def list_tasks(exp: experiment.Experiment | None = None, print_docs: bool = False):
+def list_tasks(expname: str, print_docs: bool = False):
     """Lists all tasks avaliable to be executed.
 
     Args
@@ -359,8 +370,9 @@ def list_tasks(exp: experiment.Experiment | None = None, print_docs: bool = Fals
         print_docs : bool = True
             In addition to list the tasks, it will also print the documentation associated to each one.
     """
-    rprint("\n\n[bold]Tasks to be executed in post-processing:[/bold]")
-    rprint('\n'.join([(f"{'🟢' if s.done else '🔴'}" if exp else " ") + f"[bold green]{s.name}[/bold green]" + \
+    exp = experiment.Experiment.load(expname)
+    rprint(f"\n\n[bold]Post-processing of {expname}:[/bold]")
+    rprint('\n'.join([(f"{'🟢' if s.done else '🔴'}" if exp else " ") + f" [bold {'green' if s.done else 'red'}]{s.name}[/bold {'green' if s.done else 'red'}]\n" + \
                       f"[dim]{s.doc}[/dim]" if print_docs else "" \
                       for s in (exp.steps if exp else _WORKFLOW_STEPS)]))
 
@@ -390,12 +402,13 @@ def run_isolated_task(task_name: str, expname: str | None = None):
 def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool = False):
     # TODO:  OPTION 'from' and 'to' steps.
 
-    logger.add(exp.dirs['log'] / 'post_process.log', colorize=True,
-               level="DEBUG" if debug else "INFO", backtrace=True)
+    logger.add(exp.dirs.logs / 'post_process.log', colorize=True,
+               level="DEBUG" if debug else "INFO", backtrace=debug)
 
-    logger.info(f"\n\n\n{'#'*37}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
-                f"# Running on {dt.today().strftime('%d %b %Y %H:%M')} by {exp.supsci}.\n"
-                f"Using evn_postprocess version {version('evn_postprocess')}.")
+    # TODO: put this in the commands.log file
+    #logger.info(f"\n\n\n{'#'*37}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
+    #            f"# Running on {dt.today().strftime('%d %b %Y %H:%M')} by {exp.supsci}.\n"
+    #            f"Using evn_postprocess version {version('evn_postprocess')}.")
 
     if not archive:
         logger.debug("The data will not be stored in the EVN archive.")

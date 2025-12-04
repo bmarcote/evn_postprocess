@@ -22,17 +22,22 @@ def get_init_files(exp: Experiment, servers: Servers) -> bool:
     """
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
     piletter_server = servers['piletters']
-    piletter_path = piletter_server.path / f"{exp.expname.lower()}.piletter"
-    expsum_path = piletter_server.path / f"{exp.expname.lower()}.expsum"
+    piletter_path = Path(f"{exp.expname.lower()}.piletter")
+    expsum_path = Path(f"{exp.expname.lower()}.expsum")
     def fetch_piletter():
         if not piletter_path.exists():
-            utils.scp(f"{piletter_server.user}@{piletter_server.host}:{piletter_path}", '.')
-            logger.debug(f"{piletter_path} was not found. Retrieved from {piletter_server.host}.")
+            utils.scp(f"{piletter_server.user}@{piletter_server.host}:{piletter_server.path / piletter_path}", '.')
+            logger.debug(f"{piletter_path.name} was not found. Retrieved from {piletter_server.host}.")
+        else:
+            logger.debug(f"{piletter_path.name} already exists")
+
 
     def fetch_expsum():
         if not expsum_path.exists():
-            utils.scp(f"{piletter_server.user}@{piletter_server.host}:{expsum_path}", '.')
-            logger.debug(f"{expsum_path} was not found. Retrieved from {piletter_server.host}.")
+            utils.scp(f"{piletter_server.user}@{piletter_server.host}:{piletter_server.path / expsum_path}", '.')
+            logger.debug(f"{expsum_path.name} was not found. Retrieved from {piletter_server.host}.")
+        else:
+            logger.debug(f"{expsum_path.name} already exists")
 
     def fetch_vix_or_vox():
         ccs_server = servers['ccs']
@@ -81,10 +86,15 @@ def get_vlbeer_sched_files(expname: str, obsdate: dt.date, server: Server) -> bo
     files = [Path(f"{expname.lower()}.key"), Path(f"{expname.lower()}.sum")]
 
     def fetch_file(a_file: Path):
+        if a_file.exists():
+            logger.debug(f"{a_file.name} already exists.")
+            return
+
         try:
-            utils.scp(f"{server.user}@{server.host}:{Path(str(server.path).format(obsdate=obsdate)) / a_file}",
+            s_formatted = eval(f"f'{server.path}'", {'obsdate': obsdate})
+            utils.scp(f"{server.user}@{server.host}:{Path(s_formatted) / a_file}",
                             ".", timeout=120)
-            logger.debug("Retrieved {a_file.name} from vlbeer")
+            logger.debug(f"Retrieved {a_file.name} from vlbeer")
         except subprocess.TimeoutExpired:
             rprint(f"[bold yellow]Could not retrieve {a_file.name} from vlbeer.[/bold yellow]")
             # Because a zero-sized file will be there
@@ -173,7 +183,7 @@ def get_jexp_info(expname: str, server: Server) -> dict[str, str | None]:
     """
     temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.jex')
     utils.scp(f"{server.user}@{server.host}:" + str(server.path / f"{expname.lower()}.jex"),
-                    temp_file.name)
+                    temp_file.name, capture_output=True)
     with open(temp_file.name, 'r') as f:
         jexp_content = f.read()
 

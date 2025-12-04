@@ -322,7 +322,6 @@ class Antenna:
     logfsfile: bool = False
     antabfsfile: bool = False
     opacity: bool = False  # if data have opacity correction in the ANTAB file
-    weights: tuple = ()
 
 
 class Antennas(list[Antenna]):
@@ -373,13 +372,10 @@ class Antennas(list[Antenna]):
         return [a.name for a in self if a.opacity]
 
     def __getitem__(self, key: str | int) -> Antenna:
-        if isinstance(key, str):
-            return self[self.names.index(key)]
-        else:
-            return self[key]
+        return super().__getitem__(self.names.index(key) if isinstance(key, str) else key)
 
     def __contains__(self, key: str | Antenna) -> bool:
-        return key in self.names if isinstance(key, str) else key in self
+        return key in self.names if isinstance(key, str) else super().__contains__(key)
 
     def __str__(self) -> str:
         s = ""
@@ -485,6 +481,15 @@ class Experiment:
         self.spectral_line = spectral_line
         self.correlator_passes = correlator_passes if correlator_passes else []
         self._log_file: Path = self.dirs.logs / 'processing.log'
+        self._timerange: list[dt.datetime] | None = None
+
+    @property
+    def timerange(self) -> list[dt.datetime] | None:
+        return self._timerange
+
+    @timerange.setter
+    def timerange(self, new_time: list[dt.datetime]):
+        self._timerange = new_time.copy()
 
     def write_log_file(self):
         # Writes down some snippets for jplotter in case the standard one fails.
@@ -537,8 +542,8 @@ class Experiment:
 
         for scanno, scan in vex_data['SCHED'].items():
             self.scans.append(Scan(scanno, starttime=dt.datetime.strptime(scan['start'], '%Yy%jd%Hh%Mm%Ss'),
-                                   duration_s=max([int(s[2].replace('sec', '')) for s in scan['station']]),
-                                   source=scan['source'], stations_scheduled=[s[0] for s in scan['station']]))
+                                   duration_s=max([int(s[2].replace('sec', '')) for ss, s in scan.items() if ss == 'station']),
+                                   source=scan['source'], stations_scheduled=[s[0] for ss, s in scan.items() if ss == 'station']))
 
 
     def get_setup_from_ms(self):
@@ -733,16 +738,17 @@ class Experiment:
         """
         print('\n\n')
         rprint(f"[bold red]Experiment {self.expname.upper()}[/bold red].", sep="\n\n")
-        if None not in self.timerange:
-            rprint(f"[dim]Obs. date[/dim]: {self.obsdatetime.strftime('%d/%m/%Y')} "
+        if self.timerange:
+            rprint(f"[dim]Obs. date[/dim]: {self.obsdate.strftime('%d/%m/%Y')} "
                    f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC")
         else:
-            rprint(f"[dim]Obs. date[/dim]: {self.obsdatetime.strftime('%d/%m/%Y')}")
+            rprint(f"[dim]Obs. date[/dim]: {self.obsdate.strftime('%d/%m/%Y')}")
 
         if self.eEVNname is not None:
             rprint(f"[dim]e-EVN run[/dim]: {self.eEVNname}")
 
-        rprint(f"[dim]PI[/dim]: {self.piname} ({self.email})")
+        for a_pi in self.pi:
+            rprint(f"[dim]PI[/dim]: {a_pi.name} ({a_pi.email})")
         rprint(f"[dim]Password[/dim]: {self.credentials.password}")
         rprint(f"[dim]Sup. Sci[/dim]: {self.supsci}")
         rprint(f"[dim]Last run step[/dim]: {self.last_step}")
@@ -754,10 +760,10 @@ class Experiment:
                 rprint(f"[bold]Correlator pass #{i}[/bold]")
 
             if a_pass.freqsetup is not None:
-                rprint(f"Frequency: {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
-                       f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz")
-                rprint(f"{a_pass.freqsetup.n_subbands} x " \
-                       f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands")
+                rprint(f"Frequency: {a_pass.freqsetup.frequency.to(u.GHz):0.04}")
+                rprint(f"Bandwidth: {a_pass.freqsetup.bandwidth.to(u.MHz):0.04}")
+                rprint(f"{a_pass.freqsetup.subbands} x " \
+                       f"{(a_pass.freqsetup.bandwidth/a_pass.freqsetup.subbands).to(u.MHz).value}-MHz subbands")
                 rprint(f"{a_pass.freqsetup.channels} channels each.")
                 rprint(f"lisfile: [italic]{a_pass.lisfile}[/italic]", sep="\n\n")
 
@@ -810,27 +816,22 @@ class Experiment:
                                                                f"{self.expname.upper()}")))
             s_file += [f"# EVN Post-processing of {self.expname.upper()}\n"]
             s += f"{term.normal}\n\n{term.normal}"
-            s += term.bright_black('Obs date: ') + self.obsdatetime.strftime('%d/%m/%Y')
-            if None not in self.timerange:
+            s += term.bright_black('Obs date: ') + self.obsdate.strftime('%d/%m/%Y')
+            if self.timerange is not None:
                 s += f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"
-                s_file += ['Obs date: ' + self.obsdatetime.strftime('%d/%m/%Y') + \
+                s_file += ['Obs date: ' + self.obsdate.strftime('%d/%m/%Y') + \
                            f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} " \
                            "UTC\n"]
             else:
-                s_file += ['Obs date: ' + self.obsdatetime.strftime('%d/%m/%Y')]
+                s_file += ['Obs date: ' + self.obsdate.strftime('%d/%m/%Y')]
 
             if self.eEVNname is not None:
                 s += term.bright_black('From e-EVN run: ') + self.eEVNname + '\n'
                 s_file += [f"From e-EVN run: {self.eEVNname}\n"]
 
-            if isinstance(self.piname, list):
-                for a_piname,an_email,n in zip(self.piname, self.email,
-                                               ('', *['co-']*(len(self.piname)-1))):
-                    s += term.bright_black(n+'P.I.: ') + f"{a_piname.capitalize()} ({an_email})\n"
-                    s_file += [f"P.I.: {a_piname.capitalize()} ({an_email})"]
-            else:
-                s += term.bright_black('P.I.: ') + f"{self.piname.capitalize()} ({self.email})\n"
-                s_file += [f"P.I.: {self.piname.capitalize()} ({self.email})"]
+            for i, a_pi in enumerate(self.pi):
+                s += term.bright_black('P.I.: ' if i == 0 else 'co-PI:') + f"{a_pi.name.capitalize()} ({a_pi.email})\n"
+                s_file += [f"{'P.I.' if i == 0 else 'co-PI'}: {a_pi.name.capitalize()} ({a_pi.email})"]
 
             s += term.bright_black('Sup. Sci: ') + f"{self.supsci.capitalize()}\n"
             s_file += [f"Sup. Sci: {self.supsci.capitalize()}\n"]
@@ -840,15 +841,20 @@ class Experiment:
             s += term.bright_black('EVN Archive Link: ') + \
                  f"{term.link(self.archive_page, self.archive_page)}\n"
             s_file += [f"EVN Archive Link: {self.archive_page}\n"]
-            s += term.bright_black('Protection Link: ') +\
-                 term.link('https://archive.jive.eu/scripts/pipe/admin.php',
-                           'https://archive.jive.eu/scripts/pipe/admin.php') + '\n'
-            s += term.bright_black('Last run step: ') + f"{self.last_step}\n\n"
+            #s += term.bright_black('Protection Link: ') +\
+                    #     term.link('https://archive.jive.eu/scripts/pipe/admin.php',
+                    #       'https://archive.jive.eu/scripts/pipe/admin.php') + '\n'
+            # TODO: write this too
+            #s += term.bright_black('Last run step: ') + f"{self.last_step}\n\n"
             s += term.bold_green('CREDENTIALS\n')
-            s += term.bright_black('Username: ') + f"{self.credentials.username}\n"
-            s += term.bright_black('Password: ') + f"{self.credentials.password}\n\n"
-            s_file += ["## CREDENTIALS", f"Username: {self.credentials.username}",
-                       f"Password: {self.credentials.password}\n"]
+            if self.credentials:
+                s += term.bright_black('Username: ') + f"{self.credentials.username}\n"
+                s += term.bright_black('Password: ') + f"{self.credentials.password}\n\n"
+                s_file += ["## CREDENTIALS", f"Username: {self.credentials.username}",
+                           f"Password: {self.credentials.password}\n"]
+            else:
+                s += "No credentials set."
+                s_file += ["## CREDENTIALS", "No credentials set.\n"]
 
             s += term.bold_green('SETUP\n')
             s_file += ['## SETUP']
@@ -866,16 +872,15 @@ class Experiment:
 
                 if a_pass.freqsetup is not None:
                     s += term.bright_black('Frequency: ') + \
-                         f"{a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
-                         f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz.\n"
-                    s_file += [f"Frequency: {a_pass.freqsetup.frequencies[0,0]/1e9:0.04}-" \
-                               f"{a_pass.freqsetup.frequencies[-1,-1]/1e9:0.04} GHz."]
+                         f"{a_pass.freqsetup.frequency.to(u.GHz):0.04}\n"
+                    s_file += [f"Frequency: {a_pass.freqsetup.frequency.to(u.GHz):0.04}"]
                     s += term.bright_black('Bandwidth: ') + \
-                         f"{a_pass.freqsetup.n_subbands} x " \
-                         f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. " \
+                         f"{a_pass.freqsetup.bandwidth.to(u.MHz):0.04}.\n" + \
+                         f"{a_pass.freqsetup.subbands} x " \
+                         f"{(a_pass.freqsetup.bandwidth / a_pass.freqsetup.subbands).to(u.MHz).value}-MHz subbands. " \
                          f"{a_pass.freqsetup.channels} channels each.\n"
-                    s_file += [f"Bandwidth: {a_pass.freqsetup.n_subbands} x " \
-                               f"{a_pass.freqsetup.bandwidths.to(u.MHz).value}-MHz subbands. " \
+                    s_file += [f"Bandwidth: {a_pass.freqsetup.subbands} x " \
+                               f"{(a_pass.freqsetup.bandwidth / a_pass.freqsetup.subbands).to(u.MHz).value}-MHz subbands. " \
                                f"{a_pass.freqsetup.channels} channels each."]
                 else:
                     s += term.bright_black('Frequency:') + ' -- will get the info at MS time --\n'
@@ -903,9 +908,6 @@ class Experiment:
             s += term.bright_black(f"Sources with {term.red('*')} denote the " \
                                    "ones that need to be protected.\n")
             s_file += ["Sources with * denote the ones that need to be protected."]
-            s += term.bright_black('Sources to standardplot: ') + \
-                 f"{', '.join(self.sources_stdplot)}\n\n"
-            s_file += [f"Sources to standardplot: {', '.join(self.sources_stdplot)}\n"]
             s += term.bold_green('ANTENNAS\n')
             s_file += ['## ANTENNAS']
             antennas_observing = [ant.name for ant in self.antennas if ant.observed]
