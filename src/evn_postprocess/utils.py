@@ -6,7 +6,7 @@ from typing import Optional, Union
 from rich import print as rprint
 import astropy.units as u
 
-def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = None) -> bool:
+def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = None, **kwargs) -> bool:
     """Does a scp from originpath to destpath. If the process returns an error,
     then it raises ValueError.
 
@@ -22,8 +22,12 @@ def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = No
         ValueError: If the scp command returns a non-zero exit code.
     """
     rprint(f"[bold]> scp {originpath} {destpath}[/bold]")
-    process = subprocess.run(["scp", originpath, destpath], shell=False,
-                              stdout=None, stderr=subprocess.PIPE, timeout=timeout)
+    # CHANGED FOR THE JEX CALL. LIKELY PUT THIS BACK AND RUN DIRECTLY .RUN IN JEXP
+    #for key, value in zip(('shell', 'stdout', 'stderr'), (False, None, subprocess.PIPE)):
+    #    if key not in kwargs:
+    #        kwargs[key] = value
+
+    process = subprocess.run(["scp", originpath, destpath], timeout=timeout, **kwargs)
     if process.returncode != 0:
         raise ValueError(f"ERROR: could not retrieve {destpath} from {originpath}.")
 

@@ -286,11 +286,11 @@ class Antennas(list):
 @dataclass
 class Scan:
     """Defines a scan in the experiment."""
-    scanno: str
+    scanno: int
     starttime: dt.datetime
     duration_s: int
     source: str
-    stations: list[str]
+    stations: tuple[str]
 
 
 class Scans(list[Scan]):
@@ -427,13 +427,15 @@ class Ms:
             
             with misc.table(msdata.getkeyword('OBSERVATION')) as obs_table:
                 time_range = obs_table.getcol('TIME_RANGE')
+                # This is to avoid some corner cases where the shape is (2,1) or (1,2)
+                indx = time_range.shape[0]
                 origin = dt.datetime(1858, 11, 17, 0, 0, 2)
-                starttime = origin + dt.timedelta(seconds=float(time_range[0]))
-                endtime = origin + dt.timedelta(seconds=float(time_range[1]))
+                starttime = origin + dt.timedelta(seconds=float(time_range[0, 0]))
+                endtime = origin + dt.timedelta(seconds=float(time_range[indx-1, indx % 2]))
                 self._obsepoch = ObsEpoch(starttime=starttime, endtime=endtime)
                 self._projectname = obs_table.getcol('PROJECT')[0]  # should always be one-element list
             
-    def run_stats(self):
+    def run_stats(self, chunkert: int = 100):
         """Runs basic statistics over the MS data.
 
         Computes:
@@ -452,10 +454,10 @@ class Ms:
         scan_antennas: dict[int, set[str]] = defaultdict(set)
         bins_edges = np.array([0.0, 1e-3, 0.2, 0.4, 0.6, 0.8, 0.99, np.inf])
 
-        with pt.table(self.msfile, readonly=True, ack=False) as msdata:
+        with misc.table(self.msfile, readonly=True, ack=False) as msdata:
             with progress.Progress() as progress_bar:
                 task = progress_bar.add_task("[yellow]Reading MS...", total=len(msdata))
-                for (start, nrow) in misc.chunkert(0, len(msdata), 100):
+                for (start, nrow) in misc.chunkert(0, len(msdata), chunkert):
                     ants1 = msdata.getcol('ANTENNA1', startrow=start, nrow=nrow)
                     ants2 = msdata.getcol('ANTENNA2', startrow=start, nrow=nrow)
                     spws = msdata.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
@@ -467,7 +469,7 @@ class Ms:
                     for idx in auto_indices:
                         ant_idx = ants1[idx]
                         ant_name = ant_names[ant_idx]
-                        scan_antennas[scans[idx]].add(ant_name)
+                        scan_antennas[int(scans[idx])].add(ant_name)
                         antenna_spws[ant_name].add(spws[idx])
 
                     weights_flat = weights.reshape(nrow, -1)

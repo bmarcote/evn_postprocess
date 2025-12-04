@@ -98,11 +98,8 @@ def getdata(exp: experiment.Experiment) -> bool:
         rprint("[bold yellow]No correlator passes found to fetch[/bold yellow]")
         return True
 
-    with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
-        futures = [executor.submit(_fetch_pass, a_pass) for a_pass in exp.correlator_passes]
-        for fut in futures:
-            # Propagate any exception raised in the worker thread
-            fut.result()
+    with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as pool:
+        results = pool.map(_fetch_pass, exp.correlator_passes)
 
     return True
 
@@ -130,17 +127,12 @@ def j2ms2(exp: experiment.Experiment) -> bool:
     def _j2ms2_correlator_pass(args: tuple[experiment.Experiment, experiment.CorrelatorPass]) -> bool:
         exp, a_pass = args
         if not os.path.isdir(a_pass.msfile):
-            if exp.eEVNname is None:
-                utils.shell_command("j2ms2", ["-v", str(a_pass.lisfile),
-                                              "fo:nosquash_source_table"],
-                                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
-            else:
-                utils.shell_command("j2ms2", ["-v", a_pass.lisfile.name],
-                                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+            utils.shell_command("j2ms2", ["-v", str(a_pass.lisfile)] + ([] if exp.eEVNname else ["fo:nosquash_source_table"]),
+                                shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
 
         return True
 
-    with ProcessPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         results = pool.map(_j2ms2_correlator_pass, product([exp,], exp.correlator_passes))
 
     return all(results)
@@ -177,7 +169,11 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
     """
     def _get_ms_metadata(exp: experiment.Experiment, a_pass: experiment.CorrelatorPass):
         ms = mstools.Ms(a_pass.msfile, runstats=True)
+        rprint(f"Antennas in the MS: {ms.antennas}")
         for ant in ms.antennas:
+            if ant.name not in a_pass.antennas:
+                a_pass.antennas.append(ant)
+
             a_pass.antennas[ant.name].observed = ant.observed
             a_pass.antennas[ant.name].subbands = ant.subbands
             a_pass.antennas[ant.name].weights = ant.weights
@@ -185,9 +181,11 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
         a_pass.freqsetup = experiment.Subbands(subbands=ms.freqsetup.nspw, channels=ms.freqsetup.nchan,
                                                frequency=ms.freqsetup.meanfreq, bandwidth=ms.freqsetup.bandwidth,
                                                polarizations=ms.freqsetup.polarizations)
-        for scanno in ms.scans:
-            scannumbers = [int(s.scanno.replace('No', '')) for s in a_pass.scans]
-            a_pass.scans[scannumbers.index(scanno)].stations_observed = list(ms.scans[scanno])
+        # TODO: Fix the ms.scans
+        #for scanno in ms.scans:
+        #    scannumbers = [int(s.scanno.replace('No', '')) for s in a_pass.scans]
+        #    print(f"SCANNUMBERS: {scannumbers}")
+        #    a_pass.scans[scannumbers.index(scanno)].stations_observed = list(ms.scans[scanno])
         
     def _update_mpc_pass(a_pass: experiment.CorrelatorPass):
             a_pass.antennas = exp.correlator_passes[0].antennas
@@ -234,6 +232,8 @@ def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
                 if exp.refant:
                     refant = exp.refant[0] if len(exp.refant) == 1 else f"'{'|'.join(exp.refant)}'"
                 else:
+                    print(a_pass.antennas)
+                    print(a_pass.antennas.observed)
                     for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
                         if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
                             refant = ant

@@ -169,7 +169,8 @@ def main():
     elif args.subpar == 'info':
         exp.print_blessed(outputfile=None)
     elif args.subpar == 'list':
-        workflow.list_tasks(exp, print_docs=True)
+        workflow.list_tasks(args.expname.upper() if args.expname is not None \
+                            else experiment.retrieve_expname(), print_docs=True)
     elif args.subpar == 'exec':
         workflow.run_isolated_task(args.task_name, args.expname.upper() if args.expname is not None \
                                    else experiment.retrieve_expname())
