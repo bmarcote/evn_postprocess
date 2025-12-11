@@ -75,7 +75,7 @@ def create_folder_structure() -> experiment.Dirs:
         else:
             logger.debug(f"Folder {folder} already exists. Skipped creation.")
 
-        return experiment.Dirs(**folders)
+    return experiment.Dirs(**folders)
 
 
 def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:

@@ -188,10 +188,16 @@ class Antenna:
             It may be all subbands covered in the observation or a subset of them.
     """
     name: str
+    scheduled: bool = True
     observed: bool = True
     subbands: tuple = ()
     weights: tuple = ()
-
+    polswap: bool = False
+    polconvert: bool = False
+    onebit: bool = False
+    logfsfile: bool = False
+    antabfsfile: bool = False
+    opacity: bool = False  # if data have opacity correction in the ANTAB file
 
 class Antennas(list):
     """Container class for Antenna objects, providing convenient access by name or index."""
