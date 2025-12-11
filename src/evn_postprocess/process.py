@@ -232,14 +232,13 @@ def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
                 if exp.refant:
                     refant = exp.refant[0] if len(exp.refant) == 1 else f"'{'|'.join(exp.refant)}'"
                 else:
-                    print(a_pass.antennas)
-                    print(a_pass.antennas.observed)
                     for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
                         if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
                             refant = ant
                             break
-                    raise ValueError("Couldn't find a good reference antenna for standardplots. "
-                                     "Please specify it manually.")
+
+                        raise ValueError("Couldn't find a good reference antenna for standardplots. "
+                                        "Please specify it manually.")
                 counter += 1
                 if (counter == 1) and do_weights:
                     utils.shell_command("standardplots",
