@@ -432,6 +432,8 @@ class ExperimentJSONEncoder(json.JSONEncoder):
             return float(obj)
         elif isinstance(obj, (Server, PI, Credentials, FlagWeight, Source, Antenna, Scan, Subbands)):
             return {'__type__': obj.__class__.__name__, 'data': asdict(obj)}
+        elif hasattr(obj, '__dataclass_fields__'):
+            return {'__type__': obj.__class__.__name__, 'data': asdict(obj)}
         elif isinstance(obj, Servers):
             return {'__type__': 'Servers', 'data': [asdict(s) for s in obj]}
         elif isinstance(obj, Sources):
@@ -500,6 +502,9 @@ def experiment_json_decoder(dct):
             return Scan(**dct['data'])
         elif obj_type == 'Subbands':
             return Subbands(**dct['data'])
+        elif obj_type == 'Task':
+            from . import workflow
+            return workflow.Task(**dct['data'])
         elif obj_type == 'Servers':
             servers = []
             for s_data in dct['data']:

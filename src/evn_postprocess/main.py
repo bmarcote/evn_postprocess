@@ -154,17 +154,19 @@ def main():
 
     expname = args.expname.upper() if args.expname else experiment.retrieve_expname()
     if not args.dir:
-        cwd = Path(f"/data/exp/{expname}")
+        cwd = Path(eval(f"f'{experiment.retrieve_servers()['eee'].path}'", {'expname': expname}))
     else:
         cwd = Path(args.dir)
 
     if (not args.subpar) or (args.subpar == 'info'):
         cwd.mkdir(exist_ok=True)
         os.chdir(cwd)
-        if Path(f"{expname}.json").exists():
+        if Path(f"{expname.lower()}.json").exists():
             # A previous execution of the post-process has been done
             rprint(f"[bold]Recovering previously-stored information for {expname}[/bold]")
             exp = experiment.Experiment.load(expname)
+            # Just to avoid that the user deleted some folders
+            workflow.create_folder_structure()
         else:
             exp = workflow.initialize_experiment(expname, args.supsci if args.supsci else experiment.retrieve_username())
             if args.j2ms2par is not None:
