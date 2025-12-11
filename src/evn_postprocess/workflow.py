@@ -88,6 +88,7 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
     Returns:
         bool: True if experiment was initialized successfully.
     """
+    logger.debug("Initializing experiment")
     try:
         servers = experiment.retrieve_servers()
     except FileNotFoundError:
