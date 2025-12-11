@@ -10,7 +10,6 @@ import glob
 import copy
 from tkinter import W
 import numpy as np
-import pickle
 import json
 import subprocess
 import datetime as dt
@@ -408,6 +407,140 @@ class Scans(list[Scan]):
     pass
 
 
+class ExperimentJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder for Experiment objects."""
+    def default(self, obj):
+        if isinstance(obj, dt.datetime):
+            return {'__type__': 'datetime', 'value': obj.isoformat()}
+        elif isinstance(obj, dt.date):
+            return {'__type__': 'date', 'value': obj.isoformat()}
+        elif isinstance(obj, Path):
+            return {'__type__': 'Path', 'value': str(obj)}
+        elif isinstance(obj, u.Quantity):
+            return {'__type__': 'Quantity', 'value': obj.value.tolist() if hasattr(obj.value, 'tolist') else obj.value, 'unit': str(obj.unit)}
+        elif isinstance(obj, coord.SkyCoord):
+            return {'__type__': 'SkyCoord', 'ra': obj.ra.deg, 'dec': obj.dec.deg, 'frame': obj.frame.name}
+        elif isinstance(obj, SourceType):
+            return {'__type__': 'SourceType', 'value': obj.value}
+        elif isinstance(obj, mstools.misc.Stokes):
+            return {'__type__': 'Stokes', 'value': obj.value}
+        elif isinstance(obj, np.ndarray):
+            return {'__type__': 'ndarray', 'value': obj.tolist(), 'dtype': str(obj.dtype)}
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, (Server, PI, Credentials, FlagWeight, Source, Antenna, Scan, Subbands)):
+            return {'__type__': obj.__class__.__name__, 'data': asdict(obj)}
+        elif isinstance(obj, Servers):
+            return {'__type__': 'Servers', 'data': [asdict(s) for s in obj]}
+        elif isinstance(obj, Sources):
+            return {'__type__': 'Sources', 'data': [asdict(s) for s in obj._sources]}
+        elif isinstance(obj, Antennas):
+            return {'__type__': 'Antennas', 'data': [asdict(a) for a in obj]}
+        elif isinstance(obj, Scans):
+            return {'__type__': 'Scans', 'data': [asdict(s) for s in obj]}
+        elif isinstance(obj, CorrelatorPass):
+            return {'__type__': 'CorrelatorPass', 'data': {
+                'lisfile': obj.lisfile,
+                'msfile': obj.msfile,
+                'fitsidifile': obj.fitsidifile,
+                'pipeline': obj.pipeline,
+                'scans': obj.scans,
+                'antennas': obj.antennas,
+                'flagged_weights': obj.flagged_weights,
+                'freqsetup': obj.freqsetup
+            }}
+        elif isinstance(obj, Dirs):
+            return {'__type__': 'Dirs', 'data': asdict(obj)}
+        return super().default(obj)
+
+
+def experiment_json_decoder(dct):
+    """Custom JSON decoder for Experiment objects."""
+    if '__type__' in dct:
+        obj_type = dct['__type__']
+        if obj_type == 'datetime':
+            return dt.datetime.fromisoformat(dct['value'])
+        elif obj_type == 'date':
+            return dt.date.fromisoformat(dct['value'])
+        elif obj_type == 'Path':
+            return Path(dct['value'])
+        elif obj_type == 'Quantity':
+            return u.Quantity(dct['value'], unit=dct['unit'])
+        elif obj_type == 'SkyCoord':
+            return coord.SkyCoord(ra=dct['ra']*u.deg, dec=dct['dec']*u.deg, frame=dct['frame'])
+        elif obj_type == 'SourceType':
+            return SourceType(dct['value'])
+        elif obj_type == 'Stokes':
+            return mstools.misc.Stokes(dct['value'])
+        elif obj_type == 'ndarray':
+            return np.array(dct['value'], dtype=dct['dtype'])
+        elif obj_type == 'Server':
+            data = dct['data']
+            data['path'] = Path(data['path']) if isinstance(data['path'], str) else data['path']
+            return Server(**data)
+        elif obj_type == 'PI':
+            return PI(**dct['data'])
+        elif obj_type == 'Credentials':
+            return Credentials(**dct['data'])
+        elif obj_type == 'FlagWeight':
+            return FlagWeight(**dct['data'])
+        elif obj_type == 'Source':
+            data = dct['data']
+            return Source(
+                name=data['name'],
+                coordinates=data['coordinates'],
+                type=data['type'],
+                protected=data['protected']
+            )
+        elif obj_type == 'Antenna':
+            return Antenna(**dct['data'])
+        elif obj_type == 'Scan':
+            return Scan(**dct['data'])
+        elif obj_type == 'Subbands':
+            return Subbands(**dct['data'])
+        elif obj_type == 'Servers':
+            servers = []
+            for s_data in dct['data']:
+                s_data['path'] = Path(s_data['path']) if isinstance(s_data['path'], str) else s_data['path']
+                servers.append(Server(**s_data))
+            return Servers(servers)
+        elif obj_type == 'Sources':
+            sources = []
+            for s_data in dct['data']:
+                sources.append(Source(
+                    name=s_data['name'],
+                    coordinates=s_data['coordinates'],
+                    type=s_data['type'],
+                    protected=s_data['protected']
+                ))
+            return Sources(sources)
+        elif obj_type == 'Antennas':
+            return Antennas([Antenna(**a_data) for a_data in dct['data']])
+        elif obj_type == 'Scans':
+            return Scans([Scan(**s_data) for s_data in dct['data']])
+        elif obj_type == 'CorrelatorPass':
+            data = dct['data']
+            return CorrelatorPass(
+                lisfile=data['lisfile'],
+                msfile=data['msfile'],
+                fitsidifile=data['fitsidifile'],
+                pipeline=data['pipeline'],
+                scans=data.get('scans'),
+                antennas=data.get('antennas'),
+                flagged_weights=data.get('flagged_weights'),
+                freqsetup=data.get('freqsetup')
+            )
+        elif obj_type == 'Dirs':
+            data = dct['data']
+            for key in data:
+                if isinstance(data[key], str):
+                    data[key] = Path(data[key])
+            return Dirs(**data)
+    return dct
+
+
 @dataclass
 class Subbands:
     """Defines the frequency setup of a given observation with the following data:
@@ -702,25 +835,58 @@ class Experiment:
 
 
     def store(self, path: Optional[Path] = None):
-        """Stores the current Experiment into a file in the indicated path. If not provided,
-        it will be '.{expname.lower()}.obj' where exp is the name of the experiment.
+        """Stores the current Experiment into a JSON file in the indicated path. If not provided,
+        it will be '{expname.lower()}.json' where exp is the name of the experiment.
         """
-        with open(path if path is not None else self._local_copy, 'wb') as f:
-            pickle.dump(self, f)
+        exp_dict = {
+            'expname': self.expname,
+            'obsdate': self.obsdate,
+            'supsci': self.supsci,
+            'dirs': self.dirs,
+            'eEVNname': self.eEVNname,
+            'steps': self.steps,
+            'pi': self.pi,
+            'credentials': self.credentials,
+            'sources': self.sources,
+            'antennas': self.antennas,
+            'scans': self.scans,
+            'refant': self.refant,
+            'spectral_line': self.spectral_line,
+            'correlator_passes': self.correlator_passes,
+            '_timerange': self._timerange
+        }
+        with open(path if path is not None else self._local_copy, 'w') as f:
+            json.dump(exp_dict, f, cls=ExperimentJSONEncoder, indent=2)
 
 
     @staticmethod
     def load(expname: str | None = None, path: Optional[Path] = None):
-        """Loads the current Experiment that was stored in a file in the indicated path.
-        If path is None, it assumes the standard path of '.{exp}.json' where 'exp' is the name
+        """Loads the current Experiment that was stored in a JSON file in the indicated path.
+        If path is None, it assumes the standard path of '{exp}.json' where 'exp' is the name
         of the experiment.
         """
         with open(path if path is not None else Path(f"{expname.lower() if expname is not None \
-                                                        else Path.cwd().name.lower()}.json"), 'rb') as f:
-            obj = pickle.load(f)
-            # obj = json.load(f, cls=ExpJsonEncoder)
+                                                        else Path.cwd().name.lower()}.json"), 'r') as f:
+            exp_dict = json.load(f, object_hook=experiment_json_decoder)
 
-        return obj
+        exp = Experiment(
+            expname=exp_dict['expname'],
+            obsdate=exp_dict['obsdate'],
+            supsci=exp_dict['supsci'],
+            dirs=exp_dict['dirs'],
+            eEVNname=exp_dict.get('eEVNname'),
+            steps=exp_dict.get('steps'),
+            pi=exp_dict.get('pi'),
+            credentials=exp_dict.get('credentials'),
+            sources=exp_dict.get('sources'),
+            antennas=exp_dict.get('antennas'),
+            scans=exp_dict.get('scans'),
+            refant=exp_dict.get('refant'),
+            spectral_line=exp_dict.get('spectral_line', False),
+            correlator_passes=exp_dict.get('correlator_passes')
+        )
+        exp._timerange = exp_dict.get('_timerange')
+        return exp
 
 
     def __repr__(self, *args, **kwargs) -> str:
