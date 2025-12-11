@@ -4,6 +4,7 @@
 """
 import os
 import argparse
+from rich import print as rprint
 from rich_argparse import RawTextRichHelpFormatter
 from pathlib import Path
 # from inspect import signature  # WHAT?  to know how many parameters has each function
@@ -162,6 +163,7 @@ def main():
         os.chdir(cwd)
         if Path(f"{expname}.json").exists():
             # A previous execution of the post-process has been done
+            rprint(f"[bold]Recovering previously-stored information for {expname}[/bold]")
             exp = experiment.Experiment.load(expname)
         else:
             exp = workflow.initialize_experiment(expname, args.supsci if args.supsci else experiment.retrieve_username())
