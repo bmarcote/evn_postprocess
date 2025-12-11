@@ -152,7 +152,7 @@ def main():
                              "to see the available tasks.")
     args = parser.parse_args()
 
-    expname = args.expname.upper() if not args.expname else experiment.retrieve_expname()
+    expname = args.expname.upper() if args.expname else experiment.retrieve_expname()
     if not args.dir:
         cwd = Path(f"/data/exp/{expname}")
     else:
