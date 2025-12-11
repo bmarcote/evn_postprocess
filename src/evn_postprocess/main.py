@@ -145,7 +145,7 @@ def main():
     _ = subparsers.add_parser('list', help='Shows the different steps to be run.',
                               description=help_last,
                               formatter_class=parser.formatter_class)
-    parser_exec = subparsers.add_parser('run', help='Runs a single task from the post-processing workflow',
+    parser_exec = subparsers.add_parser('exec', help='Runs a single task from the post-processing workflow',
                                         formatter_class=parser.formatter_class)
     parser_exec.add_argument('task_name', type=str, help="Name of the task to run. Run with --help/-h "
                              "to see the available tasks.")
@@ -175,7 +175,7 @@ def main():
             exp.print_blessed(outputfile=None)
     elif args.subpar == 'list':
         workflow.list_tasks(expname, print_docs=True)
-    elif args.subpar == 'run':
+    elif args.subpar == 'exec':
         workflow.run_isolated_task(args.task_name, expname)
 
 
