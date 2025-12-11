@@ -5,6 +5,7 @@ verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 """
 import glob
+from loguru import logger
 from pathlib import Path
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -41,19 +42,19 @@ def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
         executor.shutdown(wait=True)
 
 
-    exp.log(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
+    logger.debug(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
     if len(set(exp.antennas.names)-set(exp.antennas.logfsfile)) > 0:
-        exp.log("# Missing files for: " \
+        logger.debug("# Missing files for: " \
                 f"{', '.join((set(exp.antennas.names)-set(exp.antennas.logfsfile)).intersection(set(exp.antennas.observed)))}\n")
     else:
-        exp.log("# No missing log files for any station that observed.\n")
+        logger.debug("# No missing log files for any station that observed.\n")
 
-    exp.log(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}")
+    logger.debug(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}")
     if len(set(exp.antennas.names)-set(exp.antennas.antabfsfile)) > 0:
-        exp.log("# Missing files for: " \
+        logger.debug("# Missing files for: " \
                 f"{', '.join((set(exp.antennas.names)-set(exp.antennas.antabfsfile)).intersection(set(exp.antennas.observed)))}\n")
     else:
-        exp.log("# No missing antab files for any station that observed.\n")
+        logger.debug("# No missing antab files for any station that observed.\n")
 
     # In case of high-freq observations, some stations added the "opacity_corrected" flag to
     #the POLY= line, against any standard... Let's remove it so antab_editor (later) can work fine.
@@ -162,7 +163,7 @@ def create_uvflg(exp) -> Optional[bool]:
                     output_tail.append(outline)
 
             if output_tail:
-                exp.log(',\n'.join(output_tail[::-1]).replace('\n', '\n# '))
+                logger.debug(',\n'.join(output_tail[::-1]).replace('\n', '\n# '))
             utils.ssh('jops@archive.jive.eu', ';'.join([cd, \
                              f"cat *uvflgfs > {exp.expname.lower()}.uvflg"]))
     else:
@@ -199,7 +200,7 @@ def create_input_file(exp) -> bool:
     # Parameters to modify inside the input file
     output = utils.ssh('jops@archive.jive.eu', f"~/opt/evn_support/aips_userno.py {exp.supsci.lower()}")
     if (output is None) or (output.replace('\n', '').strip() == ''):
-        exp.log('ERROR: Could not recover your next AIPS user number (from archive.jive.eu:/data/pipe/aips_userno.txt)')
+        logger.debug('ERROR: Could not recover your next AIPS user number (from archive.jive.eu:/data/pipe/aips_userno.txt)')
         rprint('[red bold]Could not recover your next AIPS user number " \
                 "(from archive.jive.eu:/data/pipe/aips_userno.txt)[/red bold]')
         # raise ValueError('Could not recover your next AIPS user number (from archive.jive.eu:/data/pipe/aips_userno.txt)')
@@ -275,7 +276,7 @@ def create_input_file(exp) -> bool:
 def run_pipeline(exp) -> bool:
     """Runs the EVN Pipeline
     """
-    exp.log('# Running the pipeline...', True)
+    logger.debug('# Running the pipeline...', True)
     cd = f"cd /data/pipe/{exp.expname.lower()}/in/"
     rprint('\n\n\n[bold red]Modify the input file for the pipeline and run it manually[/bold red]')
     # TODO:
@@ -286,7 +287,7 @@ def run_pipeline(exp) -> bool:
     else:
         utils.ssh('jops@archive.jive.eu', f"{cd};EVN.py {exp.expname.lower()}.inp.txt")
 
-    exp.log('# Pipeline finished.', True)
+    logger.debug('# Pipeline finished.', True)
     if len(exp.correlator_passes) == 2:
         # TODO: implement line in the normal pipeline
         utils.ssh('jops@archive.jive.eu', f"{cd};EVN.py {exp.expname.lower()}_2.inp.txt")

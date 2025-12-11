@@ -2,6 +2,7 @@
 """Post-Processing of EVN experiments.
 
 """
+import os
 import argparse
 from rich_argparse import RawTextRichHelpFormatter
 from pathlib import Path
@@ -144,36 +145,38 @@ def main():
     _ = subparsers.add_parser('list', help='Shows the different steps to be run.',
                               description=help_last,
                               formatter_class=parser.formatter_class)
-    parser_exec = subparsers.add_parser('exec', help='Runs a single task from the post-processing workflow',
+    parser_exec = subparsers.add_parser('run', help='Runs a single task from the post-processing workflow',
                                         formatter_class=parser.formatter_class)
     parser_exec.add_argument('task_name', type=str, help="Name of the task to run. Run with --help/-h "
                              "to see the available tasks.")
     args = parser.parse_args()
 
-
-    if args.dir is None:
-        cwd = Path(f"/data/exp/{args.expname.upper() if args.expname is not None else experiment.retrieve_expname()}")
+    expname = args.expname.upper() if not args.expname else experiment.retrieve_expname()
+    if not args.dir:
+        cwd = Path(f"/data/exp/{expname}")
     else:
         cwd = Path(args.dir)
 
-    if args.subpar is None:
+    if (not args.subpar) or (args.subpar == 'info'):
         cwd.mkdir(exist_ok=True)
-        exp = workflow.initialize_experiment(args.expname.upper() if args.expname is not None \
-                                            else experiment.retrieve_expname(),
-                                            args.supsci if args.supsci is not None \
-                                            else experiment.retrieve_username())
-        if args.j2ms2par is not None:
-            exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
-            exp.store()
-        workflow.run_workflow(exp, args.no_archive, debug=args.debug)
-    elif args.subpar == 'info':
-        exp.print_blessed(outputfile=None)
+        os.chdir(cwd)
+        if Path(f"{expname}.json").exists():
+            # A previous execution of the post-process has been done
+            exp = experiment.Experiment.load(expname)
+        else:
+            exp = workflow.initialize_experiment(expname, args.supsci if args.supsci else experiment.retrieve_username())
+            if args.j2ms2par is not None:
+                exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
+                exp.store()
+
+        if not args.subpar:
+            workflow.run_workflow(exp, args.no_archive, debug=args.debug)
+        else:  # elif args.subpar == 'info':
+            exp.print_blessed(outputfile=None)
     elif args.subpar == 'list':
-        workflow.list_tasks(args.expname.upper() if args.expname is not None \
-                            else experiment.retrieve_expname(), print_docs=True)
-    elif args.subpar == 'exec':
-        workflow.run_isolated_task(args.task_name, args.expname.upper() if args.expname is not None \
-                                   else experiment.retrieve_expname())
+        workflow.list_tasks(expname, print_docs=True)
+    elif args.subpar == 'run':
+        workflow.run_isolated_task(args.task_name, expname)
 
 
 if __name__ == '__main__':
