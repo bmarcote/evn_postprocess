@@ -24,6 +24,8 @@ def get_init_files(exp: Experiment, servers: Servers) -> bool:
     piletter_server = servers['piletters']
     piletter_path = Path(f"{exp.expname.lower()}.piletter")
     expsum_path = Path(f"{exp.expname.lower()}.expsum")
+    main_vex = Path(f"{exp.expname.upper()}.vix")
+
     def fetch_piletter():
         if not piletter_path.exists():
             utils.scp(f"{piletter_server.user}@{piletter_server.host}:{piletter_server.path / piletter_path}", '.')
@@ -44,21 +46,28 @@ def get_init_files(exp: Experiment, servers: Servers) -> bool:
         base_path = Path(str(ccs_server.path).format(expname=eEVNname))
         remote_host = f"{ccs_server.user}@{ccs_server.host}"
         # Try .vox first, fallback to .vix
-        if Path(f"{exp.expname.upper()}.vix").exists():
+        if main_vex.exists():
             logger.debug(f"{exp.expname.upper()}.vix already exists.")
-            return
+            return True
 
         for ext in ['vox', 'vix']:
-            if (file_path := base_path / f"{eEVNname.lower()}.{ext}").exists():
-                file_path.symlink_to(f"{exp.expname.upper()}.vix")
-                logger.debug(f"Symlink {file_path} -> {exp.expname.upper()}.vix created.")
-                return
+            file_path = Path(f"{eEVNname.lower()}.{ext}")
 
-            if utils.remote_file_exists(remote_host, file_path):
-                utils.scp(f"{remote_host}:{file_path}", '.')
-                file_path.symlink_to(f"{exp.expname.upper()}.vix")
-                logger.debug(f"{file_path} was not found. Retrieved from {remote_host}.")
-                return
+            if not file_path.exists():
+                if utils.remote_file_exists(remote_host, base_path / file_path):
+                    utils.scp(f"{remote_host}:{base_path / file_path}", '.')
+                    logger.debug(f"{file_path} was not found. Retrieved from {remote_host}.")
+                else:
+                    continue
+
+            try:
+                main_vex.symlink_to(file_path)
+                logger.debug(f"Symlink {file_path} -> {main_vex} created.")
+            except FileExistsError:
+                logger.error(f"{exp.expname.lower()}vix/vox file not found in {remote_host}. It may have a non-standard name.")
+                return False
+
+            return True
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = [
@@ -69,7 +78,7 @@ def get_init_files(exp: Experiment, servers: Servers) -> bool:
         for future in futures:
             future.result()
 
-    return all([piletter_path.exists(), expsum_path.exists(), Path(f"{exp.expname.upper()}.vix").exists()])
+    return all([piletter_path.exists(), expsum_path.exists(), main_vex.exists()])
 
 
 def get_vlbeer_sched_files(expname: str, obsdate: dt.date, server: Server) -> bool:

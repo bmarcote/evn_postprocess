@@ -4,18 +4,22 @@ These functions are called by the Snakemake workflow and wrap the functionality
 from process.py, pipeline.py, and pre.py modules.
 """
 import sys
+import json
+import glob
 import shutil
 from datetime import datetime as dt
 from pathlib import Path
 from dataclasses import dataclass
-from importlib.metadata import version
 from loguru import logger
 from rich import print as rprint
+from astropy import units as u
+from astropy import coordinates as coord
 from . import experiment
 from . import io
 from . import process
 from . import pipeline
 from . import lisfiles
+from . import dialog
 
 
 @dataclass
@@ -27,6 +31,13 @@ class Task(object):
     command: str
     doc: str
     done: bool = False
+
+    def to_dict(self) -> dict:
+        return {'name': self.name, 'command': self.command, 'doc': self.doc, 'done': self.done}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Task':
+        return cls(name=data['name'], command=data['command'], doc=data['doc'], done=data.get('done', False))
 
 
 _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
@@ -88,7 +99,7 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
     Returns:
         bool: True if experiment was initialized successfully.
     """
-    logger.debug("Initializing experiment")
+    logger.debug(f"Initializing experiment {expname}")
     try:
         servers = experiment.retrieve_servers()
     except FileNotFoundError:
@@ -139,11 +150,20 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
                 src_type = experiment.SourceType.calibrator
             case 'C':
                 src_type = experiment.SourceType.fringefinder
+            case 'F':
+                src_type = experiment.SourceType.fringefinder
             case _:
                 src_type = experiment.SourceType.other
 
-        exp.sources[src_name].type = src_type
-        exp.sources[src_name].protected = src_protected.strip() == 'X'
+        # Create source if it doesn't exist, then update its type and protection
+        if src_name not in exp.sources.names:
+            # Use placeholder coordinates (0,0) - will be updated when MS data is processed
+            placeholder_coords = coord.SkyCoord(ra=0*u.deg, dec=0*u.deg, frame='icrs')
+            exp.sources.append(experiment.Source(name=src_name, coordinates=placeholder_coords, 
+                                               type=src_type, protected=False))
+        else:
+            exp.sources[src_name].type = src_type
+            exp.sources[src_name].protected = src_protected.strip() == 'X'
 
     # TODO: implement this one!
     # io.get_station_feedback_info(exp.expname, servers['station_feedback'])
@@ -162,11 +182,28 @@ def retrieve_lisfiles(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if lis files were retrieved and processed successfully.
     """
-    if Path().glob(f"{exp.expname.lower()}*.lis"):
-        logger.debug(".lis files already exist. Skipping retrieval.")
-        return True
+    try:
+        if len(glob.glob(f"{exp.expname.lower()}*.lis")) > 0:
+            logger.debug(".lis files already exist. Skipping retrieval.")
+            return True
 
-    return lisfiles.create_lis_files(exp) & lisfiles.get_lis_files(exp) & lisfiles.get_passes_from_lisfiles(exp)
+        # Check each step individually for better error reporting
+        if not lisfiles.create_lis_files(exp):
+            logger.error("Failed to create .lis files")
+            return False
+            
+        if not lisfiles.get_lis_files(exp):
+            logger.error("Failed to retrieve .lis files")
+            return False
+            
+        if not lisfiles.get_passes_from_lisfiles(exp):
+            logger.error("Failed to extract passes from .lis files")
+            return False
+            
+        return True
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving .lis files: {e}")
+        return False
 
 
 def check_lisfiles(exp: experiment.Experiment) -> bool:
@@ -178,16 +215,24 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if all lis files are valid.
     """
-    if all(p.msfile.exists() for p in exp.correlator_passes):
-        logger.debug("MS files already exist. Skipping checklis.")
+    try:
+        if not exp.correlator_passes:
+            logger.error("No correlator passes found. Check .lis file retrieval.")
+            return False
+            
+        if all(p.msfile.exists() for p in exp.correlator_passes):
+            logger.debug("MS files already exist. Skipping checklis.")
+            return True
+
+        if not lisfiles.check_lisfiles(exp):
+            # TODO: In case of e-EVN runs, it needs to do it!
+            logger.error("Issues found in .lis files. Please check the files.")
+            return False
+
         return True
-
-    if not lisfiles.check_lisfiles(exp):
-        # TODO: In case of e-EVN runs, it needs to do it!
-        logger.error("Issues found in .lis files. Please check the files.")
-        sys.exit(1)
-
-    return True
+    except Exception as e:
+        logger.error(f"Unexpected error checking .lis files: {e}")
+        return False
 
 
 def create_msfile(exp: experiment.Experiment) -> bool:
@@ -199,21 +244,36 @@ def create_msfile(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if MS files were created successfully.
     """
-    # Re-doing again in case the lis files were updated externally
-    lisfiles.get_passes_from_lisfiles(exp)
+    try:
+        # Skip if metadata already loaded (check before replacing correlator_passes)
+        if exp.correlator_passes and exp.correlator_passes[0].freqsetup is not None:
+            logger.debug("MS metadata already loaded. Skipping MS creation and extraction.")
+            return True
 
-    if not all(p.msfile.exists() for p in exp.correlator_passes):
-        if not process.getdata(exp):
+        if not exp.correlator_passes:
+            logger.error("No correlator passes available for MS creation")
             return False
 
-        if not process.j2ms2(exp):
-            return False 
+        # Re-doing again in case the lis files were updated externally
+        lisfiles.get_passes_from_lisfiles(exp)
 
-        process.update_ms_expname(exp)
-    else:
-        logger.debug("MS files already exist. Skipping creation.")
+        if not all(p.msfile.exists() for p in exp.correlator_passes):
+            if not process.getdata(exp):
+                logger.error("Failed to get data for MS creation")
+                return False
 
-    return process.get_metadata_from_ms(exp)
+            if not process.j2ms2(exp):
+                logger.error("Failed to run j2ms2")
+                return False 
+
+            process.update_ms_expname(exp)
+        else:
+            logger.debug("MS files already exist. Skipping creation.")
+
+        return process.get_metadata_from_ms(exp)
+    except Exception as e:
+        logger.error(f"Unexpected error creating MS files: {e}")
+        return False
 
 
 def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) -> bool:
@@ -227,7 +287,11 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
         bool: True if standardplots were created successfully.
     """
     # If it fails, try to go with other sources, refants, etc
-    return process.standardplots(exp, do_weights=do_weights)
+    if len(glob.glob("*.ps")) > 0:
+        logger.debug("Standardplots already run. Skipping.")
+        return True
+
+    return process.standardplots(exp, do_weights=do_weights) & process.open_standardplot_files(exp)
 
 
 def msops(exp: experiment.Experiment) -> bool:
@@ -239,10 +303,15 @@ def msops(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if all MS operations completed successfully.
     """
-    if all(Path().glob(f"{p.fitsidifile}*") for p in exp.correlator_passes):
+    if all(len(glob.glob(f"{p.fitsidifile}*")) > 0 for p in exp.correlator_passes):
         logger.debug("FITS IDI files already exist. Skipping creation.")
         return True
 
+    gui = dialog.Terminal()
+    if not gui.askMSoperations(exp):
+        return False
+    
+    exp.store()
     return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) & process.tconvert(exp)
 
 
@@ -259,7 +328,7 @@ def polconvert(exp: experiment.Experiment) -> bool:
         logger.debug("No antennas require PolConvert. Skipping.")
         return True
 
-    if all(Path().glob(f"{p.fitsidifile}*") for p in exp.correlator_passes) and Path('ori_idi').exists():
+    if all(len(glob.glob(f"{p.fitsidifile}*")) > 0 for p in exp.correlator_passes) and Path('ori_idi').exists():
         logger.debug("FITS IDI files already exist. Skipping creation.")
         return True
 
@@ -292,16 +361,29 @@ def antfiles(exp: experiment.Experiment) -> bool:
     Args:
         expobj_file: Path to experiment JSON file
     """
+    if len(glob.glob("pipeline/in/*.antab")) > 0:
+        logger.debug("Antenna ANTAB files already exist. Skipping.")
+        return True
+
+    if len(glob.glob("pipeline/temp/*.antab")) > 0:
+        for afile in Path(exp.dirs.pipe_temp).glob("*.antab"):
+            shutil.copy(afile, exp.dirs.pipe_in / afile.name)
+
+        logger.debug("Antenna ANTAB files already created. Copied to the pipeline input directory.")
+        return True
+
     if (exp.eEVNname is None) or (exp.expname == exp.eEVNname):
-        pipeline.get_files_from_vlbeer(exp, experiment.retrieve_servers()['vlbeer'])
-        # TODO: include VLBA retrieval
-        # pipeline.get_vlba_antab(exp)
-        if not pipeline.run_antab_editor(exp):  # TODO: use the correct codes if eEVN or line
-            rprint("[bold yellow]STOPPED PROCESS:[/bold yellow] [yellow]antab_editor needs manual intervention.[/yellow]")
-            return False
         if not pipeline.create_uvflg(exp):
             logger.error("uvflg creation needs manual intervention.")
             rprint("[bold red]STOPPED PROCESS:[/bold red] [red]uvflg creation needs manual intervention.[/red]")
+            return False
+
+        pipeline.get_files_from_vlbeer(exp, experiment.retrieve_servers()['vlbeer'])
+        if any(s.lower() in ('br', 'kp', 'la', 'yy', 'mk') for s in exp.antennas.names):
+            pipeline.get_vlba_antab(exp)
+
+        if not pipeline.run_antab_editor(exp):  # TODO: use the correct codes if eEVN or line
+            rprint("[bold yellow]STOPPED PROCESS:[/bold yellow] [yellow]antab_editor needs manual intervention.[/yellow]")
             return False
 
         for afile in Path(exp.dirs.pipe_temp).glob("*.antab"):
@@ -371,11 +453,17 @@ def list_tasks(expname: str, print_docs: bool = False):
         print_docs : bool = True
             In addition to list the tasks, it will also print the documentation associated to each one.
     """
-    exp = experiment.Experiment.load(expname)
     rprint(f"\n\n[bold]Post-processing of {expname}:[/bold]")
-    rprint('\n'.join([(f"{'🟢' if s.done else '🔴'}" if exp else " ") + f" [bold {'green' if s.done else 'red'}]{s.name}[/bold {'green' if s.done else 'red'}]\n" + \
-                      f"[dim]{s.doc}[/dim]" if print_docs else "" \
-                      for s in (exp.steps if exp else _WORKFLOW_STEPS)]))
+    exp = experiment.Experiment.load(expname)
+    if exp:
+        steps = [Task.from_dict(s) for s in exp.steps]
+    else:
+        steps = _WORKFLOW_STEPS
+    
+    for s in steps:
+        rprint(f"{'🟢' if s.done else '🔴'}"
+               f" [bold {'green' if s.done else 'red'}]{s.name}[/bold {'green' if s.done else 'red'}]\n" + \
+                      (f"   [dim]{s.doc}[/dim]" if print_docs else ""))
 
 
 def run_isolated_task(task_name: str, expname: str | None = None):
@@ -396,15 +484,92 @@ def run_isolated_task(task_name: str, expname: str | None = None):
         rprint(f"[bold red]Could not find the stored information for {expname if expname is not None else Path().name}"
                "[/bold red].\n[red]Maybe the experiment was never initialized?[/red]")
         sys.exit(1)
+    except (json.JSONDecodeError, KeyError) as e:
+        rprint(f"[bold red]Error loading experiment data: {e}[/bold red]")
+        rprint("[red]The experiment file may be corrupted. Consider reinitializing the experiment.[/red]")
+        sys.exit(1)
 
-    return globals()[task_name](exp)
+    if task_name not in globals():
+        rprint(f"[red]Task '{task_name}' not found.[/red]")
+        available_tasks = [name for name in globals() if callable(globals()[name]) and not name.startswith('_')]
+        rprint(f"[dim]Available tasks: {', '.join(available_tasks)}[/dim]")
+        sys.exit(1)
+
+    try:
+        return globals()[task_name](exp)
+    except Exception as e:
+        rprint(f"[red]Error running task '{task_name}': {e}[/red]")
+        sys.exit(1)
 
 
-def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool = False):
-    # TODO:  OPTION 'from' and 'to' steps.
+def validate_steps(from_step: str, to_step: str | None = None) -> tuple[bool, str]:
+    """Validates that the given step names exist and are in the correct order.
 
-    logger.add(exp.dirs.logs / 'post_process.log', colorize=True,
-               level="DEBUG" if debug else "INFO", backtrace=debug)
+    Args:
+        from_step: Name of the starting step.
+        to_step: Name of the ending step (optional).
+
+    Returns:
+        Tuple of (is_valid, error_message). If valid, error_message is empty.
+    """
+    if not _WORKFLOW_STEPS:
+        return False, "No workflow steps defined"
+    
+    step_names = [s.name for s in _WORKFLOW_STEPS]
+
+    if not from_step:
+        return False, "Starting step cannot be empty"
+    
+    if from_step not in step_names:
+        return False, f"Step '{from_step}' not found. Available steps: {', '.join(step_names)}"
+
+    if to_step is not None:
+        if to_step not in step_names:
+            return False, f"Step '{to_step}' not found. Available steps: {', '.join(step_names)}"
+
+        from_idx = step_names.index(from_step)
+        to_idx = step_names.index(to_step)
+        if from_idx > to_idx:
+            return False, f"Step '{from_step}' comes after '{to_step}'. Order should be reversed."
+
+    return True, ""
+
+
+def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool = False,
+                 from_step: str | None = None, to_step: str | None = None):
+    """Run the workflow for the given experiment.
+    
+    Args:
+        exp: The experiment object.
+        archive: Whether to include the archive step.
+        debug: Whether to enable debug logging.
+        from_step: Starting step name (optional).
+        to_step: Ending step name (optional).
+        
+    Returns:
+        bool: True if workflow completed successfully, False otherwise.
+    """
+    try:
+        if debug:
+            # Debug mode: show all information (time, level, module, function, line)
+            debug_format = (
+                "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+                "<level>{level: <8}</level> | "
+                "<cyan>{module}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+                "<level>{message}</level>"
+            )
+            logger.add(exp.dirs.logs / 'post_process.log', colorize=True,
+                       level="DEBUG", backtrace=True, diagnose=True, format=debug_format)
+        else:
+            # Info mode: show only time (HH:MM:SS) and level in dim color, then message on new line
+            info_format = (
+                "<dim>{time:HH:mm:ss}</dim> <dim>{level: <8}</dim>\n"
+                "{message}"
+            )
+            logger.add(exp.dirs.logs / 'post_process.log', colorize=True,
+                       level="INFO", backtrace=False, diagnose=False, format=info_format)
+    except (OSError, PermissionError) as e:
+        rprint(f"[yellow]Warning: Could not create log file: {e}[/yellow]")
 
     # TODO: put this in the commands.log file
     #logger.info(f"\n\n\n{'#'*37}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
@@ -417,9 +582,41 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
     exp.steps = [s for s in _WORKFLOW_STEPS if (archive or (s.name != 'archive')) and (s.name != 'initialize')]
     exp.store()
 
-    for step in exp.steps:
-        if not globals()[step.command](exp):
-            logger.error(f"Step {step.name} failed.")
+    # Filter steps based on from_step and to_step
+    if from_step is not None:
+        step_names = [s.name for s in exp.steps]
+        try:
+            from_idx = step_names.index(from_step)
+            to_idx = step_names.index(to_step) + 1 if to_step is not None else len(step_names)
+            steps_to_run = exp.steps[from_idx:to_idx]
+        except ValueError as e:
+            logger.error(f"Error filtering steps: {e}")
+            return False
+    else:
+        steps_to_run = exp.steps
+
+    if not steps_to_run:
+        rprint("[yellow]No steps to run.[/yellow]")
+        return True
+
+    for step in steps_to_run:
+        logger.info(f"Running step: {step.name}")
+        try:
+            if step.command not in globals():
+                logger.error(f"Command '{step.command}' not found for step '{step.name}'")
+                return False
+                
+            if not globals()[step.command](exp):
+                logger.error(f"Step {step.name} failed.")
+                rprint(f"[red]Step {step.name} failed. Check logs for details.[/red]")
+                return False
+
+            step.done = True
+            exp.store()
+            logger.info(f"Step {step.name} completed successfully")
+        except Exception as e:
+            logger.error(f"Unexpected error in step {step.name}: {e}")
+            rprint(f"[red]Unexpected error in step {step.name}: {e}[/red]")
             return False
 
     rprint(f"[italic green]The processing of {exp.expname} seems to have finalized properly.[/italic green]")

@@ -98,7 +98,7 @@ class Terminal(Dialog):
         polswap = self.ask_for_antennas(exp, "\n\033[1mAntennas for polswap (comma or " \
                                         "Fspace separated)\n\033[0m(possible antennas are: "
                                              f"{', '.join(exp.antennas.names)})\n\033[1m>\033[0m ")
-        if utils.station_1bit_in_vix(exp.vix):
+        if utils.station_1bit_in_vix(exp.vixfile):
             onebit = self.ask_for_antennas(exp, "\n\033[1mAntennas that recorded one-bit " \
                                                 "data:\n> \033[0m")
         else:
@@ -108,7 +108,7 @@ class Terminal(Dialog):
                                                 ":\n> \033[0m")
 
         for i in range(len(exp.correlator_passes)):
-            exp.correlator_passes[i].flagged_weights = experiment.FlagWeight(threshold)
+            exp.correlator_passes[i].flagged_weights = experiment.FlagWeight(threshold, -1)
 
         for antenna in polswap:
             exp.antennas[antenna].polswap = True

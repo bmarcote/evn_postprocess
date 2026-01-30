@@ -20,6 +20,12 @@ dependencies = [
     "rich-argparse",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-mock>=3.10.0",
+]
+
 [project.scripts]
 postprocess = "evn_postprocess.main:main"
 msops = "evn_postprocess.mstools.main:main"

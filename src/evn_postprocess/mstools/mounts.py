@@ -22,7 +22,7 @@ def print_mounts(msfile: str, verbose: bool = True):
     return mounts_dict
 
 
-def modify_mounts(msfile: str, antenna: str, mount: str, verbose: bool = True):
+def modify_mounts(msfile: str, antenna: str, mount: str, verbose: bool = True) -> bool:
     """Fix mount type information for specified antenna in MS file.
     
     Updates the mount type (e.g., ALT-AZ, EQUATORIAL) for a specific antenna in the
@@ -36,11 +36,29 @@ def modify_mounts(msfile: str, antenna: str, mount: str, verbose: bool = True):
     """
     with misc.table(msfile, readonly=False) as ms:
         with misc.table(ms.getkeyword('ANTENNA'), readonly=False) as ant_table:
-            ant_table.putcol('MOUNT', mount, rownumbers=ant_table.getcol('STATION').index(antenna))
-            #TODO: to test 
-            rprint("[yellow]THIS HAS NOT BEEN TESTED[/yellow]")
-            if verbose:
+            stations = [i for i in ant_table.getcol('NAME')]
+            mounts = ant_table.getcol('MOUNT')
+            # Function to get directly the position of a station in the array to get its mount
+            try:
+                getmount = lambda station: mounts[stations.index(station)]
+                if getmount(antenna) == mount:
+                    rprint(f"{antenna} has already the right mount ({mount})")
+                else:
+                    rprint(f"Changing {antenna} mount from {getmount(antenna)} to {mount}")
+                    mounts[stations.index(antenna)] = mount
+            except ValueError:
+                rprint(f"[bold red]{antenna} was not found in the MS while executing ysfocus[/bold red]")
+                return False
+
+            # In case no station has been found in the MS
+            if len([ant for ant in stations if ant == antenna]) == 0:
+                rprint(r"[yellow]{antenna} was found in the MS, no ysfocus.py required.[/yellow]")
+            else:
+                ant_table.putcol('MOUNT', mounts)
+                ant_table.flush()
                 rprint(f"[green]Fixed mount type for {antenna} to {mount}.[/green]")
+
+    return True
 
 
 def fix_yebes_mount(msfile: str, verbose: bool = True) -> bool:
@@ -63,10 +81,7 @@ def fix_yebes_mount(msfile: str, verbose: bool = True) -> bool:
     if len(ysname) == 0:
         raise ValueError('Ys antenna not found in the MS file.')
 
-    for ys in ysname:
-        modify_mounts(msfile, ys, 'ALT-AZ-NASMYTH-RH', verbose=verbose)
-    
-    return True
+    return all([modify_mounts(msfile, ys, 'ALT-AZ-NASMYTH-RH', verbose=verbose) for ys in ysname])
 
 
 def fix_hobart_mount(msfile: str, verbose: bool = True) -> bool:
@@ -86,7 +101,4 @@ def fix_hobart_mount(msfile: str, verbose: bool = True) -> bool:
     if len(honame) == 0:
         raise ValueError('Ys antenna not found in the MS file.')
 
-    for ho in honame:
-        modify_mounts(msfile, ho, 'X-YEW', verbose=verbose)
-    
-    return True
+    return all([modify_mounts(msfile, ho, 'X-YEW', verbose=verbose) for ho in honame])

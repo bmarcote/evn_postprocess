@@ -10,9 +10,9 @@ from astropy import units as u
 from astropy import coordinates as coord
 import blessed
 from rich import progress
-from pyrap import tables as pt
 from . import misc
 from . import operations
+
 
 @dataclass
 class ObsEpoch:
@@ -97,10 +97,10 @@ class Sources(list):
         super().__init__(args)
 
     @overload
-    def __getitem__(self, item: int) -> Source: ...
+    def __getitem__(self, item: str) -> Source: ...
     
     @overload
-    def __getitem__(self, item: str) -> Source: ...
+    def __getitem__(self, item: int) -> Source: ...
     
     @overload
     def __getitem__(self, item: slice) -> list[Source]: ...
@@ -177,27 +177,29 @@ class Sources(list):
 
 @dataclass
 class Antenna:
-    """Defines an antenna.
-    It has three parameters:
-        name : str
-            Name of the antenna
-        observed : bool
-            If the antenna has observed (has no-null data).
-        subbands : tuple
-            Tuple with the subbands numbers where the antenna observed.
-            It may be all subbands covered in the observation or a subset of them.
+    """Defines an antenna for MS data.
+    
+    Attributes:
+        name (str): Name of the antenna.
+        observed (bool): If the antenna has observed (has non-null data).
+        subbands (tuple): Tuple with the subband numbers where the antenna observed.
+        weights (tuple): Weight statistics for the antenna.
+        polconvert (bool): If polarization conversion is needed.
+        polswap (bool): If polarization swap is needed.
+        onebit (bool): If one-bit correction is needed.
+        logfsfile (bool): If log file was received.
+        antabfsfile (bool): If ANTAB file was received.
     """
     name: str
-    scheduled: bool = True
     observed: bool = True
     subbands: tuple = ()
     weights: tuple = ()
-    polswap: bool = False
     polconvert: bool = False
+    polswap: bool = False
     onebit: bool = False
     logfsfile: bool = False
     antabfsfile: bool = False
-    opacity: bool = False  # if data have opacity correction in the ANTAB file
+
 
 class Antennas(list):
     """Container class for Antenna objects, providing convenient access by name or index."""
@@ -238,6 +240,12 @@ class Antennas(list):
             raise KeyError(f"Antenna '{item}' not found")
         
         return super().__getitem__(item)
+
+    @overload
+    def __contains__(self, item: str) -> bool: ...
+    
+    @overload
+    def __contains__(self, item: Antenna) -> bool: ...
 
     def __contains__(self, item: str | Antenna) -> bool:
         """Check if an antenna name or Antenna object is in the list.
@@ -287,6 +295,36 @@ class Antennas(list):
             list[tuple[int]]: Subband numbers for each observing antenna.
         """
         return [s.subbands for s in self if s.observed]
+    
+    @property
+    def polconvert(self) -> list[str]:
+        """List of names of antennas that require PolConvert
+        """
+        return [s.name for s in self if s.polconvert]
+    
+    @property
+    def polswap(self) -> list[str]:
+        """List of names of antennas that require polswap
+        """
+        return [s.name for s in self if s.polswap]
+    
+    @property
+    def onebit(self) -> list[str]:
+        """List of names of antennas that require one-bit corrections
+        """
+        return [s.name for s in self if s.onebit]
+    
+    @property
+    def logfsfile(self) -> list[str]:
+        """List of names of antennas that sent log files
+        """
+        return [s.name for s in self if s.logfsfile]
+    
+    @property
+    def antabfsfile(self) -> list[str]:
+        """List of names of antennas that sent ANTAB files
+        """
+        return [s.name for s in self if s.antabfsfile]
     
 
 @dataclass
@@ -427,9 +465,10 @@ class Ms:
                 src_names = field_table.getcol('NAME')
                 src_coords = field_table.getcol('PHASE_DIR')
                 self._sources = Sources()
-                for src_name, src_ra, src_dec in zip(src_names, src_coords[0,0,:], src_coords[1,0,:]):
+                for src_name, src_ra, src_dec in zip(src_names, src_coords[:,0,0], src_coords[:,0,1]):
                     self._sources.append(Source(name=src_name,
-                                                coordinates=coord.SkyCoord(src_ra, src_dec, unit=(u.rad, u.rad))))
+                                                coordinates=coord.SkyCoord(ra=coord.Angle(src_ra, unit=u.rad),
+                                                                           dec=coord.Angle(src_dec, unit=u.rad))))
             
             with misc.table(msdata.getkeyword('OBSERVATION')) as obs_table:
                 time_range = obs_table.getcol('TIME_RANGE')
@@ -734,7 +773,7 @@ class Ms:
             bandwidth=freq['bandwidth'] * u.Hz,
             nspw=freq['n_subbands'],
             nchan=freq['n_channels'],
-            polarizations=tuple(misc.Stokes[pol] for pol in freq['polarizations']),
+            polarizations=tuple(misc.Stokes[pol] for pol in freq['polarizations'])
         )
 
         src_objs = []
@@ -755,6 +794,6 @@ class Ms:
         obj._antennas = Antennas(*ant_objs)
 
         obj.operations = OperationsProxy(obj._msfile)
-        obj._datastats = None
+        # obj._datastats = None
 
         return obj
