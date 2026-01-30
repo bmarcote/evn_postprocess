@@ -28,7 +28,7 @@ test = [
 
 [project.scripts]
 postprocess = "evn_postprocess.main:main"
-msops = "evn_postprocess.mstools.main:main"
+mstools = "evn_postprocess.mstools.main:main"
 
 [build-system]
 requires = ["uv_build>=0.9.3,<0.10.0"]

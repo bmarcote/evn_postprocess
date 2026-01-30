@@ -72,7 +72,6 @@ def polswap(msfile: str | Path, antenna: str, starttime: dt.datetime | None = No
 
         with misc.table(ms.getkeyword('POLARIZATION')) as ms_pol:
             pols_order = [misc.Stokes(i) for i in ms_pol.getcol('CORR_TYPE')[0]]
-            # Check that the stokes are the correct ones to do a cross pol.
             # Only change it if circular or linear pols.
             for a_pol_order in pols_order:
                 if (a_pol_order not in (misc.Stokes.RR, misc.Stokes.RL, misc.Stokes.LR, misc.Stokes.LL)) and \
@@ -82,11 +81,10 @@ def polswap(msfile: str | Path, antenna: str, starttime: dt.datetime | None = No
                     rprint("[red bold]Polswap only works for circular or linear pols[/red bold]")
                     rprint(f"[ref]These data contain the following stokes: {pols_order}[/red]")
                     raise ValueError('Wrong stokes type.')
-            # Get the column changes that are necessary
+
             pols_prod = ms_pol.getcol('CORR_PRODUCT')[0]
             changes = [_get_nedded_move(pols_prod, i) for i in (0, 1)]
 
-        # transpose data for columns DATA, WEIGHT_SPECTRUM (if exists)
         with misc.table(ms.getkeyword('OBSERVATION')) as ms_obs:
             time_range = (dt.datetime(1858, 11, 17, 0, 0, 2) + ms_obs.getcol('TIME_RANGE')*dt.timedelta(seconds=1))[0]
 
@@ -280,7 +278,8 @@ def scale1bit(msfile: str | Path, antenna: str | list[str], undo: bool = False, 
                         
                         ms.putcol(col, data, startrow=start, nrow=nrow)
         
-        print(f"[green]\n1-bit {"unscaled" if undo else "scaled"} for {', '.join(antenna)} in {msfile} done.[/green]")
+        print(f"[green]\n1-bit {"unscaled" if undo else "scaled"} for "
+              f"{', '.join(antenna)} in {msfile} done.[/green]")
 
 
 def invert_subband(msfile: str | Path, antenna: str | list[str], starttime: dt.datetime | None = None, 
@@ -365,7 +364,8 @@ def flag_weights(msfile: str | Path, threshold: float, apply: bool = True) -> tu
     Args:
         msfile (str | Path): Path to the Measurement Set file.
         threshold (float): Weight threshold below which data will be flagged. In the interval (0, 1).
-        apply (bool, optional): If True, apply the flags to the MS. If False, only report statistics. Defaults to True.
+        apply (bool, optional): If True, apply the flags to the MS. If False, only report statistics.
+        Defaults to True.
 
     Returns:
         tuple[int, float, float]: Tuple containing the total number of visibilities, the percentage of visibilities
@@ -383,9 +383,7 @@ def flag_weights(msfile: str | Path, threshold: float, apply: bool = True) -> tu
 
     with misc.table(msfile, readonly=False) as ms:
         flagged = Flagged()
-        total_number = 0
-        flagged_before, flagged_after = (0, 0)
-        flagged_nonzero, flagged_nonzero_before, flagged_nonzero_after = (0, 0, 0)
+        flagged_nonzero_after = 0
         # WEIGHT: (nrow, npol)
         # WEIGHT_SPECTRUM: (nrow, npol, nfreq)
         # flags[weight < threshold] = True
@@ -403,7 +401,6 @@ def flag_weights(msfile: str | Path, threshold: float, apply: bool = True) -> tu
                 # extract weights and compute new flags based on threshold
                 weights = ms.getcol(weightcol, startrow=start, nrow=nrow)
                 # how many non-zero did we flag
-                flagged_nonzero_before = np.logical_and(flags, weights > 0.001)
                 # join with existing flags and count again
                 flags = np.logical_or(flags, weights < threshold)
                 flagged.after += np.sum(flags)
@@ -469,5 +466,3 @@ def change_source_name(msfile: str | Path, oldname: str, newname: str):
             except ValueError:
                 rprint(f"[bold red]ERROR: [/bold red] [red]The source {oldname} is not present in the MS[/red]")
                 rprint(f"[red]The only source names found are: {', '.join(srcnames)}[/red]")
-
-
