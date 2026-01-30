@@ -4,11 +4,15 @@ It runs all steps although it requires user interaction to
 verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 """
+import os
 import glob
+import shutil
+import subprocess
+from importlib import resources
 from loguru import logger
 from pathlib import Path
 from typing import Optional
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from rich import print as rprint
 from . import experiment
 from . import utils
@@ -17,14 +21,26 @@ from . import utils
 def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
     """Retrieves the antabfs, log, and flag files that should be in vlbeer for the given experiment.
     """
-    def scp_files(ext: str):
-        utils.scp(f"{server.user}@{server.host}:" + \
-                 str(Path(str(server.path).format(obsdate=exp.obsdate.strftime('%b%y').lower())) / f"{exp.expname.lower()}\*.{ext}"),
-                               " pipeline/temp/", timeout=120)
+    def fetch_file(ext: str):
+        try:
+            s_formatted = eval(f"f'{server.path}'", {'obsdate': exp.obsdate})
+            utils.scp(f"{server.user}@{server.host}:{Path(s_formatted) / f'{exp.expname.lower()}*{ext}'}",
+                      str(exp.dirs.pipe_temp) + "/", timeout=120)
+        except subprocess.TimeoutExpired:
+            rprint(f"[bold yellow]Could not retrieve the {ext} files from vlbeer.[/bold yellow]")
+            logger.warning("Could not retrieve {ext} files from vlbeer")
+        except ValueError:
+            rprint(f"[bold yellow]Could not find the {ext} files in vlbeer.[/bold yellow]")
+            logger.warning("Could not retrieve {ext} files from vlbeer")
 
-        files = list(Path('pipeline/temp/').glob(f"{exp.expname.lower()}*{ext}"))
-        for a_file in files:
-            ant = a_file.name.split('.')[0].replace(f"{exp.expname.lower()}_", '').split('_')[0].capitalize()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(fetch_file, a_file) for a_file in ('antabfs', 'log')]
+        for future in futures:
+            future.result()
+
+    for ext in ('antabfs', 'log'):
+        for a_file in list(exp.dirs.pipe_temp.glob(f"{exp.expname.lower()}*{ext}")):
+            ant = a_file.name.split('.')[0].replace(f"{exp.expname.lower()}", '').split('_')[0].capitalize()
             try:
                 if ext == 'log':
                     exp.antennas[ant].logfsfile = True
@@ -35,12 +51,6 @@ def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
                 # where this antenna participated but not in this particular experiment
                 rprint(f"[yellow]The antenna '{ant}' has a log file but is not found in " \
                        "the .expsum file. Just ignoring this and continuing...[/yellow]")
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        executor.submit(scp_files, 'log')
-        executor.submit(scp_files, 'antabfs')
-        executor.shutdown(wait=True)
-
 
     logger.debug(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
     if len(set(exp.antennas.names)-set(exp.antennas.logfsfile)) > 0:
@@ -58,16 +68,28 @@ def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
 
     # In case of high-freq observations, some stations added the "opacity_corrected" flag to
     #the POLY= line, against any standard... Let's remove it so antab_editor (later) can work fine.
-    output = utils.ssh('jops@archive.jive.eu',
-        f"grep -l ',opacity_corrected' /data/pipe/{exp.expname.lower()}/temp/{exp.expname.lower()}*.antabfs")
-    the_files = [o for o in output.split('\n') if o != ''] if output else []  # just to avoid trailing \n
-    for a_file in the_files:
-        utils.ssh('jops@archive.jive.eu', f"sed -i 's/,opacity_corrected//g' " \
-                  f"/data/pipe/{exp.expname.lower()}/temp/{a_file}", \
-                  shell=False)
-        antenna = a_file.split('/')[-1].replace('.antabfs', '').replace(exp.expname.lower(), \
-                  '').capitalize()
-        exp.antennas[antenna].opacity = True
+    # Remove ',opacity_corrected' from local antabfs files and add a comment line after
+    for antabfs_file in exp.dirs.pipe_temp.glob(f"{exp.expname.lower()}*.antabfs"):
+        with open(antabfs_file, 'r') as f:
+            content = f.read()
+        
+        if ',opacity_corrected' in content:
+            new_lines = []
+            for line in content.split('\n'):
+                if ',opacity_corrected' in line:
+                    new_lines.append(line.replace(',opacity_corrected', ''))
+                    new_lines.append('! opacity_corrected')
+                else:
+                    new_lines.append(line)
+            
+            with open(antabfs_file, 'w') as f:
+                f.write('\n'.join(new_lines))
+            
+            antenna = antabfs_file.name.split('.')[0].replace(f"{exp.expname.lower()}_", '').split('_')[0].capitalize()
+            if antenna in exp.antennas:
+                exp.antennas[antenna].opacity = True
+
+    exp.store()
     return True
 
 
@@ -75,6 +97,7 @@ def get_vlba_antab(exp) -> Optional[bool]:
     """Retrieves the cal (antab) files from VLBA if needed, and copies the VLBA gains, into the archive temp folder
     for the given experiment.
     """
+    rprint("[bold yellow]get_vlba_antab not implemented yet. You need to get the VLBA antab files manually.[/bold yellow]")
     raise NotImplementedError
     if exp.expname.lower()[0] != 'g':
         return True
@@ -101,90 +124,44 @@ def get_vlba_antab(exp) -> Optional[bool]:
 def run_antab_editor(exp) -> Optional[bool]:
     """Opens antab_editor.py for the given experiment.
     """
-    cd = f"cd /data/pipe/{exp.expname.lower()}/temp"
-    cdinp = f"/data/pipe/{exp.expname.lower()}/in"
-    cdtemp = f"/data/pipe/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}/temp"
-    if utils.remote_file_exists('jops@archive.jive.eu', f"{cdinp}/{exp.expname.lower()}*.antab"):
-        print("Antab file already found in {cdinp}.")
-        return True
-
-    if utils.remote_file_exists('jops@archive.jive.eu', f"{cdtemp}/" \
-            f"{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}*.antab"):
-        print("Copying Antab file from {cdtemp} to {cdinp}.")
-        utils.ssh('jops@archive.jive.eu', f"cp {cdtemp}/*.antab {cdinp}/")
-        if (exp.eEVNname is not None) and (exp.expname != exp.eEVNname):
-            # We need to rename to the actual name
-            antab_list = utils.ssh('jops@archive.jive.eu', f"ls {cdinp}/*.antab")
-            for an_antab in (antab_list.split('\n') if antab_list else []):
-                if an_antab != '':
-                    utils.ssh('jops@archive.jive.eu', f"mv {an_antab} "
-                f"{'/'.join([*an_antab.split('/')[:-1], an_antab.split('/')[-1].replace(exp.eEVNname.lower(), exp.expname.lower())])}")
-        return True
-
-    if exp.eEVNname is not None:
-        rprint(f"[bold red]This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}.\n"
-              "Please run antab_editor.py manually to include all experiment associated to the run "
-              "(using the '-a' option).\n\nThen run the post-processing again.[/bold red]")
-        # I fake it to be sucessful in the object to let it run seemless in a following iteraction
-        return None
+    original_cwd = os.getcwd()
+    os.chdir(exp.dirs.pipe_temp)
+    if (exp.eEVNname is not None) and (exp.expname != exp.eEVNname):
+        os.chdir(original_cwd)
+        rprint(f"[bold red]This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}[/bold red].\n"
+              "[red]You should only run antab_editor.py from the main e-EVN experiment run (including the "
+              "rest of the run experiments).\nRun it manually in case you indeed want to run it here.[/red]")
+        raise ValueError("antab_editor.py should only be run from the main e-EVN experiment run")
 
     if '_line' in ''.join(glob.glob(f"{exp.expname.lower()}*.lis")):
-        utils.ssh('-Y '+'jops@archive.jive.eu', ';'.join([cd, 'antab_editor.py -l']))
-        rprint('\n\n\n[bold red]Run `antab_editor.py -l` manually in pipe.[/bold red]')
+        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", "../..", "-l"], shell=True, stdout=None)
     else:
-        utils.ssh('-Y '+'jops@archive.jive.eu', ';'.join([cd, 'antab_editor.py']))
-        rprint('\n\n\n[bold red]Run antab_editor.py manually in pipe.[/bold red]')
-
-    missing_antabs = [a.name for a in exp.antennas if not a.antabfsfile]
-    if len(missing_antabs) > 0:
+        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", "../.."], shell=True, stdout=None)
+    
+    if len(missing_antabs := [a.name for a in exp.antennas if not a.antabfsfile]) > 0:
         rprint(f"[red]Note that you are missing ANTAB files from: {', '.join(missing_antabs)}[/red]")
 
+    os.chdir(original_cwd)
     return None
 
 
 def create_uvflg(exp) -> Optional[bool]:
     """Produces the combined uvflg file containing the full flagging from all telescopes.
     """
-    cdinp = f"/data/pipe/{exp.expname.lower()}/in"
-    if utils.remote_file_exists('jops@archive.jive.eu', f"{cdinp}/{exp.expname.lower()}*.uvflg"):
+    if len(glob.glob(str(exp.dirs.pipe_temp / "*.uvflg"))) > 0:
+        logger.debug("uvflg files already created. Skipping.")
         return True
 
-    if (exp.eEVNname is None) or (exp.expname == exp.eEVNname):
-        cd = f"cd /data/pipe/{exp.expname.lower()}/temp"
-        if not utils.remote_file_exists('jops@archive.jive.eu', f"{cd}/{exp.expname.lower()}.uvflg"):
-            output = utils.ssh('jops@archive.jive.eu',
-                                  ';'.join([cd, '/home/jops/opt/evn_support/uvflgall.sh']))
-            print(output)
-            output_tail = []
-            if output:
-                for outline in output.split('\n')[::-1]:
-                    if 'line ' in outline:
-                        break
-                    output_tail.append(outline)
-
-            if output_tail:
-                logger.debug(',\n'.join(output_tail[::-1]).replace('\n', '\n# '))
-            utils.ssh('jops@archive.jive.eu', ';'.join([cd, \
-                             f"cat *uvflgfs > {exp.expname.lower()}.uvflg"]))
-    else:
-        cd = f"/data/pipe/{exp.eEVNname.lower()}/temp"
-        if not utils.remote_file_exists('jops@archive.jive.eu', f"{cd}/{exp.eEVNname.lower()}.uvflg"):
-            rprint(f"[bold red]You first need to process the original experiment "
-                   f"in this e-EVN run ({exp.eEVNname}).[/bold red]")
-            print("Once you have created the .uvflg file for such expeirment "
-                  "I will be able to run by myself.")
-            return None
-
-    cdinp = f"/data/pipe/{exp.expname.lower()}/in"
-    cdtemp = f"/data/pipe/" \
-             f"{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}/temp" \
-             f"/{exp.expname.lower() if exp.eEVNname is None else exp.eEVNname.lower()}.uvflg"
+    original_cwd = os.getcwd()
+    os.chdir(exp.dirs.pipe_temp)
+    utils.shell_command("uvflgall.sh")
+    utils.shell_command("cat", ["*uvflgfs", ">", f"{exp.expname.lower()}.uvflg"])
     if len(pipepass := [apass.pipeline for apass in exp.correlator_passes if apass.pipeline]) > 1:
         for p in range(1, len(pipepass) + 1):
-            utils.ssh('jops@archive.jive.eu', f"cp {cdtemp} {cdinp}/{exp.expname.lower()}_{p}.uvflg")
-    else:
-        utils.ssh('jops@archive.jive.eu', f"cp {cdtemp} {cdinp}/{exp.expname.lower()}.uvflg")
+            shutil.copy(f"{exp.expname.lower()}.uvflg",
+                        f"{exp.expname.lower()}_{p}.uvflg")
 
+    os.chdir(original_cwd)
     return True
 
 
@@ -192,169 +169,218 @@ def create_input_file(exp) -> bool:
     """Copies the template of an input file for the EVN Pipeline
     and modifies the standard parameters.
     """
-    # First copies the final uvflg and antab files to the input directory
-    cdinp = f"/data/pipe/{exp.expname.lower()}/in/"
-    if utils.remote_file_exists('jops@archive.jive.eu', f"{cdinp}/{exp.expname.lower()}*.inp.txt"):
-        return True
+    if len(glob.glob(str(exp.dirs.pipe_in / "*.antab"))) == 0:
+        for antabfile in exp.dirs.pipe_temp.glob("*.antab"):
+            shutil.copy(antabfile, exp.dirs.pipe_in / antabfile.name)
 
-    # Parameters to modify inside the input file
-    output = utils.ssh('jops@archive.jive.eu', f"~/opt/evn_support/aips_userno.py {exp.supsci.lower()}")
-    if (output is None) or (output.replace('\n', '').strip() == ''):
-        logger.debug('ERROR: Could not recover your next AIPS user number (from archive.jive.eu:/data/pipe/aips_userno.txt)')
-        rprint('[red bold]Could not recover your next AIPS user number " \
-                "(from archive.jive.eu:/data/pipe/aips_userno.txt)[/red bold]')
-        # raise ValueError('Could not recover your next AIPS user number (from archive.jive.eu:/data/pipe/aips_userno.txt)')
+    if len(glob.glob(str(exp.dirs.pipe_in / "*.uvflg"))) == 0:
+        for uvflgfile in exp.dirs.pipe_temp.glob("*.uvflg"):
+            shutil.copy(uvflgfile, exp.dirs.pipe_in / uvflgfile.name)
 
-    userno = output.replace('\n', '').strip() if output else ''
+    original_cwd = os.getcwd()
+    os.chdir(exp.dirs.pipe_in)
+    if len(pipepasses := [apass.pipeline for apass in exp.correlator_passes if apass.pipeline]) > 1:
+        if Path(f"{exp.expname.lower()}.antab").exists():
+            for p in range(1, len(pipepasses) + 1):
+                shutil.copy(f"{exp.expname.lower()}.antab", f"{exp.expname.lower()}_{p}.antab")
 
-    bpass = [s.name for s in exp.sources if s.type is experiment.SourceType.fringefinder]
-    pcal = [s.name for s in exp.sources if s.type is experiment.SourceType.calibrator]
-    targets = [s.name for s in exp.sources if (s.type is experiment.SourceType.target) or
-                         (s.type is experiment.SourceType.other)]
+        for p in range(1, len(pipepasses) + 1):
+            shutil.copy(f"{exp.expname.lower()}.uvflg", f"{exp.expname.lower()}_{p}.uvflg")
 
-
-
-    to_change = [["experiment = n05c3", f"experiment = {exp.expname.lower()}"],
-                  ["userno = 3602", f"userno = {userno}"],
-                  ["refant = Ef, Mc, Nt", f"refant = {', '.join(exp.refant)}"],
-                  ["plotref = Ef", f"plotref = {', '.join(exp.refant)}"],
-                  ["bpass = 3C345, 3C454.3", f"bpass = {', '.join(bpass)}"]]
-
-    if len(pcal) == 0: # no phase-referencing experiment
-        to_change += [["#solint = 0", "solint = 2"]]
-        to_change += [["phaseref = 3C454.3", "#phaseref ="],
-                      ["target = J2254+1341", "#target ="],
-                      ["#sources=", f"sources = {', '.join(targets)}, {', '.join(bpass)}"]]
-    elif len(targets) == 2*len(pcal):
-        pcals = []
-        for p in pcal:
-            pcals += [p, p]
-
-        to_change += [["phaseref = 3C454.3", f"phaseref = {','.join(pcals)}"],
-                      ["target = J2254+1341", f"target = {', '.join(targets)}"]]
-    else:
-        to_change += [["phaseref = 3C454.3", f"phaseref = {', '.join(pcal)}"],
-                      ["target = J2254+1341", f"target = {', '.join(targets)}"]]
-
-
+    # Copy and modify the pipeline input template
+    template_path = resources.files(__name__).joinpath("templates/pipeline.inp.txt.template")
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
-    if (len(exp.correlator_passes) > 2) or \
-       ((len(exp.correlator_passes) == 2) and (len(pipepasses) > 1)):
-        utils.scp(f"{exp.vix}", f"jops@archive.jive.eu:/data/pipe/{exp.expname.lower()}/in/")
-        to_change += [["#doprimarybeam = 1", "doprimarybeam = 1"],
-                      ["#setup_station = Ef", f"setup_station = {exp.refant[0]}"]]
+    
+    for i, apass in enumerate(pipepasses, 1):
+        if len(pipepasses) > 1:
+            inp_filename = Path(f"{exp.expname.lower()}_{i}.inp.txt")
+        else:
+            inp_filename = Path(f"{exp.expname.lower()}.inp.txt")
+        
+        if inp_filename.exists():
+            continue
+            
+        with open(template_path, 'r') as f:
+            template_content = f.read()
+        
+        replacements = {
+            '{expname}': exp.expname.lower() if len(pipepasses) == 1 else f"{exp.expname.lower()}_{i}",
+            '{userno}': subprocess.run(['aips_userno.py', exp.supsci.lower()], 
+                                       capture_output=True, text=True).stdout.strip() or '100',
+            '{refant}': exp.refant[0] if len(exp.refant) > 0 else '',
+            '{plotref}': ', '.join(exp.refant),
+            '{bpass}': ', '.join(apass.sources.fringefinder),
+            '{dophaseref}': '' if apass.sources.calibrator else '#',
+            # '{phaseref}': ', '.join(apass.sources.calibrator),
+            # '{target}': ', '.join(apass.sources.target),
+            '{target}': ', '.join(apass.sources.target),
+            '{phaseref}': ', '.join([apass.sources.calibrator_for_target(tgt) for tgt in apass.sources.target]) if apass.sources.calibrator else '',
+            '{dosolint}': '' if apass.sources.calibrator else '#',
+            '{solint}': '2' if apass.sources.calibrator else '1',
+            '{doprimarybeam}': '' if exp.multi_phase_center else '-1',
+            '{setup_station}': exp.refant[0],
+            '{do_all_sources}': '' if exp.multi_phase_center else '#',
+            '{all_sources}': ', '.join(set(apass.sources.target + apass.sources.fringefinder + apass.sources.calibrator)) if exp.multi_phase_center else '',
+            }
+        
+        for placeholder, value in replacements.items():
+            logger.debug(f"Pipeline input file - replaced {placeholder} with {value}")
+            template_content = template_content.replace(placeholder, value)
+        
+        with open(inp_filename, 'w') as f:
+            f.write(template_content)
+        
+        logger.debug(f"Created pipeline input file: {inp_filename}")
 
-    utils.ssh('jops@archive.jive.eu',
-                  "cp /data/pipe/templates/pipeline.inp.txt " \
-                  "/data/pipe/{0}/in/{0}.inp.txt".format(exp.expname.lower()),
-                  shell=False)
-    for a_change in to_change:
-        utils.ssh('jops@archive.jive.eu', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
-                 f"{'/data/pipe/{0}/in/{0}.inp.txt'.format(exp.expname.lower())}", shell=False)
-
-    if len(pipepasses) > 1:
-        utils.ssh('jops@archive.jive.eu',
-                      "mv /data/pipe/{0}/in/{0}.inp.txt "
-                      "/data/pipe/{0}/in/{0}_1.inp.txt".format(exp.expname.lower()))
-        a_change = [f"experiment = {exp.expname.lower()}", f"experiment = {exp.expname.lower()}_1"]
-        utils.ssh('jops@archive.jive.eu', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
-                         f"{'/data/pipe/{0}/in/{0}_1.inp.txt'.format(exp.expname.lower())}",
-                         shell=False)
-        for i in range(2, len(pipepasses) + 1):
-            utils.ssh('jops@archive.jive.eu',
-                          "cp /data/pipe/{0}/in/{0}_1.inp.txt "
-                          "/data/pipe/{0}/in/{0}_{1}.inp.txt".format(exp.expname.lower(), i))
-            a_change = [f"experiment = {exp.expname.lower()}_1",
-                        f"experiment = {exp.expname.lower()}_{i}"]
-            utils.ssh('jops@archive.jive.eu', f"sed -i 's/{a_change[0]}/{a_change[1]}/g' " \
-                    f"{'/data/pipe/{0}/in/{0}_{1}.inp.txt'.format(exp.expname.lower(), i)}",
-                     shell=False)
-
+    os.chdir(original_cwd)
     return True
 
 
 def run_pipeline(exp) -> bool:
     """Runs the EVN Pipeline
     """
-    logger.debug('# Running the pipeline...', True)
-    cd = f"cd /data/pipe/{exp.expname.lower()}/in/"
-    rprint('\n\n\n[bold red]Modify the input file for the pipeline and run it manually[/bold red]')
-    # TODO:
-    exp.last_step = 'pipeline'
-    return False
-    if len(exp.correlator_passes) > 1:
-        utils.ssh('jops@archive.jive.eu', f"{cd};EVN.py {exp.expname.lower()}_1.inp.txt")
-    else:
-        utils.ssh('jops@archive.jive.eu', f"{cd};EVN.py {exp.expname.lower()}.inp.txt")
+    try:
+        logger.debug('# Running the pipeline...', True)
+        original_cwd = os.getcwd()
+        
+        if not exp.dirs.pipe_in.exists():
+            logger.error(f"Pipeline input directory does not exist: {exp.dirs.pipe_in}")
+            return False
+            
+        os.chdir(exp.dirs.pipe_in)
+        pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
+        
+        if not pipepasses:
+            logger.error("No pipeline passes found")
+            return False
+            
+        if len(pipepasses) > 1:
+            with ProcessPoolExecutor() as executor:
+                futures = [executor.submit(utils.shell_command, "EVN.py", [f"{exp.expname.lower()}_{i}.inp.txt"], stdout=None) 
+                           for i in range(1, len(pipepasses) + 1)]
+                for i, future in enumerate(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Pipeline pass {i+1} failed: {e}")
+                        return False
+        else:
+            try:
+                utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=subprocess.PIPE)
+            except Exception as e:
+                logger.error(f"Pipeline execution failed: {e}")
+                return False
 
-    logger.debug('# Pipeline finished.', True)
-    if len(exp.correlator_passes) == 2:
-        # TODO: implement line in the normal pipeline
-        utils.ssh('jops@archive.jive.eu', f"{cd};EVN.py {exp.expname.lower()}_2.inp.txt")
-
-    return True
+        os.chdir(original_cwd)
+        return True
+    except Exception as e:
+        logger.error(f"Unexpected error running pipeline: {e}")
+        try:
+            os.chdir(original_cwd)
+        except OSError:
+            pass
+        return False
 
 
 def comment_tasav_files(exp) -> bool:
     """Creates the comment and tasav files after the EVN Pipeline has run.
     """
-    cdin = f"/data/pipe/{exp.expname.lower()}/in"
-    cdout = f"/data/pipe/{exp.expname.lower()}/out"
-    path = "/home/jops/opt/evn_support"
-    if not (utils.remote_file_exists('jops@archive.jive.eu', \
-                                   f"{cdout}/{exp.expname.lower()}" + r"\*.comment") and \
-            utils.remote_file_exists('jops@archive.jive.eu', \
-                                   f"{cdin}/{exp.expname.lower()}" + r"\*.tasav.txt")):
+    try:
+        original_cwd = os.getcwd()
+        
+        # Check if files already exist
+        comment_files = list(exp.dirs.pipe_out.glob(f"{exp.expname.lower()}*.comment"))
+        tasav_files = list(exp.dirs.pipe_in.glob(f"{exp.expname.lower()}*.tasav.txt"))
+        
+        if comment_files and tasav_files:
+            logger.debug("Comment and tasav files already exist. Skipping.")
+            os.chdir(original_cwd)
+            return True
+            
+        if not exp.dirs.pipe_in.exists():
+            logger.error(f"Pipeline input directory does not exist: {exp.dirs.pipe_in}")
+            return False
+            
+        os.chdir(exp.dirs.pipe_in)
         pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
+        
+        if not pipepasses:
+            logger.error("No pipeline passes found")
+            return False
+            
         if len(pipepasses) > 1:
             for p in range(1, len(pipepasses) + 1):
-                if pipepasses[p-1].freqsetup.channels >= 512:
-                    # We assume that it is a spectral line experiment
-                    utils.ssh('jops@archive.jive.eu',
-                          f"cd {cdin} && {path}/comment_tasav_file.py --line {exp.expname.lower()}_{p}", stdout=None)
-                else:
-                    utils.ssh('jops@archive.jive.eu',
-                                  f"cd {cdin} && {path}/comment_tasav_file.py {exp.expname.lower()}_{p}", stdout=None)
+                if p-1 >= len(pipepasses):
+                    logger.error(f"Pipeline pass {p} not found")
+                    continue
+                    
+                if not pipepasses[p-1].freqsetup:
+                    logger.warning(f"No frequency setup for pipeline pass {p}")
+                    continue
+                    
+                try:
+                    if pipepasses[p-1].freqsetup.channels >= 512:
+                        # We assume that it is a spectral line experiment
+                        utils.shell_command("comment_tasav_file.py", ["--line", f"{exp.expname.lower()}_{p}"], stdout=None)
+                    else:
+                        utils.shell_command("comment_tasav_file.py", [f"{exp.expname.lower()}_{p}"], stdout=None)
+                except Exception as e:
+                    logger.error(f"Error creating comment/tasav files for pass {p}: {e}")
+                    return False
         else:
-            if exp.correlator_passes[0].freqsetup.channels >= 512:
-                utils.ssh('jops@archive.jive.eu',
-                              f"cd {cdin} && {path}/comment_tasav_file.py --line {exp.expname.lower()}", stdout=None)
-            else:
-                utils.ssh('jops@archive.jive.eu',
-                              f"cd {cdin} && {path}/comment_tasav_file.py {exp.expname.lower()}", stdout=None)
+            if not exp.correlator_passes or not exp.correlator_passes[0].freqsetup:
+                logger.error("No frequency setup available")
+                return False
+                
+            try:
+                if exp.correlator_passes[0].freqsetup.channels >= 512:
+                    utils.shell_command("comment_tasav_file.py", ["--line", exp.expname.lower()], stdout=None)
+                else:
+                    utils.shell_command("comment_tasav_file.py", [exp.expname.lower()], stdout=None)
+            except Exception as e:
+                logger.error(f"Error creating comment/tasav files: {e}")
+                return False
 
-    return True
+        os.chdir(original_cwd)
+        return True
+    except Exception as e:
+        logger.error(f"Unexpected error creating comment/tasav files: {e}")
+        try:
+            os.chdir(original_cwd)
+        except OSError:
+            pass
+        return False
 
 
 def pipeline_feedback(exp) -> bool:
     """Runs the feedback.pl script after the EVN Pipeline has run.
     """
-    cd = f"cd /data/pipe/{exp.expname.lower()}/out"
+    original_cwd = os.getcwd()
+    os.chdir(exp.dirs.pipe_out)
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
+    sources_str = ' '.join([s.name for s in exp.sources])
     if len(pipepasses) > 1:
         for p in range(1, len(pipepasses) + 1):
-            utils.ssh('jops@archive.jive.eu',
-                          f"{cd} && /home/jops/opt/evn_support/feedback.pl " \
-                          f"-exp '{exp.expname.lower()}_{p}' " \
-                          f"-jss '{exp.supsci}' -source "
-                          f"'{' '.join([s.name for s in exp.sources])}'", stdout=None)
+            utils.shell_command("feedback.pl",
+                                ["-exp", f"{exp.expname.lower()}_{p}", "-jss", exp.supsci, "-source", sources_str],
+                                stdout=None)
     else:
-        utils.ssh('jops@archive.jive.eu',
-                      f"{cd} && /home/jops/opt/evn_support/feedback.pl " \
-                      f"-exp '{exp.expname.lower()}' " \
-                      f"-jss '{exp.supsci}' -source " \
-                      f"'{' '.join([s.name for s in exp.sources])}'", stdout=None)
+        utils.shell_command("feedback.pl",
+                            ["-exp", exp.expname.lower(), "-jss", exp.supsci, "-source", sources_str],
+                            stdout=None)
+    os.chdir(original_cwd)
     return True
 
 
 def archive(exp) -> bool:
     """Archives the EVN Pipeline results.
     """
-    for f in ('in', 'out'):
-        cd = f"cd /data/pipe/{exp.expname.lower()}/{f}/"
-        utils.ssh('jops@archive.jive.eu', f"{cd} && /home/jops/bin/archive.pl " \
-                      f"-pipe -e {exp.expname.lower()}_{exp.obsdate}", stdout=None)
+    original_cwd = os.getcwd()
+    for folder in (exp.dirs.pipe_in, exp.dirs.pipe_out):
+        os.chdir(folder)
+        utils.shell_command("archive.pl", ["-pipe", "-e", f"{exp.expname.lower()}_{exp.obsdate}"], stdout=None)
 
+    os.chdir(original_cwd)
     return True
 
 
@@ -363,7 +389,9 @@ def archive(exp) -> bool:
 def ampcal(exp) -> bool:
     """Runs the ampcal.sh script to incorporate the gain corrections into the Grafana database.
     """
-    cd = f"cd /data/pipe/{exp.expname.lower()}/out"
-    utils.ssh('jops@archive.jive.eu', f"{cd} && ampcal.sh")
+    original_cwd = os.getcwd()
+    os.chdir(exp.dirs.pipe_out)
+    utils.shell_command("ampcal.sh")
+    os.chdir(original_cwd)
     return True
 

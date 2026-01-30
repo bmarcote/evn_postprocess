@@ -6,18 +6,16 @@ This also keeps track of the steps that have been condducted in the post-process
 resumed, or restarted.
 """
 import os
-import glob
 import copy
-from tkinter import W
-import numpy as np
+import glob
 import json
 import subprocess
 import datetime as dt
-from typing import Optional, Union, Iterable, Any, Generator, Self
 from pathlib import Path
 import tomllib
-from dataclasses import dataclass, asdict, fields
+from dataclasses import dataclass, asdict
 from collections import defaultdict
+import numpy as np
 from pyrap import tables as pt
 from enum import Enum
 from loguru import logger
@@ -27,9 +25,7 @@ from rich import print as rprint
 from rich import progress
 import blessed
 from . import vex
-# from .io import parse_masterprojects  # copied function here to avoid circular importing
 from . import mstools
-
 
 
 
@@ -40,6 +36,13 @@ class Server:
     host: str
     path: Path
 
+    def to_dict(self) -> dict:
+        return {'name': self.name, 'user': self.user, 'host': self.host, 'path': str(self.path)}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Server':
+        return cls(name=data['name'], user=data['user'], host=data['host'], path=Path(data['path']))
+
 
 class Servers(list[Server]):
     """A list of Server objects with additional helper methods."""
@@ -48,7 +51,7 @@ class Servers(list[Server]):
         """Returns a list of all server names."""
         return [server.name for server in self]
 
-    def __getitem__(self, key: Union[int, str]) -> Server:
+    def __getitem__(self, key: int | str) -> Server:
         """Get a server by index (int) or by name (str)."""
         if isinstance(key, int):
             return super().__getitem__(key)
@@ -59,6 +62,13 @@ class Servers(list[Server]):
             raise KeyError(f"Server '{key}' not found")
         else:
             raise TypeError(f"Index must be int or str, not {type(key).__name__}")
+
+    def to_dict(self) -> list[dict]:
+        return [s.to_dict() for s in self]
+
+    @classmethod
+    def from_dict(cls, data: list[dict]) -> 'Servers':
+        return cls([Server.from_dict(s) for s in data])
 
 
 def retrieve_servers() -> Servers:
@@ -170,7 +180,6 @@ def retrieve_username() -> str:
     return os.getenv('USER', 'unknown')
 
 
-
 @dataclass
 class Dirs:
     """Directory paths to put the different files and folders."""
@@ -183,17 +192,38 @@ class Dirs:
     pipe_out: Path
     pipe_temp: Path
 
+    def to_dict(self) -> dict:
+        return {k: str(v) for k, v in asdict(self).items()}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Dirs':
+        return cls(**{k: Path(v) for k, v in data.items()})
+
 
 @dataclass
 class PI:
     name: str
     email: str
 
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'PI':
+        return cls(**data)
+
 
 @dataclass
 class Credentials:
     username: str
     password: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Credentials':
+        return cls(**data)
 
 
 @dataclass
@@ -210,6 +240,13 @@ class FlagWeight:
     threshold: float
     percentage: float
 
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'FlagWeight':
+        return cls(**data)
+
 
 class SourceType(Enum):
     target = 0
@@ -225,12 +262,24 @@ class Source:
     """
     name: str
     coordinates: coord.SkyCoord
-    type: SourceType
-    protected: bool
+    type: SourceType = SourceType.other
+    protected: bool = False
+    intent: str | None = None
+
+    def to_dict(self) -> dict:
+        return {'name': self.name, 'ra_deg': self.coordinates.ra.deg, 'dec_deg': self.coordinates.dec.deg,
+                'frame': self.coordinates.frame.name, 'type': self.type.value, 'protected': self.protected,
+                'intent': self.intent}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Source':
+        return cls(name=data['name'], type=SourceType(data.get('type', 3)), protected=data.get('protected', False),
+                   coordinates=coord.SkyCoord(ra=data['ra_deg']*u.deg, dec=data['dec_deg']*u.deg, frame=data.get('frame', 'icrs')),
+                   intent=data.get('intent'))
 
 
 class Sources(object): #list[Source]):
-    def __init__(self, sources: Optional[list[Source]] = None):
+    def __init__(self, sources: list[Source] | None = None):
         if sources is not None:
             self._sources: list[Source] = copy.deepcopy(sources)
         else:
@@ -273,7 +322,7 @@ class Sources(object): #list[Source]):
     def __delitem__(self, key: str) -> None:
         return self._sources.remove(self[key])
 
-    def __iter__(self) -> Iterable[Source]:
+    def __iter__(self):
         self._niter = -1
         for src in self._sources:
             yield src
@@ -307,6 +356,46 @@ class Sources(object): #list[Source]):
 
         return f"Sources([{','.join(self.names)}])\n " + s
 
+    def to_dict(self) -> list[dict]:
+        return [s.to_dict() for s in self._sources]
+
+    @classmethod
+    def from_dict(cls, data: list[dict]) -> 'Sources':
+        return cls([Source.from_dict(s) for s in data])
+
+    def calibrator_for_target(self, target: str) -> str | None:
+        """Returns the associated calibrator source for a given target.
+        
+        It finds the calibrator source that is closest in angular separation
+        to the specified target.
+        
+        Args:
+            target: The name of the target source.
+            
+        Returns:
+            The name of the closest calibrator source, or None if no calibrators exist.
+            
+        Raises:
+            ValueError: If the target is not in the list of targets.
+        """
+        if target not in self.target:
+            raise ValueError(f"Target '{target}' not found in the list of targets: {', '.join(self.target)}")
+        
+        if len(self.calibrator) == 0:
+            return None
+        elif len(self.calibrator) == 1:
+            return self.calibrator[0]
+        
+        min_sep = None
+        closest_cal = None
+        for acal in self.calibrator:
+            sep = self[target].coordinates.separation(self[acal].coordinates)
+            if min_sep is None or sep < min_sep:
+                min_sep = sep
+                closest_cal = acal
+        
+        return closest_cal
+
 
 @dataclass
 class Antenna:
@@ -315,12 +404,26 @@ class Antenna:
     scheduled: bool = True
     observed: bool = True
     subbands: tuple = tuple()
+    weights: tuple = tuple()
     polswap: bool = False
     polconvert: bool = False
     onebit: bool = False
     logfsfile: bool = False
     antabfsfile: bool = False
     opacity: bool = False  # if data have opacity correction in the ANTAB file
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d['subbands'] = [int(x) for x in self.subbands]
+        d['weights'] = [int(x) for x in self.weights]
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Antenna':
+        d = data.copy()
+        d['subbands'] = tuple(d.get('subbands', []))
+        d['weights'] = tuple(d.get('weights', []))
+        return cls(**d)
 
 
 class Antennas(list[Antenna]):
@@ -390,6 +493,13 @@ class Antennas(list[Antenna]):
         return f"Antennas([{','.join(self.names)}])\n Scheduled: {','.join(self.scheduled)}\n " \
                f"Observed: {','.join(self.observed)}\n " + s
 
+    def to_dict(self) -> list[dict]:
+        return [a.to_dict() for a in self]
+
+    @classmethod
+    def from_dict(cls, data: list[dict]) -> 'Antennas':
+        return cls([Antenna.from_dict(a) for a in data])
+
 
 @dataclass
 class Scan:
@@ -401,149 +511,28 @@ class Scan:
     stations_scheduled: tuple[str]
     stations_observed: tuple[str] = ()
 
+    def to_dict(self) -> dict:
+        return {'scanno': self.scanno, 'starttime': self.starttime.isoformat(), 'duration_s': self.duration_s,
+                'source': self.source, 'stations_scheduled': list(self.stations_scheduled),
+                'stations_observed': list(self.stations_observed)}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Scan':
+        return cls(scanno=data['scanno'], starttime=dt.datetime.fromisoformat(data['starttime']),
+                   duration_s=data['duration_s'], source=data['source'],
+                   stations_scheduled=tuple(data['stations_scheduled']),
+                   stations_observed=tuple(data.get('stations_observed', [])))
+
 
 class Scans(list[Scan]):
     """A list of scans in the experiment."""
-    pass
 
+    def to_dict(self) -> list[dict]:
+        return [s.to_dict() for s in self]
 
-class ExperimentJSONEncoder(json.JSONEncoder):
-    """Custom JSON encoder for Experiment objects."""
-    def default(self, obj):
-        if isinstance(obj, dt.datetime):
-            return {'__type__': 'datetime', 'value': obj.isoformat()}
-        elif isinstance(obj, dt.date):
-            return {'__type__': 'date', 'value': obj.isoformat()}
-        elif isinstance(obj, Path):
-            return {'__type__': 'Path', 'value': str(obj)}
-        elif isinstance(obj, u.Quantity):
-            return {'__type__': 'Quantity', 'value': obj.value.tolist() if hasattr(obj.value, 'tolist') else obj.value, 'unit': str(obj.unit)}
-        elif isinstance(obj, coord.SkyCoord):
-            return {'__type__': 'SkyCoord', 'ra': obj.ra.deg, 'dec': obj.dec.deg, 'frame': obj.frame.name}
-        elif isinstance(obj, SourceType):
-            return {'__type__': 'SourceType', 'value': obj.value}
-        elif isinstance(obj, mstools.misc.Stokes):
-            return {'__type__': 'Stokes', 'value': obj.value}
-        elif isinstance(obj, np.ndarray):
-            return {'__type__': 'ndarray', 'value': obj.tolist(), 'dtype': str(obj.dtype)}
-        elif isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, (Server, PI, Credentials, FlagWeight, Source, Antenna, Scan, Subbands)):
-            return {'__type__': obj.__class__.__name__, 'data': asdict(obj)}
-        elif hasattr(obj, '__dataclass_fields__'):
-            return {'__type__': obj.__class__.__name__, 'data': asdict(obj)}
-        elif isinstance(obj, Servers):
-            return {'__type__': 'Servers', 'data': [asdict(s) for s in obj]}
-        elif isinstance(obj, Sources):
-            return {'__type__': 'Sources', 'data': [asdict(s) for s in obj._sources]}
-        elif isinstance(obj, Antennas):
-            return {'__type__': 'Antennas', 'data': [asdict(a) for a in obj]}
-        elif isinstance(obj, Scans):
-            return {'__type__': 'Scans', 'data': [asdict(s) for s in obj]}
-        elif isinstance(obj, CorrelatorPass):
-            return {'__type__': 'CorrelatorPass', 'data': {
-                'lisfile': obj.lisfile,
-                'msfile': obj.msfile,
-                'fitsidifile': obj.fitsidifile,
-                'pipeline': obj.pipeline,
-                'scans': obj.scans,
-                'antennas': obj.antennas,
-                'flagged_weights': obj.flagged_weights,
-                'freqsetup': obj.freqsetup
-            }}
-        elif isinstance(obj, Dirs):
-            return {'__type__': 'Dirs', 'data': asdict(obj)}
-        return super().default(obj)
-
-
-def experiment_json_decoder(dct):
-    """Custom JSON decoder for Experiment objects."""
-    if '__type__' in dct:
-        obj_type = dct['__type__']
-        if obj_type == 'datetime':
-            return dt.datetime.fromisoformat(dct['value'])
-        elif obj_type == 'date':
-            return dt.date.fromisoformat(dct['value'])
-        elif obj_type == 'Path':
-            return Path(dct['value'])
-        elif obj_type == 'Quantity':
-            return u.Quantity(dct['value'], unit=dct['unit'])
-        elif obj_type == 'SkyCoord':
-            return coord.SkyCoord(ra=dct['ra']*u.deg, dec=dct['dec']*u.deg, frame=dct['frame'])
-        elif obj_type == 'SourceType':
-            return SourceType(dct['value'])
-        elif obj_type == 'Stokes':
-            return mstools.misc.Stokes(dct['value'])
-        elif obj_type == 'ndarray':
-            return np.array(dct['value'], dtype=dct['dtype'])
-        elif obj_type == 'Server':
-            data = dct['data']
-            data['path'] = Path(data['path']) if isinstance(data['path'], str) else data['path']
-            return Server(**data)
-        elif obj_type == 'PI':
-            return PI(**dct['data'])
-        elif obj_type == 'Credentials':
-            return Credentials(**dct['data'])
-        elif obj_type == 'FlagWeight':
-            return FlagWeight(**dct['data'])
-        elif obj_type == 'Source':
-            data = dct['data']
-            return Source(
-                name=data['name'],
-                coordinates=data['coordinates'],
-                type=data['type'],
-                protected=data['protected']
-            )
-        elif obj_type == 'Antenna':
-            return Antenna(**dct['data'])
-        elif obj_type == 'Scan':
-            return Scan(**dct['data'])
-        elif obj_type == 'Subbands':
-            return Subbands(**dct['data'])
-        elif obj_type == 'Task':
-            from . import workflow
-            return workflow.Task(**dct['data'])
-        elif obj_type == 'Servers':
-            servers = []
-            for s_data in dct['data']:
-                s_data['path'] = Path(s_data['path']) if isinstance(s_data['path'], str) else s_data['path']
-                servers.append(Server(**s_data))
-            return Servers(servers)
-        elif obj_type == 'Sources':
-            sources = []
-            for s_data in dct['data']:
-                sources.append(Source(
-                    name=s_data['name'],
-                    coordinates=s_data['coordinates'],
-                    type=s_data['type'],
-                    protected=s_data['protected']
-                ))
-            return Sources(sources)
-        elif obj_type == 'Antennas':
-            return Antennas([Antenna(**a_data) for a_data in dct['data']])
-        elif obj_type == 'Scans':
-            return Scans([Scan(**s_data) for s_data in dct['data']])
-        elif obj_type == 'CorrelatorPass':
-            data = dct['data']
-            return CorrelatorPass(
-                lisfile=data['lisfile'],
-                msfile=data['msfile'],
-                fitsidifile=data['fitsidifile'],
-                pipeline=data['pipeline'],
-                scans=data.get('scans'),
-                antennas=data.get('antennas'),
-                flagged_weights=data.get('flagged_weights'),
-                freqsetup=data.get('freqsetup')
-            )
-        elif obj_type == 'Dirs':
-            data = dct['data']
-            for key in data:
-                if isinstance(data[key], str):
-                    data[key] = Path(data[key])
-            return Dirs(**data)
-    return dct
+    @classmethod
+    def from_dict(cls, data: list[dict]) -> 'Scans':
+        return cls([Scan.from_dict(s) for s in data])
 
 
 @dataclass
@@ -562,7 +551,21 @@ class Subbands:
     channels: int
     frequency: u.Quantity
     bandwidth: u.Quantity
-    polarizations: tuple[mstools.misc.Stokes]
+    polarizations: tuple[mstools.misc.Stokes, ...]
+
+    def to_dict(self) -> dict:
+        freq_val = self.frequency.value.tolist() if hasattr(self.frequency.value, 'tolist') else self.frequency.value
+        bw_val = self.bandwidth.value.tolist() if hasattr(self.bandwidth.value, 'tolist') else self.bandwidth.value
+        return {'subbands': int(self.subbands), 'channels': int(self.channels), 'frequency_value': freq_val,
+                'frequency_unit': str(self.frequency.unit), 'bandwidth_value': bw_val,
+                'bandwidth_unit': str(self.bandwidth.unit), 'polarizations': [p.value for p in self.polarizations]}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Subbands':
+        return cls(subbands=data['subbands'], channels=data['channels'],
+                   frequency=u.Quantity(data['frequency_value'], unit=data['frequency_unit']),
+                   bandwidth=u.Quantity(data['bandwidth_value'], unit=data['bandwidth_unit']),
+                   polarizations=tuple(mstools.misc.Stokes(p) for p in data['polarizations']))
 
 
 class CorrelatorPass:
@@ -592,8 +595,28 @@ class CorrelatorPass:
         self.pipeline = pipeline
         self.scans: Scans = scans if scans is not None else Scans()
         self.antennas: Antennas = antennas if antennas is not None else Antennas()
+        self.sources: Sources = sources if sources is not None else Sources()
         self.flagged_weights = flagged_weights
         self.freqsetup = freqsetup
+
+    def to_dict(self) -> dict:
+        from loguru import logger
+        logger.debug(f"CorrelatorPass.to_dict: freqsetup={self.freqsetup}, flagged_weights={self.flagged_weights}")
+        return {'lisfile': str(self.lisfile), 'msfile': str(self.msfile), 'fitsidifile': self.fitsidifile,
+                'pipeline': self.pipeline, 'scans': self.scans.to_dict() if self.scans else [],
+                'sources': self.sources.to_dict() if self.sources else [],
+                'antennas': self.antennas.to_dict() if self.antennas else [],
+                'flagged_weights': self.flagged_weights.to_dict() if self.flagged_weights else None,
+                'freqsetup': self.freqsetup.to_dict() if self.freqsetup else None}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'CorrelatorPass':
+        return cls(lisfile=Path(data['lisfile']), msfile=Path(data['msfile']), fitsidifile=data['fitsidifile'],
+                   pipeline=data['pipeline'], scans=Scans.from_dict(data['scans']) if data.get('scans') else None,
+                   sources=Sources.from_dict(data['sources']) if data.get('sources') else None,
+                   antennas=Antennas.from_dict(data['antennas']) if data.get('antennas') else None,
+                   flagged_weights=FlagWeight.from_dict(data['flagged_weights']) if data.get('flagged_weights') else None,
+                   freqsetup=Subbands.from_dict(data['freqsetup']) if data.get('freqsetup') else None)
 
 
 class Experiment:
@@ -601,9 +624,9 @@ class Experiment:
     """
     def __init__(self, expname: str, obsdate: dt.date, supsci: str, dirs: Dirs, eEVNname: str | None = None,
                  steps: list | None = None, pi: list[PI] | None = None, credentials: Credentials | None = None,
-                 sources: Sources | None = None, antennas: Optional[Antennas] = None, scans: Optional[Scans] = None,
-                 refant: Optional[list[str]] = None, spectral_line: bool = False,
-                 correlator_passes: Optional[list[CorrelatorPass]] = None):
+                 sources: Sources | None = None, antennas: Antennas | None = None, scans: Scans | None = None,
+                 refant: list[str] | None = None,
+                 correlator_passes: list[CorrelatorPass] | None = None):
         self.expname = expname
         self.obsdate = obsdate
         self.supsci = supsci
@@ -616,10 +639,20 @@ class Experiment:
         self.antennas = antennas if antennas else Antennas()
         self.scans = scans if scans else Scans()
         self.refant = refant if refant else []
-        self.spectral_line = spectral_line
         self.correlator_passes = correlator_passes if correlator_passes else []
         self._log_file: Path = self.dirs.logs / 'processing.log'
         self._timerange: list[dt.datetime] | None = None
+
+    @property
+    def spectral_line(self) -> bool:
+        """Returns if the experiment contains a spectral line pass."""
+        return True in ['_line' in apass.lisfile.name for apass in self.correlator_passes]
+    
+    @property
+    def multi_phase_center(self) -> bool:
+        """Returns if the experiment contains a multi-phase center correlation."""
+        return (len(self.correlator_passes) > 1) and (not self.spectral_line)
+
 
     @property
     def timerange(self) -> list[dt.datetime] | None:
@@ -665,23 +698,74 @@ class Experiment:
 
     def get_info_from_vex(self):
         """Extracts information from the VEX file."""
-        if not self.vixfile.exists():
-            raise FileNotFoundError(f"VEX file {self.vixfile} not found")
+        if not hasattr(self, 'vixfile') or not self.vixfile.exists():
+            raise FileNotFoundError(f"VEX file {getattr(self, 'vixfile', 'unknown')} not found")
 
-        vex_data = vex.Vex(self.vixfile)
-        for ant_code in vex_data['STATION']:
-            self.antennas.append(Antenna(name=ant_code, site=vex_data['STATION'][ant_code]['SITE']))
+        try:
+            vex_data = vex.Vex(self.vixfile)
+        except Exception as e:
+            raise RuntimeError(f"Error parsing VEX file {self.vixfile}: {e}")
+            
+        if 'STATION' not in vex_data:
+            raise ValueError("VEX file missing STATION section")
+        if 'SOURCE' not in vex_data:
+            raise ValueError("VEX file missing SOURCE section")
+        if 'SCHED' not in vex_data:
+            raise ValueError("VEX file missing SCHED section")
+            
+        try:
+            for ant_code in vex_data['STATION']:
+                if 'SITE' not in vex_data['STATION'][ant_code]:
+                    logger.warning(f"Missing SITE info for antenna {ant_code}")
+                    continue
+                self.antennas.append(Antenna(name=ant_code, site=vex_data['STATION'][ant_code]['SITE']))
 
-        for src in vex_data['SOURCE'].values():
-            self.sources.append(Source(name=src['source_name'],
-                             coordinates=coord.SkyCoord(f"{src['ra']} {src['dec'].replace('\'', 'm').replace('\"', 's')}"),
-                             type=SourceType.other, protected=False))
+            for src in vex_data['SOURCE'].values():
+                if 'source_name' not in src or 'ra' not in src or 'dec' not in src:
+                    logger.warning(f"Incomplete source information: {src}")
+                    continue
+                    
+                try:
+                    coords_str = f"{src['ra']} {src['dec'].replace('\'', 'm').replace('"', 's')}"
+                    coordinates = coord.SkyCoord(coords_str)
+                except Exception as e:
+                    logger.warning(f"Error parsing coordinates for source {src.get('source_name', 'unknown')}: {e}")
+                    continue
+                    
+                self.sources.append(Source(name=src['source_name'],
+                                 coordinates=coordinates,
+                                 type=SourceType.other, protected=False))
             # It put a fake type and protected types... They will be overwritten when reading the jexp files
 
-        for scanno, scan in vex_data['SCHED'].items():
-            self.scans.append(Scan(scanno, starttime=dt.datetime.strptime(scan['start'], '%Yy%jd%Hh%Mm%Ss'),
-                                   duration_s=max([int(s[2].replace('sec', '')) for ss, s in scan.items() if ss == 'station']),
-                                   source=scan['source'], stations_scheduled=[s[0] for ss, s in scan.items() if ss == 'station']))
+            for scanno, scan in vex_data['SCHED'].items():
+                if 'start' not in scan or 'source' not in scan:
+                    logger.warning(f"Incomplete scan information for {scanno}")
+                    continue
+                    
+                try:
+                    starttime = dt.datetime.strptime(scan['start'], '%Yy%jd%Hh%Mm%Ss')
+                except ValueError as e:
+                    logger.warning(f"Error parsing start time for scan {scanno}: {e}")
+                    continue
+                    
+                station_entries = [s for ss, s in scan.items() if ss == 'station']
+                if not station_entries:
+                    logger.warning(f"No station information for scan {scanno}")
+                    continue
+                    
+                try:
+                    duration_s = max([int(s[2].replace('sec', '')) for s in station_entries])
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"Error parsing duration for scan {scanno}: {e}")
+                    duration_s = 0
+                    
+                stations_scheduled = [s[0] for s in station_entries]
+                
+                self.scans.append(Scan(scanno, starttime=starttime,
+                                       duration_s=duration_s,
+                                       source=scan['source'], stations_scheduled=stations_scheduled))
+        except Exception as e:
+            raise RuntimeError(f"Error processing VEX data: {e}")
 
 
     def get_setup_from_ms(self):
@@ -760,6 +844,7 @@ class Experiment:
                         a_pass.freqsetup = Subbands(ms_spw.getcol('NUM_CHAN')[0],
                                                     ms_spw.getcol('CHAN_FREQ'),
                                                     ms_spw.getcol('TOTAL_BANDWIDTH')[0])
+                        logger.debug(f"Loaded MS metadata, freqsetup {a_pass.freqsetup} for {a_pass.msfile}")
             except RuntimeError:
                 print(f"WARNING: {a_pass.msfile} not found.")
 
@@ -839,59 +924,70 @@ class Experiment:
         return Path(f"{expname.lower() if expname is not None else Path.cwd().name.lower()}.json").exists()
 
 
-    def store(self, path: Optional[Path] = None):
+    def to_dict(self) -> dict:
+        """Converts the Experiment to a plain dictionary for JSON serialization."""
+        return {'expname': self.expname, 'obsdate': self.obsdate.isoformat() if self.obsdate else None,
+                'supsci': self.supsci, 'dirs': self.dirs.to_dict() if self.dirs else None,
+                'eEVNname': self.eEVNname, 'steps': [s.to_dict() if hasattr(s, 'to_dict') else s for s in self.steps] if self.steps else [],
+                'pi': [p.to_dict() for p in self.pi] if self.pi else [],
+                'credentials': self.credentials.to_dict() if self.credentials else None,
+                'sources': self.sources.to_dict() if self.sources else [],
+                'antennas': self.antennas.to_dict() if self.antennas else [],
+                'scans': self.scans.to_dict() if self.scans else [], 'refant': self.refant,
+                'spectral_line': self.spectral_line,
+                'correlator_passes': [cp.to_dict() for cp in self.correlator_passes] if self.correlator_passes else [],
+                '_timerange': [t.isoformat() for t in self._timerange] if self._timerange else None}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Experiment':
+        """Creates an Experiment from a plain dictionary."""
+        exp = cls(expname=data['expname'], obsdate=dt.date.fromisoformat(data['obsdate']) if data.get('obsdate') else None, supsci=data['supsci'],
+                  dirs=Dirs.from_dict(data['dirs']), eEVNname=data.get('eEVNname'), steps=data.get('steps'),
+                  pi=[PI.from_dict(p) for p in data['pi']] if data.get('pi') else None,
+                  credentials=Credentials.from_dict(data['credentials']) if data.get('credentials') else None,
+                  sources=Sources.from_dict(data['sources']) if data.get('sources') else None,
+                  antennas=Antennas.from_dict(data['antennas']) if data.get('antennas') else None,
+                  scans=Scans.from_dict(data['scans']) if data.get('scans') else None, refant=data.get('refant'),
+                #   spectral_line=data.get('spectral_line', False),
+                  correlator_passes=[CorrelatorPass.from_dict(cp) for cp in data['correlator_passes']] if data.get('correlator_passes') else None)
+        if data.get('_timerange'):
+            exp._timerange = [dt.datetime.fromisoformat(t) for t in data['_timerange']]
+        return exp
+
+    def store(self, path: Path | None = None):
         """Stores the current Experiment into a JSON file in the indicated path. If not provided,
         it will be '{expname.lower()}.json' where exp is the name of the experiment.
         """
-        exp_dict = {
-            'expname': self.expname,
-            'obsdate': self.obsdate,
-            'supsci': self.supsci,
-            'dirs': self.dirs,
-            'eEVNname': self.eEVNname,
-            'steps': self.steps,
-            'pi': self.pi,
-            'credentials': self.credentials,
-            'sources': self.sources,
-            'antennas': self.antennas,
-            'scans': self.scans,
-            'refant': self.refant,
-            'spectral_line': self.spectral_line,
-            'correlator_passes': self.correlator_passes,
-            '_timerange': self._timerange
-        }
         with open(path if path is not None else self._local_copy, 'w') as f:
-            json.dump(exp_dict, f, cls=ExperimentJSONEncoder, indent=2)
-
+            json.dump(self.to_dict(), f, indent=2)
 
     @staticmethod
-    def load(expname: str | None = None, path: Optional[Path] = None):
+    def load(expname: str | None = None, path: Path | None = None):
         """Loads the current Experiment that was stored in a JSON file in the indicated path.
         If path is None, it assumes the standard path of '{exp}.json' where 'exp' is the name
         of the experiment.
         """
-        with open(path if path is not None else Path(f"{expname.lower() if expname is not None \
-                                                        else Path.cwd().name.lower()}.json"), 'r') as f:
-            exp_dict = json.load(f, object_hook=experiment_json_decoder)
-
-        exp = Experiment(
-            expname=exp_dict['expname'],
-            obsdate=exp_dict['obsdate'],
-            supsci=exp_dict['supsci'],
-            dirs=exp_dict['dirs'],
-            eEVNname=exp_dict.get('eEVNname'),
-            steps=exp_dict.get('steps'),
-            pi=exp_dict.get('pi'),
-            credentials=exp_dict.get('credentials'),
-            sources=exp_dict.get('sources'),
-            antennas=exp_dict.get('antennas'),
-            scans=exp_dict.get('scans'),
-            refant=exp_dict.get('refant'),
-            spectral_line=exp_dict.get('spectral_line', False),
-            correlator_passes=exp_dict.get('correlator_passes')
-        )
-        exp._timerange = exp_dict.get('_timerange')
-        return exp
+        try:
+            file_path = path if path is not None else Path(f"{expname.lower() if expname is not None \
+                                                            else Path.cwd().name.lower()}.json")
+            if not file_path.exists():
+                raise FileNotFoundError(f"Experiment file not found: {file_path}")
+                
+            with open(file_path, 'r') as f:
+                exp_dict = json.load(f)
+                
+            if not isinstance(exp_dict, dict):
+                raise ValueError("Invalid experiment file format: expected dictionary")
+                
+            return Experiment.from_dict(exp_dict)
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"Could not load experiment: {e}")
+        except json.JSONDecodeError as e:
+            raise json.JSONDecodeError(f"Invalid JSON in experiment file: {e}", e.doc, e.pos)
+        except (KeyError, TypeError) as e:
+            raise ValueError(f"Invalid experiment data structure: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error loading experiment: {e}")
 
 
     def __repr__(self, *args, **kwargs) -> str:
@@ -909,11 +1005,12 @@ class Experiment:
         """
         print('\n\n')
         rprint(f"[bold red]Experiment {self.expname.upper()}[/bold red].", sep="\n\n")
+        obsdate_str = self.obsdate.strftime('%d/%m/%Y') if self.obsdate else 'Unknown'
         if self.timerange:
-            rprint(f"[dim]Obs. date[/dim]: {self.obsdate.strftime('%d/%m/%Y')} "
+            rprint(f"[dim]Obs. date[/dim]: {obsdate_str} "
                    f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC")
         else:
-            rprint(f"[dim]Obs. date[/dim]: {self.obsdate.strftime('%d/%m/%Y')}")
+            rprint(f"[dim]Obs. date[/dim]: {obsdate_str}")
 
         if self.eEVNname is not None:
             rprint(f"[dim]e-EVN run[/dim]: {self.eEVNname}")
@@ -987,14 +1084,15 @@ class Experiment:
                                                                f"{self.expname.upper()}")))
             s_file += [f"# EVN Post-processing of {self.expname.upper()}\n"]
             s += f"{term.normal}\n\n{term.normal}"
-            s += term.bright_black('Obs date: ') + self.obsdate.strftime('%d/%m/%Y')
+            obsdate_str = self.obsdate.strftime('%d/%m/%Y') if self.obsdate else 'Unknown'
+            s += term.bright_black('Obs date: ') + obsdate_str
             if self.timerange is not None:
                 s += f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC\n"
-                s_file += ['Obs date: ' + self.obsdate.strftime('%d/%m/%Y') + \
+                s_file += ['Obs date: ' + obsdate_str + \
                            f" {'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} " \
                            "UTC\n"]
             else:
-                s_file += ['Obs date: ' + self.obsdate.strftime('%d/%m/%Y')]
+                s_file += ['Obs date: ' + obsdate_str]
 
             if self.eEVNname is not None:
                 s += term.bright_black('From e-EVN run: ') + self.eEVNname + '\n'

@@ -101,7 +101,7 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
 
     if (process.returncode != 0) and (process.returncode is not None):
         raise ValueError(f"Error code {process.returncode} when running " \
-                         f"{command} {parameters} in ccs.")
+                         f"{command} {' '.join(parameters) if parameters is not None else ''}")
 
     return '\n'.join(output_lines)
 

@@ -3,6 +3,8 @@
 
 """
 import os
+import json
+import glob
 import argparse
 from rich import print as rprint
 from rich_argparse import RawTextRichHelpFormatter
@@ -11,6 +13,7 @@ from pathlib import Path
 from importlib.metadata import version
 from . import workflow
 from . import experiment
+from . import lisfiles
 
 
 __version__ = version('evn_postprocess')
@@ -135,6 +138,10 @@ def main():
                         help='Debug mode: shows a more verbose output')
     parser.add_argument('--j2ms2par', type=str, default=None,
                         help='Additional attributes for j2ms2 (like the fo:XXXXX).')
+    parser.add_argument('-s', '--steps', type=str, nargs='+', default=None,
+                        help='Run from a specific step (and optionally to another step).\n'
+                        'If one step is given, runs from that step to the end.\n'
+                        'If two steps are given, runs from the first to the second (inclusive).')
     parser.add_argument('-v', '--version', action='version',
                         version='%(prog)s {}'.format(__version__))
     subparsers = parser.add_subparsers(help='[bold]If no command is provided, the full ' \
@@ -148,39 +155,100 @@ def main():
                               formatter_class=parser.formatter_class)
     parser_exec = subparsers.add_parser('exec', help='Runs a single task from the post-processing workflow',
                                         formatter_class=parser.formatter_class)
-    parser_exec.add_argument('task_name', type=str, help="Name of the task to run. Run with --help/-h "
-                             "to see the available tasks.")
+    parser_exec.add_argument('task_name', type=str, nargs='?', default=None,
+                             help="Name of the task to run. If not provided, lists all available tasks.")
     args = parser.parse_args()
 
-    expname = args.expname.upper() if args.expname else experiment.retrieve_expname()
-    if not args.dir:
-        cwd = Path(eval(f"f'{experiment.retrieve_servers()['eee'].path}'", {'expname': expname}))
-    else:
-        cwd = Path(args.dir)
+    try:
+        expname = args.expname.upper() if args.expname else experiment.retrieve_expname()
+    except (ValueError, FileNotFoundError) as e:
+        rprint(f"[red]Error retrieving experiment name: {e}[/red]")
+        rprint("[red]Please specify the experiment name with -e/--expname or run from the experiment directory[/red]")
+        return
+    
+    try:
+        if not args.dir:
+            servers = experiment.retrieve_servers()
+            cwd = Path(eval(f"f'{servers['eee'].path}'", {'expname': expname}))
+        else:
+            cwd = Path(args.dir)
+    except (FileNotFoundError, KeyError) as e:
+        rprint(f"[red]Error setting up directory: {e}[/red]")
+        rprint("[red]Please check the server configuration or specify a directory with -d/--dir[/red]")
+        return
 
     if (not args.subpar) or (args.subpar == 'info'):
-        cwd.mkdir(exist_ok=True)
-        os.chdir(cwd)
+        try:
+            cwd.mkdir(exist_ok=True)
+            os.chdir(cwd)
+        except (OSError, PermissionError) as e:
+            rprint(f"[red]Error creating or accessing directory {cwd}: {e}[/red]")
+            return
+            
+        # A previous execution of the post-process has been done
         if Path(f"{expname.lower()}.json").exists():
-            # A previous execution of the post-process has been done
             rprint(f"[bold]Recovering previously-stored information for {expname}[/bold]")
-            exp = experiment.Experiment.load(expname)
-            # Just to avoid that the user deleted some folders
-            workflow.create_folder_structure()
+            try:
+                exp = experiment.Experiment.load(expname)
+                # Just to avoid that the user deleted some folders
+                workflow.create_folder_structure()
+                
+                # Check if correlator passes are empty but .lis files exist
+                if len(exp.correlator_passes) == 0 and len(glob.glob(f"{expname.lower()}*.lis")) > 0:
+                    rprint("[bold yellow]No correlator passes found but .lis files exist. Reloading .lis files...[/bold yellow]")
+                    if not lisfiles.get_passes_from_lisfiles(exp):
+                        rprint("[red]Error: Failed to reload .lis files[/red]")
+                        return
+                        
+            except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+                rprint(f"[red]Error loading experiment data: {e}[/red]")
+                rprint("[red]The experiment file may be corrupted. Consider reinitializing the experiment.[/red]")
+                return
         else:
-            exp = workflow.initialize_experiment(expname, args.supsci if args.supsci else experiment.retrieve_username())
-            if args.j2ms2par is not None:
-                exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
-                exp.store()
+            try:
+                supsci = args.supsci if args.supsci else experiment.retrieve_username()
+                exp = workflow.initialize_experiment(expname, supsci)
+                if args.j2ms2par is not None:
+                    exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
+                    exp.store()
+            except (ValueError, FileNotFoundError, RuntimeError) as e:
+                rprint(f"[red]Error initializing experiment: {e}[/red]")
+                return
 
         if not args.subpar:
-            workflow.run_workflow(exp, args.no_archive, debug=args.debug)
+            from_step, to_step = None, None
+            if args.steps:
+                if len(args.steps) > 2:
+                    rprint("[red]Error: --steps accepts at most two step names.[/red]")
+                    return
+                from_step = args.steps[0]
+                to_step = args.steps[1] if len(args.steps) == 2 else None
+                valid, error_msg = workflow.validate_steps(from_step, to_step)
+                if not valid:
+                    rprint(f"[red]Error: {error_msg}[/red]")
+                    return
+            workflow.run_workflow(exp, args.no_archive, debug=args.debug, from_step=from_step, to_step=to_step)
         else:  # elif args.subpar == 'info':
             exp.print_blessed(outputfile=None)
     elif args.subpar == 'list':
-        workflow.list_tasks(expname, print_docs=True)
+        try:
+            workflow.list_tasks(expname, print_docs=True)
+        except (FileNotFoundError, KeyError) as e:
+            rprint(f"[red]Error listing tasks: {e}[/red]")
+            return
     elif args.subpar == 'exec':
-        workflow.run_isolated_task(args.task_name, expname)
+        if args.task_name is None:
+            try:
+                workflow.list_tasks(expname, print_docs=True)
+            except (FileNotFoundError, KeyError) as e:
+                rprint(f"[red]Error listing tasks: {e}[/red]")
+                return
+        else:
+            try:
+                workflow.run_isolated_task(args.task_name, expname)
+            except (FileNotFoundError, KeyError, AttributeError) as e:
+                rprint(f"[red]Error running task '{args.task_name}': {e}[/red]")
+                return
 
 
 if __name__ == '__main__':

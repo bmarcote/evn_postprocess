@@ -374,39 +374,52 @@ def flag_weights(msfile: str | Path, threshold: float, apply: bool = True) -> tu
     if threshold <= 0 or threshold >= 1:
         raise ValueError("Threshold must be in the interval (0, 1).")
 
-    with misc.table(msfile, readonly=False) as ms:
-        @dataclass
-        class Flagged:
-            before: int = 0
-            after: int = 0
-            nonzero: int = 0
-            total: int = 0 # note that total is different from nvis if there are multiple polarizations/spw/etc
+    @dataclass
+    class Flagged:
+        before: int = 0
+        after: int = 0
+        nonzero: int = 0
+        total: int = 0 # note that total is different from nvis if there are multiple polarizations/spw/etc
 
+    with misc.table(msfile, readonly=False) as ms:
         flagged = Flagged()
-        nvis = len(ms) 
+        total_number = 0
+        flagged_before, flagged_after = (0, 0)
+        flagged_nonzero, flagged_nonzero_before, flagged_nonzero_after = (0, 0, 0)
+        # WEIGHT: (nrow, npol)
+        # WEIGHT_SPECTRUM: (nrow, npol, nfreq)
+        # flags[weight < threshold] = True
         weightcol = 'WEIGHT_SPECTRUM' if 'WEIGHT_SPECTRUM' in ms.colnames() else 'WEIGHT'
-        needs_transpose = weightcol == 'WEIGHT'
+        transpose = (lambda x:x) if weightcol == 'WEIGHT_SPECTRUM' else (lambda x: x.transpose((1, 0, 2)))
         with progress.Progress() as progress_bar:
-            task = progress_bar.add_task("[green]Flagging weights...", total=nvis)
-            for (start, nrow) in misc.chunkert(0, nvis, 100):
+            task = progress_bar.add_task("[green]Flagging weights...", total=len(ms))
+            for (start, nrow) in misc.chunkert(0, len(ms), 100):
                 progress_bar.update(task, advance=nrow)
-                flags = ms.getcol("FLAG", startrow=start, nrow=nrow)
-                weights = ms.getcol(weightcol, startrow=start, nrow=nrow)
-                if needs_transpose:
-                    weights = weights[:, :, np.newaxis]
-                
+                # shape: (nrow, npol, nfreq)
+                flags = transpose(ms.getcol("FLAG", startrow=start, nrow=nrow))
                 flagged.total += int(np.prod(flags.shape))
+                # count how much data is already flagged
                 flagged.before += np.sum(flags)
-                new_flags = np.logical_or(flags, weights < threshold)
-                flagged.after += np.sum(new_flags)
-                flagged.nonzero += np.sum(np.logical_and(new_flags, weights > 0.001))
+                # extract weights and compute new flags based on threshold
+                weights = ms.getcol(weightcol, startrow=start, nrow=nrow)
+                # how many non-zero did we flag
+                flagged_nonzero_before = np.logical_and(flags, weights > 0.001)
+                # join with existing flags and count again
+                flags = np.logical_or(flags, weights < threshold)
+                flagged.after += np.sum(flags)
+                flagged_nonzero_after = np.logical_and(flags, weights > 0.001)
+                # Saving the total of nonzero flags (in this and previous runs)
+                # flagged_nonzero += np.sum(np.logical_xor(flagged_nonzero_before, flagged_nonzero_after))
+                flagged.nonzero += np.sum(flagged_nonzero_after)
+                # one thing left to do: write the updated flags to disk
+                #flags = ms.putcol("FLAG", flags.transpose((1, 0 , 2)), startrow=start, nrow=nrow)
                 if apply:
-                    ms.putcol("FLAG", new_flags, startrow=start, nrow=nrow)
+                    ms.putcol("FLAG", transpose(flags), startrow=start, nrow=nrow)
 
         pct_total = 100.0 * flagged.after / flagged.total if flagged.total > 0 else 0.0
         pct_new = 100.0 * (flagged.after - flagged.before) / flagged.total if flagged.total > 0 else 0.0
         pct_nonzero = 100.0 * flagged.nonzero / flagged.total if flagged.total > 0 else 0.0
-        print(f"\nGot {nvis:11} visibilities ({flagged.before}, {flagged.after})")
+        print(f"\nGot {flagged.total:11} visibilities ({flagged.before}, {flagged.after})")
         print(f"Got {flagged.after - flagged.before:11} visibilities to flag using threshold {threshold}\n")
         print(f"{pct_total:.2f}% total vis. flagged ({pct_new:.2f}% to flag in this execution).")
         print(f"{pct_nonzero:.2f}% data with non-zero weights flagged.\n")

@@ -18,12 +18,11 @@ import subprocess
 import numpy as np
 from loguru import logger
 from astropy import units as u
+from astropy.io import fits
 from rich import print as rprint
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from itertools import product
-from . import experiment
-from . import utils
-from . import mstools
+from . import experiment, utils, mstools
 
 
 def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
@@ -85,23 +84,41 @@ def getdata(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if data was retrieved successfully.
     """
-    def _fetch_pass(a_pass):
-        utils.shell_command("getdata.pl",
-                            ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
-                             "-lis", a_pass.lisfile.name],
-                            shell=True,
-                            stdout=None,
-                            stderr=subprocess.STDOUT,
-                            bufsize=0)
+    try:
+        def _fetch_pass(a_pass):
+            try:
+                if not a_pass.lisfile.exists():
+                    logger.error(f"LIS file not found: {a_pass.lisfile}")
+                    return False
+                    
+                utils.shell_command("getdata.pl",
+                                    ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
+                                     "-lis", a_pass.lisfile.name],
+                                    shell=True,
+                                    stdout=None,
+                                    stderr=subprocess.STDOUT,
+                                    bufsize=0)
+                return True
+            except Exception as e:
+                logger.error(f"Error fetching data for {a_pass.lisfile.name}: {e}")
+                return False
 
-    if len(exp.correlator_passes) == 0:
-        rprint("[bold yellow]No correlator passes found to fetch[/bold yellow]")
+        if len(exp.correlator_passes) == 0:
+            rprint("[bold yellow]No correlator passes found to fetch[/bold yellow]")
+            return True
+
+        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as pool:
+            results = list(pool.map(_fetch_pass, exp.correlator_passes))
+            
+        if not all(results):
+            failed_count = len(results) - sum(results)
+            logger.error(f"Failed to fetch data for {failed_count} passes")
+            return False
+            
         return True
-
-    with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as pool:
-        results = pool.map(_fetch_pass, exp.correlator_passes)
-
-    return True
+    except Exception as e:
+        logger.error(f"Unexpected error in getdata: {e}")
+        return False
 
 
 def j2ms2(exp: experiment.Experiment) -> bool:
@@ -117,25 +134,54 @@ def j2ms2(exp: experiment.Experiment) -> bool:
     Raises:
         IOError: If there is not enough disk space to create the MS files.
     """
-    if utils.space_available(Path.cwd()) <= 1.2*u.kbit*int(subprocess.run(
-                                               "du -sc */*.cor*", shell=True,
-                                               capture_output=True).stdout.decode().split()[-2]):
-        rprint("\n\n[bold red]There is no enough space in the computer to create " \
-               "the MS file[/bold red]")
-        raise IOError("Not enough disk space to create the MS file.")
+    try:
+        # Check disk space
+        try:
+            du_result = subprocess.run("du -sc */*.cor*", shell=True, capture_output=True, text=True)
+            if du_result.returncode != 0:
+                logger.warning("Could not estimate disk space usage, proceeding anyway")
+            else:
+                cor_size = int(du_result.stdout.split()[-2])
+                available_space = utils.space_available(Path.cwd())
+                if available_space <= 1.2*u.kbit*cor_size:
+                    rprint("\n\n[bold red]There is no enough space in the computer to create " \
+                           "the MS file[/bold red]")
+                    raise IOError("Not enough disk space to create the MS file.")
+        except (ValueError, IndexError, subprocess.SubprocessError) as e:
+            logger.warning(f"Could not check disk space: {e}, proceeding anyway")
+            
+        if not exp.correlator_passes:
+            logger.error("No correlator passes found for j2ms2")
+            return False
 
-    def _j2ms2_correlator_pass(args: tuple[experiment.Experiment, experiment.CorrelatorPass]) -> bool:
-        exp, a_pass = args
-        if not os.path.isdir(a_pass.msfile):
-            utils.shell_command("j2ms2", ["-v", str(a_pass.lisfile)] + ([] if exp.eEVNname else ["fo:nosquash_source_table"]),
-                                shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+        def _j2ms2_correlator_pass(args: tuple[experiment.Experiment, experiment.CorrelatorPass]) -> bool:
+            exp, a_pass = args
+            try:
+                if not a_pass.lisfile.exists():
+                    logger.error(f"LIS file not found: {a_pass.lisfile}")
+                    return False
+                    
+                if os.path.isdir(a_pass.msfile):
+                    logger.debug(f"MS file already exists: {a_pass.msfile}")
+                    return True
+                    
+                j2ms2_args = ["-v", str(a_pass.lisfile)]
+                if not exp.eEVNname:
+                    j2ms2_args.append("fo:nosquash_source_table")
+                    
+                utils.shell_command("j2ms2", j2ms2_args, shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+                return True
+            except Exception as e:
+                logger.error(f"Error running j2ms2 for {a_pass.lisfile.name}: {e}")
+                return False
 
-        return True
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            results = pool.map(_j2ms2_correlator_pass, product([exp,], exp.correlator_passes))
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        results = pool.map(_j2ms2_correlator_pass, product([exp,], exp.correlator_passes))
-
-    return all(results)
+        return all(results)
+    except Exception as e:
+        logger.error(f"Unexpected error in j2ms2: {e}")
+        return False
 
 
 def update_ms_expname(exp: experiment.Experiment) -> bool:
@@ -168,19 +214,50 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
         bool: True if metadata was extracted successfully.
     """
     def _get_ms_metadata(exp: experiment.Experiment, a_pass: experiment.CorrelatorPass):
-        ms = mstools.Ms(a_pass.msfile, runstats=True)
-        rprint(f"Antennas in the MS: {ms.antennas}")
-        for ant in ms.antennas:
-            if ant.name not in a_pass.antennas:
-                a_pass.antennas.append(ant)
-
-            a_pass.antennas[ant.name].observed = ant.observed
-            a_pass.antennas[ant.name].subbands = ant.subbands
-            a_pass.antennas[ant.name].weights = ant.weights
-        
-        a_pass.freqsetup = experiment.Subbands(subbands=ms.freqsetup.nspw, channels=ms.freqsetup.nchan,
-                                               frequency=ms.freqsetup.meanfreq, bandwidth=ms.freqsetup.bandwidth,
-                                               polarizations=ms.freqsetup.polarizations)
+        try:
+            logger.debug(f"_get_ms_metadata called for {a_pass.msfile}")
+            ms = mstools.Ms(a_pass.msfile, runstats=True)
+            rprint(f"Antennas in the MS: {ms.antennas}")
+            for ant in ms.antennas:
+                if ant.name not in a_pass.antennas:
+                    # Convert mstools.Antenna to experiment.Antenna
+                    exp_ant = experiment.Antenna(name=ant.name, observed=ant.observed,
+                                                 subbands=ant.subbands, weights=ant.weights,
+                                                 polconvert=ant.polconvert, polswap=ant.polswap,
+                                                 onebit=ant.onebit, logfsfile=ant.logfsfile,
+                                                 antabfsfile=ant.antabfsfile)
+                    a_pass.antennas.append(exp_ant)
+                else:
+                    a_pass.antennas[ant.name].observed = ant.observed
+                    a_pass.antennas[ant.name].subbands = ant.subbands
+                    a_pass.antennas[ant.name].weights = ant.weights
+            
+            a_pass.freqsetup = experiment.Subbands(subbands=ms.freqsetup.nspw, channels=ms.freqsetup.nchan,
+                                                   frequency=ms.freqsetup.meanfreq, bandwidth=ms.freqsetup.bandwidth,
+                                                   polarizations=ms.freqsetup.polarizations)
+            
+            # Copy sources from MS to correlator pass
+            a_pass.sources = experiment.Sources()
+            for src in ms.sources:
+                # Check if this source already exists in the global experiment sources
+                if src.name in exp.sources.names:
+                    # Use the existing source from experiment to inherit type and protection info
+                    existing_source = exp.sources[src.name]
+                    exp_src = experiment.Source(name=src.name, coordinates=src.coordinates, 
+                                               type=existing_source.type, protected=existing_source.protected, 
+                                               intent=src.intent)
+                else:
+                    # Create new source with default type (will be updated by aggregate_sources_from_passes)
+                    exp_src = experiment.Source(name=src.name, coordinates=src.coordinates, 
+                                               type=experiment.SourceType.other, protected=False, 
+                                               intent=src.intent)
+                a_pass.sources.append(exp_src)
+            
+            logger.debug(f"Set freqsetup for {a_pass.msfile}: {a_pass.freqsetup}")
+            logger.debug(f"Loaded {len(a_pass.sources)} sources: {a_pass.sources.names}")
+        except Exception as e:
+            logger.error(f"Error reading MS metadata from {a_pass.msfile}: {e}")
+            raise
         # TODO: Fix the ms.scans
         #for scanno in ms.scans:
         #    scannumbers = [int(s.scanno.replace('No', '')) for s in a_pass.scans]
@@ -192,22 +269,24 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
             a_pass.sources = exp.correlator_passes[0].sources
             a_pass.freqsetup = exp.correlator_passes[0].freqsetup
 
+    logger.debug(f"get_metadata_from_ms: {len(exp.correlator_passes)} passes, spectral_line={exp.spectral_line}")
     if len(exp.correlator_passes) > 1 and not exp.spectral_line:
         # then this is just a multiphase center with all setups identical. Do not loop
         # through all MSs.
+        logger.debug("Using MPC path - extracting metadata from first pass only")
         _get_ms_metadata(exp, exp.correlator_passes[0])
         with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes)-1, 10)) as executor:
             futures = [executor.submit(_update_mpc_pass, a_pass) for a_pass in exp.correlator_passes[1:]]
             for fut in futures:
                 fut.result()
     else:
-        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 10)) as executor:
-            futures = [executor.submit(_get_ms_metadata, exp, a_pass) 
-                    for a_pass in exp.correlator_passes]
-            for fut in futures:
-                fut.result()
+        logger.debug("Using standard path - extracting metadata from all passes")
+        for a_pass in exp.correlator_passes:
+            _get_ms_metadata(exp, a_pass)
 
     exp.store()
+    print(exp.correlator_passes[0])
+    print(exp.correlator_passes[0].freqsetup)
     return True
 
 
@@ -242,11 +321,11 @@ def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
                 counter += 1
                 if (counter == 1) and do_weights:
                     utils.shell_command("standardplots",
-                                        ["-weight", a_pass.msfile.name, refant, ','.join(exp.sources.fringefinder)],
+                                        ["-weight", a_pass.msfile.name, refant, ','.join(a_pass.sources.fringefinder)],
                                         stdout=None, stderr=subprocess.STDOUT)
                 else:
                     utils.shell_command("standardplots",
-                                        [a_pass.msfile.name, refant, ','.join(exp.sources.fringefinder)],
+                                        [a_pass.msfile.name, refant, ','.join(a_pass.sources.fringefinder)],
                                         stdout=None, stderr=subprocess.STDOUT)
 
                 # Runs again jplotter but only to retrieve the summary into the output
@@ -271,7 +350,7 @@ def print_exp(exp: experiment.Experiment, display_in_terminal: bool = True) -> b
     return exp.print_blessed(outputfile='notes.md', display_in_terminal=display_in_terminal)
 
 
-def open_standardplot_files(exp) -> Optional[bool]:
+def open_standardplot_files(exp) -> bool:
     """Calls gv to open all plots generated by standardplots.
     """
     standardplots = []
@@ -288,14 +367,14 @@ def open_standardplot_files(exp) -> Optional[bool]:
         print("Take a look at the produced standard plots:")
         print("\n".join([f"- {a_plot}" for a_plot in standardplots]))
         print("[green]Execute me again after that to continue the post-process.[/green]")
-        return None
+        return False
 
     try:
         for a_plot in standardplots:
             utils.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
     except Exception as e:
         print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")
-        return None
+        return False
 
     return True
 
@@ -387,7 +466,7 @@ def flag_weights(exp: experiment.Experiment) -> bool:
             a_pass.flagged_weights.threshold
         )
         a_pass.flagged_weights.percentage = pct_nonzero
-        exp.log(f"flag_weights: {a_pass.msfile.name} threshold={a_pass.flagged_weights.threshold}\n"
+        logger.info(f"flag_weights: {a_pass.msfile.name} threshold={a_pass.flagged_weights.threshold}\n"
                 f"# {pct_total:.2f}% total flagged, {pct_nonzero:.2f}% non-zero weights flagged\n")
 
     with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
@@ -586,7 +665,7 @@ def polconvert(exp) -> Optional[bool]:
     if len(exp.antennas.polconvert) > 0:
         polconv_inp = Path('./polconvert_inputs.toml')
         if not polconv_inp.exists():
-            exp.log("cp ~/polconvert/polconvert_inputs.toml ./polconvert_inputs.toml")
+            logger.info("cp ~/polconvert/polconvert_inputs.toml ./polconvert_inputs.toml")
             utils.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.toml',
                                       './polconvert_inputs.toml'], shell=True, stdout=None)
 
@@ -632,7 +711,7 @@ def polconvert(exp) -> Optional[bool]:
         exp.last_step = 'tconvert'
         return None
     else:
-        exp.log("# PolConvert is not required.")
+        logger.info("# PolConvert is not required.")
         # dialog_text = "PolConvert is required.\n"
         # dialog_text += f"Please run it manually for {','.join(exp.polconvert_antennas)}."
         # dialog_text += "Once you are done (all FITS properly corrected), press Continue."
@@ -665,9 +744,9 @@ def post_polconvert(exp) -> Optional[bool]:
         # Path(an_idi.name.replace('.PCONVERT', '')).rename(idi_ori / an_idi.name)
         an_idi.rename(an_idi.name.replace('.PCONVERT', ''))
 
-    exp.log("mkdir idi_ori")
-    exp.log("mv *IDI *IDI? *IDI?? *IDI??? *IDI???? idi_ori/")
-    exp.log("zmv '(*).PCONVERT' '$1'")
+    logger.info("mkdir idi_ori")
+    logger.info("mv *IDI *IDI? *IDI?? *IDI??? *IDI???? idi_ori/")
+    logger.info("zmv '(*).PCONVERT' '$1'")
     # Creates a new MS with the PolConverted-data in order to plot it
     # to check if the conversion run properly
     if any(['_1_1' in pp.name for pp in pconverted_idi]):
@@ -735,7 +814,7 @@ def set_credentials(exp) -> bool:
                             password="".join(random.sample(possible_char, 12)))
         utils.shell_command("touch",
                                   f"{exp.credentials.username}_{exp.credentials.password}.auth")
-        exp.log(f"touch {exp.credentials.username}_{exp.credentials.password}.auth")
+        logger.info(f"touch {exp.credentials.username}_{exp.credentials.password}.auth")
 
     return True
 
@@ -803,19 +882,19 @@ def check_consistency(fitsfile, verbose=True):
     all_good = True
     if has_Tsys(fitsfile):
         if verbose:
-            pprint(f"[green]{fitsfile} has SYSTEM_TEMPERATURE table.[/green]")
+            rprint(f"[green]{fitsfile} has SYSTEM_TEMPERATURE table.[/green]")
     else:
         if verbose:
-            pprint(f"[red]{fitsfile} does not have SYSTEM_TEMPERATURE table.[/red]")
+            rprint(f"[red]{fitsfile} does not have SYSTEM_TEMPERATURE table.[/red]")
 
         all_good = False
 
     if has_GC(fitsfile):
         if verbose:
-            pprint("[green]Has GAIN_CURVE table.[/green]")
+            rprint("[green]Has GAIN_CURVE table.[/green]")
     else:
         if verbose:
-            pprint("[red]Does not have GAIN_CURVE table.[/red]")
+            rprint("[red]Does not have GAIN_CURVE table.[/red]")
 
         all_good = False
 
@@ -838,7 +917,6 @@ def append_antab(exp) -> bool:
                  for a_fits in fits2check])) \
                  or (len(glob.glob(f"{exp.expname.lower()}*.antab")) == 0):
         utils.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
-        exp.log('append_antab_idi.py')
         if not all([check_consistency(a_fits) for a_fits in fits2check]):
             # As now everything should be OK. Means that something failed.
             rprint("\n\n[red bold]The Tsys/GC could not be imported into the FITS-IDI.[/red bold]")
@@ -889,3 +967,29 @@ def nme_report(exp) -> bool:
         print("You may have a coffee/tea after finishing the last tasks!")
 
     return True
+
+
+def aggregate_sources_from_passes(exp: experiment.Experiment) -> None:
+    """Aggregates all sources from all correlator passes into the global experiment sources.
+    
+    This ensures that exp.sources contains all sources from all passes, not just
+    the ones from VEX/jexp files.
+    
+    Args:
+        exp (experiment.Experiment): Experiment object to update with aggregated sources.
+    """
+    for a_pass in exp.correlator_passes:
+        if a_pass.sources:
+            for source in a_pass.sources:
+                # Add source to global experiment sources if not already present
+                if source.name not in exp.sources.names:
+                    exp.sources.append(source)
+                else:
+                    # Update existing source type if this pass has more specific information
+                    existing_source = exp.sources[source.name]
+                    # Prefer non-'other' types
+                    if existing_source.type == experiment.SourceType.other and source.type != experiment.SourceType.other:
+                        existing_source.type = source.type
+                    # Update protected status if this source is protected
+                    if source.protected and not existing_source.protected:
+                        existing_source.protected = True

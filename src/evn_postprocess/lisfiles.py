@@ -91,11 +91,8 @@ def update_lis_file(lisfilename: str | Path, oldexp: str, newexp: str) -> None:
         lisfilelines = lisfile.readlines()
         for i, aline in enumerate(lisfilelines):
             if aline[0] not in ('+', '-'):
-                # Replace the EXP (upper) entries
                 lisfilelines[i] = aline.replace(oldexp, newexp)
-                # Replace the exp (lower) entries
                 lisfilelines[i] = lisfilelines[i].replace(oldexp.lower(), newexp.lower())
-                # Replace the exp.vix to EXP.vix (as symb link was done)
                 lisfilelines[i] = lisfilelines[i].replace(f"{newexp.lower()}.vix",
                                                           f"{newexp.upper()}.vix")
 
@@ -221,6 +218,11 @@ def get_passes_from_lisfiles(exp: experiment.Experiment) -> bool:
         results = list(executor.map(_process_single_lisfile, args_list))
     
     exp.correlator_passes = [result for result in results if result is not None]
+    
+    # Aggregate sources from all correlator passes into the global experiment sources
+    from . import process
+    process.aggregate_sources_from_passes(exp)
+    
     exp.store()
     return True
 
@@ -256,17 +258,47 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
     If at least one of the .lis files reports a possible issue (e.g. duplicated scans,
     missing scans, etc), it will return False. Otherwise it will return True.
     
+    Additionally, ensures that all .lis files have different names, different output 
+    msfile names, and different fitsidinames for consistency and robustness.
+    
     This function processes lisfiles in parallel using ThreadPoolExecutor.
     
     Args:
         exp (experiment.Experiment): Experiment object with correlator passes to check.
     
     Returns:
-        bool: True if all lis files are valid, False if issues are found.
+        bool: True if all lis files are valid and have unique names, False if issues are found.
     """
     is_multi_phase_center = len(exp.correlator_passes) > 2 if exp.spectral_line else len(exp.correlator_passes) > 1
     args_list = [(a_pass, is_multi_phase_center) for a_pass in exp.correlator_passes]
     with ThreadPoolExecutor() as executor:
         results = list(executor.map(_check_single_lisfile, args_list))
     
-    return all(results)
+    # Original checks - ensure all individual lis file checks pass
+    if not all(results):
+        logger.error("One or more .lis files failed validation checks")
+        return False
+    
+    # Check for unique msfile names
+    msfile_names = [a_pass.msfile.name for a_pass in exp.correlator_passes]
+    if len(msfile_names) != len(set(msfile_names)):
+        duplicate_msfiles = [name for name in msfile_names if msfile_names.count(name) > 1]
+        logger.error(f"Duplicate msfile names found: {set(duplicate_msfiles)}")
+        return False
+    
+    # Enhanced checks - ensure unique .lis file names
+    lisfile_names = [a_pass.lisfile.name for a_pass in exp.correlator_passes]
+    if len(lisfile_names) != len(set(lisfile_names)):
+        duplicate_lisfiles = [name for name in lisfile_names if lisfile_names.count(name) > 1]
+        logger.error(f"Duplicate .lis file names found: {set(duplicate_lisfiles)}")
+        return False
+    
+    # Enhanced checks - ensure unique fitsidinames
+    fitsidinames = [a_pass.fitsidifile for a_pass in exp.correlator_passes]
+    if len(fitsidinames) != len(set(fitsidinames)):
+        duplicate_fitsidinames = [name for name in fitsidinames if fitsidinames.count(name) > 1]
+        logger.error(f"Duplicate FITS IDI names found: {set(duplicate_fitsidinames)}")
+        return False
+    
+    logger.debug("All .lis files passed consistency checks with unique names")
+    return True
