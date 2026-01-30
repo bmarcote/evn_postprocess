@@ -34,17 +34,22 @@ def modify_mounts(msfile: str, antenna: str, mount: str, verbose: bool = True) -
         mount (str): New mount type to set (e.g., 'ALT-AZ', 'EQUATORIAL').
         verbose (bool): If True, print mount type for each antenna. Default True.
     """
+
     with misc.table(msfile, readonly=False) as ms:
         with misc.table(ms.getkeyword('ANTENNA'), readonly=False) as ant_table:
             stations = [i for i in ant_table.getcol('NAME')]
             mounts = ant_table.getcol('MOUNT')
+            def getmount(stations: list[str], station: str, mounts: list[str]) -> str:
+                """Returns the mount for the given stations
+                """
+                return mounts[stations.index(station)]
+
             # Function to get directly the position of a station in the array to get its mount
             try:
-                getmount = lambda station: mounts[stations.index(station)]
-                if getmount(antenna) == mount:
+                if getmount(stations, antenna, mounts) == mount:
                     rprint(f"{antenna} has already the right mount ({mount})")
                 else:
-                    rprint(f"Changing {antenna} mount from {getmount(antenna)} to {mount}")
+                    rprint(f"Changing {antenna} mount from {getmount(stations, antenna, mounts)} to {mount}")
                     mounts[stations.index(antenna)] = mount
             except ValueError:
                 rprint(f"[bold red]{antenna} was not found in the MS while executing ysfocus[/bold red]")

@@ -1,6 +1,5 @@
 #! /usr/bin/env python3
 """Post-Processing of EVN experiments.
-
 """
 import os
 import json
@@ -9,7 +8,6 @@ import argparse
 from rich import print as rprint
 from rich_argparse import RawTextRichHelpFormatter
 from pathlib import Path
-# from inspect import signature  # WHAT?  to know how many parameters has each function
 from importlib.metadata import version
 from . import workflow
 from . import experiment

@@ -20,12 +20,14 @@ def create_parser():
                                      formatter_class=RichHelpFormatter)
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
-    overview_parser = subparsers.add_parser('view', help='Display MS file overview', formatter_class=RichHelpFormatter)
+    overview_parser = subparsers.add_parser('view', help='Display MS file overview',
+                                            formatter_class=RichHelpFormatter)
     overview_parser.add_argument('msfile', type=str, help='Path to the MS file')
     overview_parser.add_argument('-s', '--stats', action='store_true', default=False,
                                  help='Checks which antennas actually observed (slower)')
-    
-    run_parser = subparsers.add_parser('run', help='Run a specific tool on MS file', formatter_class=RichHelpFormatter)
+
+    run_parser = subparsers.add_parser('run', help='Run a specific tool on MS file',
+                                       formatter_class=RichHelpFormatter)
     run_subparsers = run_parser.add_subparsers(dest='tool', help='Available tools')
     
     polswap_parser = run_subparsers.add_parser('polswap', help='Swap polarizations for specified antennas',
@@ -121,14 +123,14 @@ def main():
             match args.tool:
                 case 'polswap':
                     operations.polswap(args.msfile, args.antenna, misc.parse_time(args.starttime),
-                                  misc.parse_time(args.endtime))
+                                       misc.parse_time(args.endtime))
                 case 'copypol':
                     operations.copy_pol(args.msfile, args.antenna, args.polfrom)
                 case 'scale1bit':
                     operations.scale1bit(args.msfile, args.antenna, args.undo, args.scale_weights)
                 case 'invert_subband':
                     operations.invert_subband(args.msfile, args.antenna, misc.parse_time(args.starttime),
-                                         misc.parse_time(args.endtime))
+                                              misc.parse_time(args.endtime))
                 case 'flag_weights':
                     operations.flag_weights(args.msfile, args.threshold, args.apply)
                 case 'expname':

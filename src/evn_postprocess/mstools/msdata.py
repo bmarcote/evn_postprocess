@@ -298,38 +298,61 @@ class Antennas(list):
     
     @property
     def polconvert(self) -> list[str]:
-        """List of names of antennas that require PolConvert
+        """List of names of antennas that require PolConvert.
+        
+        Returns:
+            list[str]: Names of antennas that require polarization conversion.
         """
         return [s.name for s in self if s.polconvert]
     
     @property
     def polswap(self) -> list[str]:
-        """List of names of antennas that require polswap
+        """List of names of antennas that require polswap.
+        
+        Returns:
+            list[str]: Names of antennas that require polarization swapping.
         """
         return [s.name for s in self if s.polswap]
     
     @property
     def onebit(self) -> list[str]:
-        """List of names of antennas that require one-bit corrections
+        """List of names of antennas that require one-bit corrections.
+        
+        Returns:
+            list[str]: Names of antennas that require one-bit data corrections.
         """
         return [s.name for s in self if s.onebit]
     
     @property
     def logfsfile(self) -> list[str]:
-        """List of names of antennas that sent log files
+        """List of names of antennas that sent log files.
+        
+        Returns:
+            list[str]: Names of antennas that submitted log files.
         """
         return [s.name for s in self if s.logfsfile]
     
     @property
     def antabfsfile(self) -> list[str]:
-        """List of names of antennas that sent ANTAB files
+        """List of names of antennas that sent ANTAB files.
+        
+        Returns:
+            list[str]: Names of antennas that submitted ANTAB files.
         """
         return [s.name for s in self if s.antabfsfile]
     
 
 @dataclass
 class Scan:
-    """Defines a scan in the experiment."""
+    """Defines a scan in the experiment.
+    
+    Attributes:
+        scanno (int): Scan number.
+        starttime (datetime.datetime): Start time of the scan.
+        duration_s (int): Duration of the scan in seconds.
+        source (str): Source name observed in this scan.
+        stations (tuple[str]): Tuple of station names that participated in the scan.
+    """
     scanno: int
     starttime: dt.datetime
     duration_s: int
@@ -338,7 +361,11 @@ class Scan:
 
 
 class Scans(list[Scan]):
-    """A list of scans in the experiment."""
+    """Container class for Scan objects.
+    
+    A list subclass that holds Scan objects representing all scans in the experiment.
+    Inherits standard list operations and can be used like a regular list.
+    """
     pass
 
 
@@ -556,22 +583,38 @@ class Ms:
     
     @property
     def freqsetup(self) -> FreqSetup:
-        """Frequency setup of the observation."""
+        """Frequency setup of the observation.
+        
+        Returns:
+            FreqSetup: Frequency configuration including mean frequency, bandwidth, subbands, channels, and polarizations.
+        """
         return self._freqsetup
 
     @property
     def antennas(self) -> Antennas:
-        """Antennas in the observation."""
+        """Antennas in the observation.
+        
+        Returns:
+            Antennas: Container with all antenna objects and their properties.
+        """
         return self._antennas
     
     @property
     def sources(self) -> Sources:
-        """Sources/fields in the observation."""
+        """Sources/fields in the observation.
+        
+        Returns:
+            Sources: Container with all source objects and their coordinates.
+        """
         return self._sources
     
     @property
     def time(self) -> ObsEpoch:
-        """Observation time range."""
+        """Observation time range.
+        
+        Returns:
+            ObsEpoch: Observation epoch with start time, end time, and derived properties.
+        """
         return self._obsepoch
 
     def __repr__(self) -> str:
@@ -737,7 +780,8 @@ class Ms:
         with open(self.msfile.parent / f"{self.msfile.stem}.json" if filepath is None else filepath, 'w') as f:
             json.dump(self.json(), f, indent=indent)
         
-        return self.msfile.parent / f"{self.msfile.stem}.json" if filepath is None else filepath if isinstance(filepath, Path) else Path(filepath)
+        return self.msfile.parent / f"{self.msfile.stem}.json" if filepath is None else \
+            filepath if isinstance(filepath, Path) else Path(filepath)
 
     @classmethod
     def load(cls, filepath: str | Path) -> Self:
