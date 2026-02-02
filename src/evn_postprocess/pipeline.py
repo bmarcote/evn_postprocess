@@ -134,9 +134,9 @@ def run_antab_editor(exp) -> Optional[bool]:
         raise ValueError("antab_editor.py should only be run from the main e-EVN experiment run")
 
     if '_line' in ''.join(glob.glob(f"{exp.expname.lower()}*.lis")):
-        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", "../..", "-l"], shell=True, stdout=None)
+        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", "..", "-l"], shell=True, stdout=None)
     else:
-        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", "../.."], shell=True, stdout=None)
+        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", ".."], shell=True, stdout=None)
     
     if len(missing_antabs := [a.name for a in exp.antennas if not a.antabfsfile]) > 0:
         rprint(f"[red]Note that you are missing ANTAB files from: {', '.join(missing_antabs)}[/red]")

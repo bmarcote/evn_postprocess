@@ -184,9 +184,9 @@ def retrieve_username() -> str:
 class Dirs:
     """Directory paths to put the different files and folders."""
     logs: Path
-    data: Path
-    results: Path
-    diagnostics: Path
+    # data: Path
+    # results: Path
+    # diagnostics: Path
     pipeline: Path
     pipe_in: Path
     pipe_out: Path

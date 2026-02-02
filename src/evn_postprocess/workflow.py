@@ -75,14 +75,14 @@ def create_folder_structure() -> experiment.Dirs:
     Returns:
         Iterable[Path]: List of created folders.
     """
-    folders = {k: Path(v) for k, v in {'logs': "logs", 'data': "data", 'results': "results",
-                                       'diagnostics': "diagnostics",
+    folders = {k: Path(v) for k, v in {'logs': "logs", # 'data': "data", 'results': "results",
+                                    #    'diagnostics': "diagnostics",
                                        'pipeline': "pipeline", 'pipe_in': "pipeline/in", 'pipe_out': "pipeline/out",
-                                       'pipe_temp': "pipeline/temp"}.items()}
+                                       'pipe_temp': "antenna_files"}.items()}
     for folder in folders.values():
         if not folder.exists():
             Path(folder).mkdir(parents=True, exist_ok=True)
-            logger.debug(f"Created folder {folder}")
+            logger.info(f"Created folder {folder}")
         else:
             logger.debug(f"Folder {folder} already exists. Skipped creation.")
 
@@ -291,6 +291,12 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
         logger.debug("Standardplots already run. Skipping.")
         return True
 
+    # Show scan overview before opening standardplots
+    gui = dialog.Terminal()
+    if not gui.show_scan_overview(exp):
+        logger.info("User cancelled after scan overview.")
+        return False
+    
     return process.standardplots(exp, do_weights=do_weights) & process.open_standardplot_files(exp)
 
 

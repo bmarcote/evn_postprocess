@@ -100,8 +100,7 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
             sys.stdout.flush()
 
     if (process.returncode != 0) and (process.returncode is not None):
-        raise ValueError(f"Error code {process.returncode} when running " \
-                         f"{command} {' '.join(parameters) if parameters is not None else ''}")
+        raise ValueError(f"Error code {process.returncode} when running {' '.join(full_shell_command)}")
 
     return '\n'.join(output_lines)
 

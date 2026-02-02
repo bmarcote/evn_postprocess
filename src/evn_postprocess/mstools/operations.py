@@ -39,21 +39,17 @@ def polswap(msfile: str | Path, antenna: str, starttime: dt.datetime | None = No
     """
     def _get_nedded_move(products, ant_order: int):
         """Returns the transposing necessary to do a polswap in one of the stations.
-        Inputs
-        ------
-        products : 2-D array-like
-                is the CORR_PRODUCT of the MS data. Sets the mapping of the stokes given
+        
+        Args:
+            products (2-D array-like): The CORR_PRODUCT of the MS data. Sets the mapping of the stokes given
                 two stations. e.g. [[0, 0], [1, 1], [0, 1], [1, 0]] represents that there
                 are four stokes products, where the first two rows are the direct hands
                 between antenna 1 (first column) and antenna 2 (second column).
-        ant_order : int
-                The position of the antenna in the CORR_PRODUCT (if the antenna to change
+            ant_order (int): The position of the antenna in the CORR_PRODUCT (if the antenna to change
                 is the ANT1 or ANT2, i.e. 0 or 1.
 
-        Outputs
-        -------
-        changes : 1-D array-like
-                The transposition of the columns necessary to make a swap pol for the antenna
+        Returns:
+            1-D array-like: The transposition of the columns necessary to make a swap pol for the antenna
                 specified in ant_order.
                 e.g. for the case mentioned before, if ANT1 is the one that needs to be converted,
                 then the output 'changes' is [3, 2, 1, 0], as the stokes wanted at the end are:
@@ -376,6 +372,14 @@ def flag_weights(msfile: str | Path, threshold: float, apply: bool = True) -> tu
 
     @dataclass
     class Flagged:
+        """Internal class to track flagging statistics.
+        
+        Attributes:
+            before (int): Number of visibilities flagged before processing.
+            after (int): Number of visibilities flagged after processing.
+            nonzero (int): Number of non-zero weight visibilities flagged.
+            total (int): Total number of visibilities processed (different from nvis if multiple polarizations/spw/etc).
+        """
         before: int = 0
         after: int = 0
         nonzero: int = 0
