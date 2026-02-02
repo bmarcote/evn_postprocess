@@ -461,14 +461,12 @@ def flag_weights(exp: experiment.Experiment) -> bool:
         bool: True if weight flagging was applied successfully.
     """
     def _flag_weights_pass(a_pass):
-        total_vis, pct_total, pct_nonzero = mstools.flag_weights(
-            a_pass.msfile, 
-            a_pass.flagged_weights.threshold
-        )
+        total_vis, pct_total, pct_nonzero = mstools.flag_weights(a_pass.msfile, a_pass.flagged_weights.threshold)
         a_pass.flagged_weights.percentage = pct_nonzero
         logger.info(f"flag_weights: {a_pass.msfile.name} threshold={a_pass.flagged_weights.threshold}\n"
                 f"# {pct_total:.2f}% total flagged, {pct_nonzero:.2f}% non-zero weights flagged\n")
 
+    # TODO: check if this is IO or CPU bound
     with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
         futures = [executor.submit(_flag_weights_pass, a_pass) for a_pass in exp.correlator_passes]
         for fut in futures:

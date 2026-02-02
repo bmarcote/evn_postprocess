@@ -514,7 +514,7 @@ class Ms:
         - For each scan, which antennas participated (auto-correlations with |DATA| > 1e-5).
         - For each antenna, which spectral windows (SPWs) were observed (same criterion).
         - For each antenna, global weight statistics in the following bins:
-          <1e-3, [1e-3,0.2), [0.2,0.4), [0.4,0.6), [0.6,0.8), [0.8,0.99), >=0.99.
+          <1e-3, [1e-3,0.2), [0.2,0.4), [0.4,0.6), [0.6,0.8), [0.8,0.9), >=0.9.
 
         Returns a dictionary with the results and updates antenna ``subbands`` and
         ``observed`` flags based on detected auto-correlation data.
@@ -524,7 +524,7 @@ class Ms:
         antenna_spws: dict[str, set[int]] = {name: set() for name in ant_names}
         weight_stats = np.zeros((n_ants, 7), dtype=np.int64)
         scan_antennas: dict[int, set[str]] = defaultdict(set)
-        bins_edges = np.array([0.0, 1e-3, 0.2, 0.4, 0.6, 0.8, 0.99, np.inf])
+        bins_edges = np.array([0.0, 1e-3, 0.2, 0.4, 0.6, 0.8, 0.9, np.inf])
 
         with misc.table(self.msfile, readonly=True, ack=False) as msdata:
             with progress.Progress() as progress_bar:
@@ -542,7 +542,7 @@ class Ms:
                         ant_idx = ants1[idx]
                         ant_name = ant_names[ant_idx]
                         scan_antennas[int(scans[idx])].add(ant_name)
-                        antenna_spws[ant_name].add(spws[idx])
+                        antenna_spws[ant_name].add(int(spws[idx]))
 
                     weights_flat = weights.reshape(nrow, -1)
                     for ant_idx in range(n_ants):
