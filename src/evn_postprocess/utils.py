@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Union
 from rich import print as rprint
+from loguru import logger
 import astropy.units as u
 
 def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = None, **kwargs) -> bool:
@@ -26,7 +27,7 @@ def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = No
     #for key, value in zip(('shell', 'stdout', 'stderr'), (False, None, subprocess.PIPE)):
     #    if key not in kwargs:
     #        kwargs[key] = value
-
+    logger.info(f"scp {originpath} {destpath}")
     process = subprocess.run(["scp", originpath, destpath], timeout=timeout, **kwargs)
     if process.returncode != 0:
         raise ValueError(f"ERROR: could not retrieve {destpath} from {originpath}.")
@@ -52,10 +53,9 @@ def ssh(computer: str, commands: str, shell: bool = False, stdout: Optional[int]
     Raises:
         ValueError: If the ssh command returns a non-zero exit code.
     """
-    rprint(f"\n[bold]> ssh {computer} {commands}[/bold]")
+    logger.info(f"> ssh {computer} {commands}")
     process = subprocess.Popen(["ssh", computer, commands], shell=shell, stdout=stdout,
                                stderr=stderr)
-    # logger.info(output)
     if (process.returncode != 0) and (process.returncode is not None):
         raise ValueError(f"Error code {process.returncode} when running " \
                          f"ssh {computer}:{commands} in ccs.")
@@ -88,7 +88,7 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
     else:
         full_shell_command = [command] if parameters is None else [command, parameters]
 
-    rprint(f"\n[bold]> {' '.join(full_shell_command)}[/bold]")
+    logger.info(f"> {' '.join(full_shell_command)}")
     process = subprocess.Popen(' '.join(full_shell_command), shell=shell,
                                stdout=stdout, stderr=stderr, bufsize=bufsize)
     output_lines = []
@@ -123,8 +123,10 @@ def remote_file_exists(host: str, path: str) -> bool:
     status = subprocess.call(['ssh', host, f"ls {path}"],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if status == 0:
+        logger.info(f"File {path} in {host} exists.")
         return True
     elif (status == 1) or (status == 2):
+        logger.info(f"File {path} in {host} does not exist.")
         return False
 
     raise Exception(f"SSH connection to {host} failed.")
@@ -145,6 +147,7 @@ def grep_remote_file(host: str, remote_file: str, word: str) -> str:
         ValueError: If there is a problem accessing the host or file.
     """
     cmd = f"grep {word} {remote_file}"
+    logger.info(f"> grep {word} {remote_file}")
     process = subprocess.Popen(["ssh", host, cmd], shell=False, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
     output = process.communicate()[0].decode('utf-8')
@@ -172,6 +175,7 @@ def station_1bit_in_vix(vexfile: str | Path) -> bool:
     output = subprocess.call(["grep", "1bit", str(vexfile) if isinstance(vexfile, Path) else vexfile], shell=False, stdout=subprocess.PIPE)
     if output == 0:
         # There is at least one station recording at 1 bit.
+        logger.info(f"There is at least one station recording at 1 bit in {vexfile}.")
         return True
     elif output == 1:
         return False
@@ -201,6 +205,7 @@ def extract_tail_standardplots_output(stdplt_output: str) -> str:
             break
 
     last_lines.append('\n')
+    logger.info('\n'.join(last_lines[::-1]))
     return '\n'.join(last_lines[::-1])
 
 

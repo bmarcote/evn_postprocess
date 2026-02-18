@@ -23,6 +23,7 @@ from rich import print as rprint
 from concurrent.futures import ThreadPoolExecutor
 from itertools import product
 from . import experiment, utils, mstools
+from .plotting import convert_ps_to_png, serve_dashboard
 
 
 def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
@@ -65,6 +66,7 @@ def archive(exp: experiment.Experiment) -> bool:
     if exp.credentials is not None:
         utils.shell_command("archive.pl", ["-auth", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
                                                  "-n", exp.credentials.username, "-p", exp.credentials.password])
+        logger.info(f"archive.pl -auth {exp.expname}_{exp.obsdate.strftime('%y%m%d')}")
     else:
         assert len(glob.glob("*_*.auth")) == 0, 'No credentials stored but auth file found'
 
@@ -91,13 +93,10 @@ def getdata(exp: experiment.Experiment) -> bool:
                     logger.error(f"LIS file not found: {a_pass.lisfile}")
                     return False
                     
-                utils.shell_command("getdata.pl",
-                                    ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
-                                     "-lis", a_pass.lisfile.name],
-                                    shell=True,
-                                    stdout=None,
-                                    stderr=subprocess.STDOUT,
-                                    bufsize=0)
+                cmd_args = ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
+                            "-lis", a_pass.lisfile.name]
+                utils.shell_command("getdata.pl", cmd_args, shell=True,
+                                    stdout=None, stderr=subprocess.STDOUT, bufsize=0)
                 return True
             except Exception as e:
                 logger.error(f"Error fetching data for {a_pass.lisfile.name}: {e}")
@@ -200,6 +199,7 @@ def update_ms_expname(exp: experiment.Experiment) -> bool:
                        for a_pass in exp.correlator_passes]
             for fut in futures:
                 fut.result()
+        logger.info(f"Renamed project in MS to {exp.expname}")
 
     return True
 
@@ -215,9 +215,7 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
     """
     def _get_ms_metadata(exp: experiment.Experiment, a_pass: experiment.CorrelatorPass):
         try:
-            logger.debug(f"_get_ms_metadata called for {a_pass.msfile}")
             ms = mstools.Ms(a_pass.msfile, runstats=True)
-            rprint(f"Antennas in the MS: {ms.antennas}")
             for ant in ms.antennas:
                 if ant.name not in a_pass.antennas:
                     # Convert mstools.Antenna to experiment.Antenna
@@ -239,35 +237,39 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
             # Copy sources from MS to correlator pass
             a_pass.sources = experiment.Sources()
             for src in ms.sources:
-                # Check if this source already exists in the global experiment sources
                 if src.name in exp.sources.names:
-                    # Use the existing source from experiment to inherit type and protection info
                     existing_source = exp.sources[src.name]
                     exp_src = experiment.Source(name=src.name, coordinates=src.coordinates, 
                                                type=existing_source.type, protected=existing_source.protected, 
                                                intent=src.intent)
                 else:
-                    # Create new source with default type (will be updated by aggregate_sources_from_passes)
                     exp_src = experiment.Source(name=src.name, coordinates=src.coordinates, 
                                                type=experiment.SourceType.other, protected=False, 
                                                intent=src.intent)
                 a_pass.sources.append(exp_src)
-            
-            logger.debug(f"Set freqsetup for {a_pass.msfile}: {a_pass.freqsetup}")
-            logger.debug(f"Loaded {len(a_pass.sources)} sources: {a_pass.sources.names}")
         except Exception as e:
             logger.error(f"Error reading MS metadata from {a_pass.msfile}: {e}")
             raise
-        # TODO: Fix the ms.scans
-        #for scanno in ms.scans:
-        #    scannumbers = [int(s.scanno.replace('No', '')) for s in a_pass.scans]
-        #    print(f"SCANNUMBERS: {scannumbers}")
-        #    a_pass.scans[scannumbers.index(scanno)].stations_observed = list(ms.scans[scanno])
+
+        # Populate a_pass.scans from exp.scans (VEX) + ms.scans (observed antennas).
+        # exp.scans has scanno as str like "No0001"; ms.scans keys are ints like 1.
+        vex_scanno_map = {int(s.scanno.replace('No', '')): s for s in exp.scans}
+        a_pass.scans = experiment.Scans()
+        for ms_scanno, ms_antennas in ms.scans.items():
+            if ms_scanno in vex_scanno_map:
+                vex_scan = vex_scanno_map[ms_scanno]
+                a_pass.scans.append(experiment.Scan(scanno=vex_scan.scanno, starttime=vex_scan.starttime,
+                                                    duration_s=vex_scan.duration_s, source=vex_scan.source,
+                                                    stations_scheduled=vex_scan.stations_scheduled,
+                                                    stations_observed=tuple(sorted(ms_antennas))))
+            else:
+                logger.warning(f"MS scan {ms_scanno} in {a_pass.msfile.name} has no matching VEX scan")
         
     def _update_mpc_pass(a_pass: experiment.CorrelatorPass):
-            a_pass.antennas = exp.correlator_passes[0].antennas
-            a_pass.sources = exp.correlator_passes[0].sources
-            a_pass.freqsetup = exp.correlator_passes[0].freqsetup
+        a_pass.antennas = exp.correlator_passes[0].antennas
+        a_pass.sources = exp.correlator_passes[0].sources
+        a_pass.freqsetup = exp.correlator_passes[0].freqsetup
+        a_pass.scans = exp.correlator_passes[0].scans
 
     logger.debug(f"get_metadata_from_ms: {len(exp.correlator_passes)} passes, spectral_line={exp.spectral_line}")
     if len(exp.correlator_passes) > 1 and not exp.spectral_line:
@@ -284,60 +286,104 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
         for a_pass in exp.correlator_passes:
             _get_ms_metadata(exp, a_pass)
 
+    for exp_scan, ps in zip(exp.scans, exp.correlator_passes[0].scans):
+        if ps.scanno == exp_scan.scanno:
+            exp_scan.stations_observed = tuple(sorted(ps.stations_observed))
+
+    # Antennas scheduled (from VEX) but absent from every MS get observed=False.
+    for ant_name in exp.antennas.names:
+        exp.antennas[ant_name].observed = any((ant_name in a_pass.antennas) and a_pass.antennas[ant_name].observed \
+                                              for a_pass in exp.correlator_passes)
+        if ant_name in exp.correlator_passes[0].antennas:
+            exp.antennas[ant_name].subbands = exp.correlator_passes[0].antennas[ant_name].subbands
+            exp.antennas[ant_name].weights = exp.correlator_passes[0].antennas[ant_name].weights
+
+    # Also add any antenna that appeared in the MS but was not in VEX
+    for a_pass in exp.correlator_passes:
+        for ant in a_pass.antennas:
+            if ant.name not in exp.antennas:
+                exp.antennas.append(experiment.Antenna(name=ant.name, observed=ant.observed,
+                                                       subbands=ant.subbands))
+
+    # Pick a default reference antenna if none is set yet
+    if not exp.refant:
+        total_scans = len(exp.correlator_passes[0].scans)
+        scan_counts = {ant: sum(1 for s in exp.correlator_passes[0].scans if ant in s.stations_observed)
+                       for ant in exp.antennas.observed}
+        full_coverage = {ant for ant, count in scan_counts.items() if count == total_scans}
+        
+        priority_ants = ('Ef', 'Ys', 'O8', 'Gb', 'At', 'Pt')
+        primary = next((a for a in priority_ants if a in exp.antennas and exp.antennas[a].observed), None)
+        
+        if primary and primary in full_coverage:
+            exp.refant = [primary]
+        elif primary:
+            exp.refant = [primary] + [a for a in priority_ants if a != primary and a in exp.antennas.observed] + \
+                         [a for a in exp.antennas.observed if a not in priority_ants]
+        else:
+            exp.refant = list(exp.antennas.observed)
+
+        logger.info(f"Auto-selected reference antenna(s): {', '.join(exp.refant)}")
+
+    logger.info(f"Antennas observed: {', '.join(exp.antennas.observed)}")
+    logger.info(f"Antennas NOT observed: {', '.join(n for n in exp.antennas.names if n not in exp.antennas.observed)}")
+    if exp.refant:
+        logger.info(f"Reference antenna: {exp.refant[0]}")
+
     exp.store()
-    print(exp.correlator_passes[0])
-    print(exp.correlator_passes[0].freqsetup)
     return True
 
 
 def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
-    """Runs the standardplots on the specified experiment using a reference antenna
-    and sources to be picked for the auto- and cross-correlations.
-    
+    """Runs the standardplots on the specified experiment using Jplot.
+
+    For each pipelinable correlator pass, discovers all scans containing the
+    fringe-finder sources and creates per-scan plots (with refant fallback).
+    The scan number is embedded in every output filename.
+
     Args:
         exp (experiment.Experiment): Experiment object.
         do_weights (bool): Whether to include weight plots. Default True.
-    
+
     Returns:
         bool: True if standardplots completed successfully, False otherwise.
     """
-    # TODO: to be fully rewritten
-    # To run for all correlator passes that will be pipelined.
-    # Then once all of them finish, open the plots and ask user.
+    from .plotting import Jplot
+
+    if not exp.refant:
+        logger.error("No reference antenna set. Use 'postprocess edit refant <ANT>' first.")
+        return False
+
+    refant = exp.refant[0]
     counter = 0
     for a_pass in exp.correlator_passes:
         try:
-            if a_pass.pipeline:
-                if exp.refant:
-                    refant = exp.refant[0] if len(exp.refant) == 1 else f"'{'|'.join(exp.refant)}'"
-                else:
-                    for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
-                        if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
-                            refant = ant
-                            break
+            if not a_pass.pipeline:
+                continue
 
-                        raise ValueError("Couldn't find a good reference antenna for standardplots. "
-                                        "Please specify it manually.")
-                counter += 1
-                if (counter == 1) and do_weights:
-                    utils.shell_command("standardplots",
-                                        ["-weight", a_pass.msfile.name, refant, ','.join(a_pass.sources.fringefinder)],
-                                        stdout=None, stderr=subprocess.STDOUT)
-                else:
-                    utils.shell_command("standardplots",
-                                        [a_pass.msfile.name, refant, ','.join(a_pass.sources.fringefinder)],
-                                        stdout=None, stderr=subprocess.STDOUT)
+            calsources = a_pass.sources.fringefinder if a_pass.sources else exp.sources.fringefinder
 
-                # Runs again jplotter but only to retrieve the summary into the output
-                output = utils.shell_command("echo",
-                                             [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
-                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                with open('logs/standardplots.log', 'a') as f:
-                    f.write(output)
+            if not calsources:
+                logger.error(f"No fringe-finder sources found for {a_pass.msfile.name}. "
+                       "Set them with 'postprocess edit fringefinder <SRC>'.")
+                return False
 
+            counter += 1
+            logger.info(f"standardplots {a_pass.msfile.name} refant={refant} "
+                        f"calsrc={','.join(calsources)} weights={do_weights and counter == 1}")
+
+            plotter = Jplot(ms=str(a_pass.msfile.name), refant=refant, calsrc=','.join(calsources),
+                            weight_plots=(do_weights and counter == 1))
+
+            if not plotter.create_plot(sources=calsources):
+                logger.error(f"Standardplots failed for {a_pass.msfile.name}")
+                return False
+
+            # Retrieve the summary into a log file
+            logger.info(utils.shell_command("echo", [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
+                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT))
         except Exception:
-            rprint("\n\n[red]Standardplots reported an error![/red]")
-            # TODO: these tracebacks should be one level above (in app.py)
+            logger.error("Standardplots reported an error!")
             traceback.print_exc()
             return False
 
@@ -351,31 +397,31 @@ def print_exp(exp: experiment.Experiment, display_in_terminal: bool = True) -> b
 
 
 def open_standardplot_files(exp) -> bool:
-    """Calls gv to open all plots generated by standardplots.
+    """Converts PS plots to PNG, then launches a web dashboard for reviewing them.
+
+    The dashboard shows experiment metadata (same as print_blessed), a scan overview
+    table, and a plot viewer with selectors for plot type and scan number.
+    The server runs until the user presses Ctrl+C.
+
+    Args:
+        exp: experiment.Experiment object.
+
+    Returns:
+        bool: True after the dashboard server is stopped by the user.
     """
+
     standardplots = []
-    for plot_type in ('weight', 'auto', 'cross', 'ampphase'):
+    for plot_type in ('weight', 'auto', 'cross', 'ampphase', 'amptime'):
         standardplots += glob.glob(f"{exp.expname.lower()}*{plot_type}*.ps")
-    # standardplots = glob.glob(f"{exp.expname.lower()}*.ps")
 
     if len(standardplots) == 0:
         raise FileNotFoundError(f"Standardplots for {exp.expname} not found but expected.")
 
-    if exp.silent_mode:
-        rprint("[bold yellow]You did not want me to open the plots. " \
-               "You shall do it manually[/bold yellow]")
-        print("Take a look at the produced standard plots:")
-        print("\n".join([f"- {a_plot}" for a_plot in standardplots]))
-        print("[green]Execute me again after that to continue the post-process.[/green]")
-        return False
-
-    try:
-        for a_plot in standardplots:
-            utils.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
-    except Exception as e:
-        print(f"WARNING: Plots could not be opened. Do it manually.\nError: {e}.")
-        return False
-
+    convert_ps_to_png(exp.dirs.plots, exp.expname.lower())
+    # rprint("\n[bold yellow]Take a look at the produced standard plots:[/bold yellow]")
+    # rprint(f"[yellow]{'\n- '.join([aplot for aplot in standardplots])}"
+    #        "\nOpening the dashboard in your browser...[/yellow]")
+    serve_dashboard(exp, exp.dirs.plots)
     return True
 
 
@@ -396,9 +442,10 @@ def onebit(exp: experiment.Experiment) -> bool:
                       for a_pass in exp.correlator_passes]
             for fut in futures:
                 fut.result()  # Propagate any exceptions
+        logger.info(f"scale1bit {' '.join(exp.antennas.onebit)}")
     elif utils.station_1bit_in_vix(exp.vixfile):
-        print(f"\n\n[red]{'#'*10}\n#Traces of 1bit station found in {exp.vixfile} "
-              "but no station specified to be corrected.[/red]\n\n")
+        logger.error(f"Traces of 1bit station found in {exp.vixfile} "
+                     "but no station specified to be corrected.")
         return False
 
     return True
@@ -418,14 +465,17 @@ def ysfocus(exp: experiment.Experiment) -> bool:
 
     def _fix_mounts(a_pass):
         if 'Ys' in exp.antennas.names:
+            logger.info(f"Fixing yebes mount for {a_pass.msfile}")
             mstools.fix_yebes_mount(a_pass.msfile)
         if ('Ho' in exp.antennas.names) or ('Hb' in exp.antennas.names):
+            logger.info(f"Fixing hobart mount for {a_pass.msfile}")
             mstools.fix_hobart_mount(a_pass.msfile)
 
     with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
         futures = [executor.submit(_fix_mounts, a_pass) for a_pass in exp.correlator_passes]
         for fut in futures:
             fut.result()  # Propagate any exceptions
+
     return True
 
 
@@ -448,6 +498,7 @@ def polswap(exp: experiment.Experiment) -> bool:
             futures = [executor.submit(_polswap_pass, a_pass) for a_pass in exp.correlator_passes]
             for fut in futures:
                 fut.result()  # Propagate any exceptions
+        logger.info(f"polswap {','.join(exp.antennas.polswap)}")
     return True
 
 
