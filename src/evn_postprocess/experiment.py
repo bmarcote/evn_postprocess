@@ -12,6 +12,7 @@ import json
 import subprocess
 import datetime as dt
 from pathlib import Path
+from importlib.metadata import version as pkg_version
 import tomllib
 from dataclasses import dataclass, asdict
 from collections import defaultdict
@@ -186,7 +187,7 @@ class Dirs:
     logs: Path
     # data: Path
     # results: Path
-    # diagnostics: Path
+    plots: Path
     pipeline: Path
     pipe_in: Path
     pipe_out: Path
@@ -508,8 +509,8 @@ class Scan:
     starttime: dt.datetime
     duration_s: int
     source: str
-    stations_scheduled: tuple[str]
-    stations_observed: tuple[str] = ()
+    stations_scheduled: tuple[str, ...]
+    stations_observed: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         return {'scanno': self.scanno, 'starttime': self.starttime.isoformat(), 'duration_s': self.duration_s,
@@ -640,7 +641,6 @@ class Experiment:
         self.scans = scans if scans else Scans()
         self.refant = refant if refant else []
         self.correlator_passes = correlator_passes if correlator_passes else []
-        self._log_file: Path = self.dirs.logs / 'processing.log'
         self._timerange: list[dt.datetime] | None = None
 
     @property
@@ -662,39 +662,55 @@ class Experiment:
     def timerange(self, new_time: list[dt.datetime]):
         self._timerange = new_time.copy()
 
-    def write_log_file(self):
-        # Writes down some snippets for jplotter in case the standard one fails.
-        with open(self._log_file, 'a') as logfile:
-            logfile.write("This is the log file for the Post-Processing of the EVN " \
-                            f"experiment {self.expname}, observed on "\
-                            f"{self.obsdate.strftime('%d %b %Y') if self.obsdate else 'unknown'}.\n")
-            logfile.write("The associated JIVE support scientist is " \
-                            f"{self.supsci.capitalize()}.\n\n")
+    def write_log_file(self, filename: str | Path):
+        """Creates the post_processing.log header with experiment info, version, and jplotter reference.
+
+        Writes: experiment name, observation date, support scientist, evn_postprocess version,
+        and convenient jplotter command snippets for manual re-runs.
+        """
+        try:
+            ver = pkg_version('evn_postprocess')
+        except Exception:
+            ver = 'unknown'
+
+        with open(filename, 'w') as logfile:
+            logfile.write(f"{'#' * 60}\n")
+            logfile.write("# Post-Processing log for the EVN "
+                          f"experiment {self.expname}\n")
+            logfile.write(f"# Observed on "
+                          f"{self.obsdate.strftime('%d %b %Y') if self.obsdate else 'unknown'}.\n")
+            logfile.write(f"# Support scientist: {self.supsci.capitalize()}.\n")
+            logfile.write(f"# evn_postprocess version: {ver}\n")
+            logfile.write(f"# Created: {dt.datetime.today().strftime('%d-%m-%Y %H:%M')}\n")
+            logfile.write(f"{'#' * 60}\n\n")
             logfile.write("# Some shortcuts to run manually the standardplots in JPlotter:\n")
             logfile.write(f"ms {self.expname.lower()}.ms\nindexr\nlistr\nr\n\n")
             logfile.write("# Weight plot:\n")
             logfile.write("bl auto;fq */p;sort bl sb;pt wt;ckey sb sb[none]=1;ptsz 4;pl\n")
             logfile.write(f"save {self.expname.lower()}-weight.ps\n\n")
             logfile.write("# Amp & phase VS time plots:\n")
-            logfile.write("bl Ef* -auto;fq 5/p;ch 0.1*last:0.9*last;avc vector;nxy 1 4; " \
-                            "pt anptime;ckey src src[none]=1;y local;ptsz 2;time none;pl\n")
+            logfile.write("bl Ef* -auto;fq 5/p;ch 0.1*last:0.9*last;avc vector;nxy 1 4; "
+                          "pt anptime;ckey src src[none]=1;y local;ptsz 2;time none;pl\n")
             logfile.write(f"save {self.expname.lower()}-ampphase-0.ps\n")
             logfile.write("time $start to +50m;pl\n")
             logfile.write(f"save {self.expname.lower()}-ampphase-1.ps\n\n")
             logfile.write("# Auto-correlation plots:\n")
-            logfile.write("scan 1;bl auto;fq */p;ch none;avt vector;avc none;pt ampfreq;ckey" \
-                            " p p[none]=1;sort bl;new sb false;multi true;y 0 1.6;nxy 2 4;pl\n")
+            logfile.write("scan 1;bl auto;fq */p;ch none;avt vector;avc none;pt ampfreq;ckey"
+                          " p p[none]=1;sort bl;new sb false;multi true;y 0 1.6;nxy 2 4;pl\n")
             logfile.write(f"save {self.expname.lower()}-auto-0.ps\n")
             logfile.write("scan 91;pl\n")
             logfile.write(f"save {self.expname.lower()}-auto-1.ps\n\n")
             logfile.write("# Cross-correlation plots:\n")
-            logfile.write("scan 1;pt anpfreq;bl Ef* -auto;fq *;ckey p['RR']=2 p['LL']=3 " \
-                            "p['RL']=4 p['LR']=5;nxy 2 3;y local;draw lines points;multi " \
-                            "true;new sb false;ptsz 4;sort bl sb;pl\n")
+            logfile.write("scan 1;pt anpfreq;bl Ef* -auto;fq *;ckey p['RR']=2 p['LL']=3 "
+                          "p['RL']=4 p['LR']=5;nxy 2 3;y local;draw lines points;multi "
+                          "true;new sb false;ptsz 4;sort bl sb;pl\n")
             logfile.write(f"save {self.expname.lower()}-cross-0.ps\n")
             logfile.write("scan 91;pl\n")
             logfile.write(f"save {self.expname.lower()}-cross-1.ps\n\n")
-            logfile.write("exit\n")
+            logfile.write("exit\n\n")
+            logfile.write(f"{'=' * 60}\n")
+            logfile.write("# Commands executed during post-processing:\n")
+            logfile.write(f"{'=' * 60}\n\n")
 
     def get_info_from_vex(self):
         """Extracts information from the VEX file."""
@@ -941,7 +957,7 @@ class Experiment:
     @classmethod
     def from_dict(cls, data: dict) -> 'Experiment':
         """Creates an Experiment from a plain dictionary."""
-        exp = cls(expname=data['expname'], obsdate=dt.date.fromisoformat(data['obsdate']) if data.get('obsdate') else None, supsci=data['supsci'],
+        exp = cls(expname=data['expname'], obsdate=dt.date.fromisoformat(data['obsdate']), supsci=data['supsci'],
                   dirs=Dirs.from_dict(data['dirs']), eEVNname=data.get('eEVNname'), steps=data.get('steps'),
                   pi=[PI.from_dict(p) for p in data['pi']] if data.get('pi') else None,
                   credentials=Credentials.from_dict(data['credentials']) if data.get('credentials') else None,
@@ -1222,10 +1238,10 @@ class Experiment:
             # In case of antennas not observing the full bandwidth (this may be per correlator pass)
             ss, ss_file = "", []
             try:
-                if len(set([cp.freqsetup.n_subbands for cp in self.correlator_passes])) == 1:
+                if len(set([cp.freqsetup.subbands for cp in self.correlator_passes])) == 1:
                     for antenna in self.correlator_passes[0].antennas:
                         if 0 < len(antenna.subbands) < \
-                               self.correlator_passes[0].freqsetup.n_subbands:
+                               self.correlator_passes[0].freqsetup.subbands:
                             ss += f"    {antenna.name}: " \
                                   f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands}\n"
                             ss_file += [f"    {antenna.name}: " \
@@ -1233,7 +1249,7 @@ class Experiment:
                 else:
                     for antenna in self.correlator_passes[0].antennas:
                         for i,a_pass in enumerate(self.correlator_passes):
-                            if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
+                            if 0 < len(antenna.subbands) < a_pass.freqsetup.subbands:
                                 ss += f"    {antenna.name}: " \
                                       f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands} " \
                                       f"(in correlator pass {a_pass.lisfile})\n"
@@ -1243,7 +1259,7 @@ class Experiment:
 
                 if ss != "":
                     s += term.bright_black('Antennas with smaller bandwidth:\n')
-                    s += f" Total: {list(range(self.correlator_passes[0].freqsetup.n_subbands))}\n"
+                    s += f" Total: {list(range(self.correlator_passes[0].freqsetup.subbands))}\n"
                     s += ss
                     s_file += ['Antennas with smaller bandwidth:']
                     s_file += ss_file

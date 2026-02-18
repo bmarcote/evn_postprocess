@@ -3,8 +3,6 @@ import sys
 from rich import print as rprint
 from . import experiment
 from . import utils
-from . import vex
-from . import mstools 
 
 class Dialog(object, metaclass=abc.ABCMeta):
     """Abstract class that implements the basic functionality for any
@@ -138,15 +136,22 @@ class Terminal(Dialog):
 
     def show_scan_overview(self, exp: experiment.Experiment) -> bool:
         """Displays a terminal-based table showing scan participation for each antenna.
-        
-        Shows a table with scans as rows and antennas as columns. Cells are colored:
+
+        Uses exp.scans (already populated from VEX + MS metadata) so no files are re-read.
+        Cells are colored:
         - Green: Antenna has data for that scan
         - Red: Antenna was scheduled but has no data for that scan
-        - No color: Antenna was not scheduled in that scan (per VEX file)
-        
+        - No color: Antenna was not scheduled in that scan
+
+        Scan number and source name are colored by source type:
+        - Orange: Fringe-finder
+        - Cyan: Target
+        - Yellow: Phase-cal (calibrator)
+        - Dim: Other / unknown
+
         Args:
-            exp (experiment.Experiment): Experiment object containing MS and VEX data.
-        
+            exp (experiment.Experiment): Experiment object with scans already populated.
+
         Returns:
             bool: True if user wants to continue, False if user cancels.
         """
@@ -155,90 +160,70 @@ class Terminal(Dialog):
         from rich.text import Text
         from rich.panel import Panel
         import blessed
-        
-        # Get VEX scan information
-        vex_data = vex.Vex(exp.vixfile)
-        vex_scans = {}
-        if 'SCHED' in vex_data:
-            for scan_name, scan_info in vex_data['SCHED'].items():
-                scheduled_antennas = set()
-                if 'station' in scan_info:
-                    for station_info in scan_info['station']:
-                        scheduled_antennas.add(station_info[0])  # station name is first element
-                vex_scans[scan_name] = scheduled_antennas
-        
-        # Get MS scan information
-        ms_scans = {}
-        for msfile in exp.msfiles:
-            try:
-                ms = mstools.Ms(msfile, runstats=True)
-                for scan_number, antenna_set in ms.scans.items():
-                    if scan_number not in ms_scans:
-                        ms_scans[scan_number] = set()
-                    ms_scans[scan_number].update(antenna_set)
-            except Exception as e:
-                print(f"Warning: Could not read {msfile}: {e}")
-                continue
-        
-        # Create terminal UI
+
+        if not exp.scans:
+            rprint("[yellow]No scan information available. Skipping scan overview.[/yellow]")
+            return True
+
+        # Build source name -> type name lookup
+        source_type_styles: dict[str, str] = {
+            "fringefinder": "bold cyan",
+            "target": "bold dark_orange",
+            "calibrator": "bold yellow",
+            "other": "dim",
+        }
+        not_observed = {a.name for a in exp.antennas if not a.observed}
+        source_type_map: dict[str, str] = {}
+        for src in exp.sources:
+            source_type_map[src.name] = src.type.name
+
         term = blessed.Terminal()
         console = Console()
-        
+
         with term.fullscreen(), term.cbreak():
-            # Create table
             table = Table(title=f"Scan Overview - {exp.expname}")
-            table.add_column("Scan", style="cyan", no_wrap=True)
-            
-            # Add antenna columns
+            table.add_column("Scan", no_wrap=True)
+            table.add_column("Source", no_wrap=True)
+
             all_antennas = sorted(exp.antennas.names)
             for antenna in all_antennas:
-                table.add_column(antenna, width=8, justify="center")
-            
-            # Add rows for each scan
-            scan_numbers = sorted(set(list(vex_scans.keys()) + list(ms_scans.keys())))
-            
-            for scan_num in scan_numbers:
-                scan_str = str(scan_num)
-                scheduled = vex_scans.get(scan_num, set())
-                observed = ms_scans.get(scan_num, set())
-                
-                row_cells = [scan_str]
-                
+                hdr_style = "bold red" if antenna in not_observed else None
+                table.add_column(antenna, width=4, justify="center", header_style=hdr_style)
+
+            for scan in exp.scans:
+                scheduled = set(scan.stations_scheduled)
+                observed = set(scan.stations_observed)
+                stype = source_type_map.get(scan.source, "other")
+                style = source_type_styles.get(stype, "dim")
+                row_cells: list = [Text(str(scan.scanno), style=style), Text(scan.source, style=style)]
                 for antenna in all_antennas:
                     if antenna in scheduled:
                         if antenna in observed:
-                            # Green - scheduled and observed
                             cell_text = Text("✓", style="bold white on green")
                         else:
-                            # Red - scheduled but not observed
                             cell_text = Text("✗", style="bold white on red")
                     else:
-                        # Not scheduled - no color
                         cell_text = Text("-", style="dim")
-                    
                     row_cells.append(cell_text)
-                
                 table.add_row(*row_cells)
-            
-            # Create legend
-            legend_text = (
-                "[bold white on green]✓[/bold white on green] Scheduled & Observed  "
-                "[bold white on red]✗[/bold white on red] Scheduled but Missing  "
-                "[dim]-[/dim] Not Scheduled"
-            )
-            
-            # Display
+
+            legend_text = ("[bold white on green]✓[/bold white on green] Scheduled & Observed  "
+                           "[bold white on red]✗[/bold white on red] Scheduled but Missing  "
+                           "[dim]-[/dim] Not Scheduled\n"
+                           "[bold cyan]■[/bold cyan] Fringe-finder  "
+                           "[bold dark_orange]■[/bold dark_orange] Target  "
+                           "[bold yellow]■[/bold yellow] Phase-cal  "
+                           "[bold red]Antenna[/bold red] Not observed")
             console.print(Panel(table, title="Antenna Scan Participation"))
             console.print()
             console.print(Panel(legend_text, title="Legend"))
             console.print()
             console.print("[bold yellow]Press any key to continue, or 'Q' to cancel...[/bold yellow]")
-            
-            # Wait for user input
+
             with term.cbreak():
                 key = term.inkey()
                 return key.lower() != 'q'
-        
+
         return True
 
 

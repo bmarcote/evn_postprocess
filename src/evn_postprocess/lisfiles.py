@@ -122,7 +122,6 @@ def split_lis_cont_line(exp: experiment.Experiment, fulllisfile: str | Path) -> 
 
     # TODO: possible problems if > 2 ?
     if ('prod_line' in n_prods) and (len(n_prods) > 1):
-        exp.spectral_line = True
         print('This is a spectral line experiment with line and continuum passes.')
         lis_cont = str(fulllisfile).replace('.lis', '_cont.lis')
         lis_line = str(fulllisfile).replace('.lis', '_line.lis')

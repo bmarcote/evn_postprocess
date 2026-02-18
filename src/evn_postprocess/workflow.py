@@ -9,6 +9,7 @@ import glob
 import shutil
 from datetime import datetime as dt
 from pathlib import Path
+from typing import Callable
 from dataclasses import dataclass
 from loguru import logger
 from rich import print as rprint
@@ -76,7 +77,7 @@ def create_folder_structure() -> experiment.Dirs:
         Iterable[Path]: List of created folders.
     """
     folders = {k: Path(v) for k, v in {'logs': "logs", # 'data': "data", 'results': "results",
-                                    #    'diagnostics': "diagnostics",
+                                       'plots': "plots",
                                        'pipeline': "pipeline", 'pipe_in': "pipeline/in", 'pipe_out': "pipeline/out",
                                        'pipe_temp': "antenna_files"}.items()}
     for folder in folders.values():
@@ -155,7 +156,6 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
             case _:
                 src_type = experiment.SourceType.other
 
-        # Create source if it doesn't exist, then update its type and protection
         if src_name not in exp.sources.names:
             # Use placeholder coordinates (0,0) - will be updated when MS data is processed
             placeholder_coords = coord.SkyCoord(ra=0*u.deg, dec=0*u.deg, frame='icrs')
@@ -217,8 +217,9 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
     """
     try:
         if not exp.correlator_passes:
-            logger.error("No correlator passes found. Check .lis file retrieval.")
-            return False
+            if not lisfiles.get_passes_from_lisfiles(exp):
+                logger.error("Failed to extract passes from .lis files")
+                return False
             
         if all(p.msfile.exists() for p in exp.correlator_passes):
             logger.debug("MS files already exist. Skipping checklis.")
@@ -250,13 +251,8 @@ def create_msfile(exp: experiment.Experiment) -> bool:
             logger.debug("MS metadata already loaded. Skipping MS creation and extraction.")
             return True
 
-        if not exp.correlator_passes:
-            logger.error("No correlator passes available for MS creation")
-            return False
-
         # Re-doing again in case the lis files were updated externally
         lisfiles.get_passes_from_lisfiles(exp)
-
         if not all(p.msfile.exists() for p in exp.correlator_passes):
             if not process.getdata(exp):
                 logger.error("Failed to get data for MS creation")
@@ -279,6 +275,9 @@ def create_msfile(exp: experiment.Experiment) -> bool:
 def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) -> bool:
     """Creates standardplots from MS files.
 
+    Validates that the reference antenna and fringe-finder sources are set
+    before attempting to create plots.
+
     Args:
         exp (experiment.Experiment): Experiment object.
         do_weights (bool): Whether to include weight plots. Default True.
@@ -286,17 +285,29 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
     Returns:
         bool: True if standardplots were created successfully.
     """
-    # If it fails, try to go with other sources, refants, etc
     if len(glob.glob("*.ps")) > 0:
         logger.debug("Standardplots already run. Skipping.")
         return True
 
-    # Show scan overview before opening standardplots
-    gui = dialog.Terminal()
-    if not gui.show_scan_overview(exp):
-        logger.info("User cancelled after scan overview.")
+    if not exp.refant:
+        logger.error("No reference antenna set for standardplots.")
         return False
-    
+
+    pipelinable = [p for p in exp.correlator_passes if p.pipeline]
+    if not pipelinable:
+        logger.error("No pipelinable correlator passes found.")
+        return False
+
+    has_fringefinder = any((p.sources and p.sources.fringefinder) for p in pipelinable) or bool(exp.sources.fringefinder)
+    if not has_fringefinder:
+        logger.error("No fringe-finder sources found in any correlator pass or experiment.")
+        return False
+
+    # Show scan overview before opening standardplots
+    # gui = dialog.Terminal()
+    # if not gui.show_scan_overview(exp):
+    #     logger.info("User cancelled after scan overview.")
+    #     return False
     return process.standardplots(exp, do_weights=do_weights) & process.open_standardplot_files(exp)
 
 
@@ -313,6 +324,7 @@ def msops(exp: experiment.Experiment) -> bool:
         logger.debug("FITS IDI files already exist. Skipping creation.")
         return True
 
+    process.open_standardplot_files(exp)
     gui = dialog.Terminal()
     if not gui.askMSoperations(exp):
         return False
@@ -450,14 +462,88 @@ def archive(exp: experiment.Experiment) -> bool:
            process.archive(exp) & process.send_letters(exp) & process.antenna_feedback(exp) & process.nme_report(exp)
 
 
-def list_tasks(expname: str, print_docs: bool = False):
-    """Lists all tasks avaliable to be executed.
+@dataclass
+class ExecCommand:
+    """A single executable command exposed via 'postprocess exec'."""
+    func: Callable
+    doc: str
 
-    Args
-        exp : experiment.Experiment | None
-            The experiment associatd to this post-processing. If not provided, it will just list the general tasks.
-        print_docs : bool = True
-            In addition to list the tasks, it will also print the documentation associated to each one.
+
+def _build_exec_commands() -> dict[str, ExecCommand]:
+    """Build the exec command registry. Called once at import time.
+
+    Returns:
+        dict mapping command name to ExecCommand.
+    """
+    return {
+        # -- directory / setup --
+        'makelis':       ExecCommand(lisfiles.create_lis_files, "Create the .lis files in ccs."),
+        'getlis':        ExecCommand(lisfiles.get_lis_files, "Copy the .lis files from ccs to eee."),
+        'modlis':        ExecCommand(lisfiles.get_passes_from_lisfiles,
+                                     "Read correlator passes from the .lis files and update the header."),
+        'checklis':      ExecCommand(lisfiles.check_lisfiles, "Run checklis on all .lis files."),
+        # -- MS creation --
+        'getdata':       ExecCommand(process.getdata, "Run getdata.pl."),
+        'j2ms2':         ExecCommand(process.j2ms2, "Run j2ms2 with the current params."),
+        'expname':       ExecCommand(process.update_ms_expname,
+                                     "Run expname.py (for e-EVN experiments)."),
+        'metadata':      ExecCommand(process.get_metadata_from_ms,
+                                     "Retrieve observational metadata from the MS."),
+        # -- plots --
+        'standardplots': ExecCommand(lambda exp: process.standardplots(exp, do_weights=True),
+                                     "Run standardplots."),
+        'gv':            ExecCommand(process.open_standardplot_files,
+                                     "Open the standardplot files with gv."),
+        # -- MS operations --
+        'ysfocus':       ExecCommand(process.ysfocus, "Run ysfocus.py."),
+        'polswap':       ExecCommand(process.polswap, "Run polswap.py."),
+        'flag_weights':  ExecCommand(process.flag_weights, "Run flag_weights.py."),
+        'onebit':        ExecCommand(process.onebit, "Run onebit.py."),
+        'tconvert':      ExecCommand(process.tconvert, "Run tConvert."),
+        'polconvert':    ExecCommand(process.polconvert,
+                                     "Run PolConvert (or prepare files to run it manually)."),
+        'postpolconvert': ExecCommand(process.post_post_polconvert,
+                                      "Run all required steps after PolConvert."),
+        # -- credentials / archiving --
+        'auth':          ExecCommand(process.set_credentials,
+                                     "Set / recover the credentials (auth file) for this experiment."),
+        'protect':       ExecCommand(process.protect_experiment_files,
+                                     "Protect experiment files."),
+        'archive-fits':  ExecCommand(process.archive,
+                                     "Archive standard plots and FITS-IDI files."),
+        'archive-pilet': ExecCommand(process.send_letters, "Archive the PI letter."),
+        'append':        ExecCommand(process.append_antab,
+                                     "Append the Tsys and GC to the FITS-IDI files."),
+        'issues':        ExecCommand(process.antenna_feedback,
+                                     "Report observed problems (station feedback / Grafana / RedMine)."),
+        'nme':           ExecCommand(process.nme_report,
+                                     "Check if an NME Report is needed."),
+        # -- pipeline --
+        'antab':         ExecCommand(pipeline.run_antab_editor,
+                                     "Prepare .antab and run antab_editor.py."),
+        'uvflg':         ExecCommand(pipeline.create_uvflg, "Create .uvflg from all log files."),
+        'vlbeer':        ExecCommand(lambda exp: pipeline.get_files_from_vlbeer(
+                                         exp, experiment.retrieve_servers()['vlbeer']),
+                                     "Retrieve the antabfs, log, and flag files from vlbeer."),
+        'pyinput':       ExecCommand(pipeline.create_input_file,
+                                     "Create the input file for the EVN pipeline."),
+        'pipe':          ExecCommand(pipeline.run_pipeline, "Run the EVN Pipeline."),
+        'comment_tasav': ExecCommand(pipeline.comment_tasav_files,
+                                     "Create the .comment and .tasav files."),
+        'feedback':      ExecCommand(pipeline.pipeline_feedback,
+                                     "Run the Pipeline Feedback script."),
+    }
+
+
+_EXEC_COMMANDS: dict[str, ExecCommand] = _build_exec_commands()
+
+
+def list_tasks(expname: str, print_docs: bool = False):
+    """Lists all workflow steps and their status.
+
+    Args:
+        expname: Experiment name.
+        print_docs: Also print the documentation for each step.
     """
     rprint(f"\n\n[bold]Post-processing of {expname}:[/bold]")
     exp = experiment.Experiment.load(expname)
@@ -465,46 +551,69 @@ def list_tasks(expname: str, print_docs: bool = False):
         steps = [Task.from_dict(s) for s in exp.steps]
     else:
         steps = _WORKFLOW_STEPS
-    
+
     for s in steps:
         rprint(f"{'🟢' if s.done else '🔴'}"
-               f" [bold {'green' if s.done else 'red'}]{s.name}[/bold {'green' if s.done else 'red'}]\n" + \
-                      (f"   [dim]{s.doc}[/dim]" if print_docs else ""))
+               f" [bold {'green' if s.done else 'red'}]{s.name}[/bold {'green' if s.done else 'red'}]\n" +
+               (f"   [dim]{s.doc}[/dim]" if print_docs else ""))
+
+
+def build_exec_help() -> str:
+    """Build a rich-formatted help string for the exec subparser description.
+
+    Returns:
+        str with the full exec help text.
+    """
+    lines = ["[bold]Runs a single command from the experiment post-processing.[/bold]\n",
+             "The following commands are available:\n"]
+    for name, cmd in _EXEC_COMMANDS.items():
+        lines.append(f"  - [bold green]{name}[/bold green] : {cmd.doc}")
+    return '\n'.join(lines)
+
+
+def list_exec_commands():
+    """Print all available exec commands with their descriptions."""
+    rprint("\n[bold]Available exec commands:[/bold]\n")
+    for name, cmd in _EXEC_COMMANDS.items():
+        rprint(f"  [bold green]{name:<18}[/bold green] {cmd.doc}")
 
 
 def run_isolated_task(task_name: str, expname: str | None = None):
-    """Runs a single task independently.
-    Note that it may require that all previos steps to have run, as some metadata from them may be
-    required to run the desired task.
+    """Run a single exec command independently.
+
+    The experiment must have been initialized previously so that the stored
+    JSON file exists and can be loaded.
 
     Args:
-        expname : str
-            The name of the experiment to process (case insensitive).
-        task_name : str | None
-            Name of the task to run (run the help to know the available tasks).
-            If not provided, assumes that the name of the current directory is the experiment name.
+        task_name: Name of the exec command to run.
+        expname: Experiment name (case-insensitive).
     """
     try:
         exp = experiment.Experiment.load(expname)
     except FileNotFoundError:
-        rprint(f"[bold red]Could not find the stored information for {expname if expname is not None else Path().name}"
+        rprint(f"[bold red]Could not find the stored information for "
+               f"{expname if expname is not None else Path().name}"
                "[/bold red].\n[red]Maybe the experiment was never initialized?[/red]")
         sys.exit(1)
     except (json.JSONDecodeError, KeyError) as e:
         rprint(f"[bold red]Error loading experiment data: {e}[/bold red]")
-        rprint("[red]The experiment file may be corrupted. Consider reinitializing the experiment.[/red]")
+        rprint("[red]The experiment file may be corrupted. "
+               "Consider reinitializing the experiment.[/red]")
         sys.exit(1)
 
-    if task_name not in globals():
-        rprint(f"[red]Task '{task_name}' not found.[/red]")
-        available_tasks = [name for name in globals() if callable(globals()[name]) and not name.startswith('_')]
-        rprint(f"[dim]Available tasks: {', '.join(available_tasks)}[/dim]")
+    if task_name not in _EXEC_COMMANDS:
+        rprint(f"[red]Command '{task_name}' not found.[/red]")
+        list_exec_commands()
         sys.exit(1)
 
+    cmd = _EXEC_COMMANDS[task_name]
     try:
-        return globals()[task_name](exp)
+        result = cmd.func(exp)
+        logger.info(f"Running {task_name} -> {'OK' if result else 'FAILED'}")
+        exp.store()
+        return result
     except Exception as e:
-        rprint(f"[red]Error running task '{task_name}': {e}[/red]")
+        logger.error(f"Error running command '{task_name}': {e}")
         sys.exit(1)
 
 
@@ -541,51 +650,51 @@ def validate_steps(from_step: str, to_step: str | None = None) -> tuple[bool, st
     return True, ""
 
 
+def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
+    """Configure loguru file sink for the debug log (post_process.log).
+
+    Args:
+        exp: Experiment object (provides dirs.logs).
+        debug: If True, log DEBUG level with full context; otherwise INFO only.
+    """
+    try:
+        logger.remove()  # Remove default stderr handler to avoid duplicate messages
+        logger.add(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log", colorize=False,
+                   level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
+                   format="time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
+                          "{module}:{function}:{line} | {message}" if debug else "{level: <8} | {message}")
+        
+        logger.add(sys.stdout, colorize=True, level="DEBUG" if debug else "INFO",
+                   format=lambda record: "{level}: {message}\n" if record["level"].no >= 40 else "{message}\n")
+    except (OSError, PermissionError) as e:
+        rprint(f"[yellow]Warning: Could not create debug log file: {e}[/yellow]")
+
+
 def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool = False,
                  from_step: str | None = None, to_step: str | None = None):
     """Run the workflow for the given experiment.
-    
+
     Args:
         exp: The experiment object.
         archive: Whether to include the archive step.
         debug: Whether to enable debug logging.
         from_step: Starting step name (optional).
         to_step: Ending step name (optional).
-        
+
     Returns:
         bool: True if workflow completed successfully, False otherwise.
     """
-    try:
-        if debug:
-            # Debug mode: show all information (time, level, module, function, line)
-            debug_format = (
-                "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-                "<level>{level: <8}</level> | "
-                "<cyan>{module}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-                "<level>{message}</level>"
-            )
-            logger.add(exp.dirs.logs / 'post_process.log', colorize=True,
-                       level="DEBUG", backtrace=True, diagnose=True, format=debug_format)
-        else:
-            # Info mode: show only time (HH:MM:SS) and level in dim color, then message on new line
-            info_format = (
-                "<dim>{time:HH:mm:ss}</dim> <dim>{level: <8}</dim>\n"
-                "{message}"
-            )
-            logger.add(exp.dirs.logs / 'post_process.log', colorize=True,
-                       level="INFO", backtrace=False, diagnose=False, format=info_format)
-    except (OSError, PermissionError) as e:
-        rprint(f"[yellow]Warning: Could not create log file: {e}[/yellow]")
+    # Create (or re-create) post_processing.log with full header on fresh runs;
+    # on resumed runs the file already exists so just append a session marker.
+    if not (f := Path(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log")).exists():
+        exp.write_log_file(f)
 
-    # TODO: put this in the commands.log file
-    #logger.info(f"\n\n\n{'#'*37}\n# Post-processing of {exp.expname} ({exp.obsdate}).\n"
-    #            f"# Running on {dt.today().strftime('%d %b %Y %H:%M')} by {exp.supsci}.\n"
-    #            f"Using evn_postprocess version {version('evn_postprocess')}.")
-
+    _setup_loguru(exp, debug)
     if not archive:
         logger.debug("The data will not be stored in the EVN archive.")
 
-    exp.steps = [s for s in _WORKFLOW_STEPS if (archive or (s.name != 'archive')) and (s.name != 'initialize')]
+    exp.steps = [s for s in _WORKFLOW_STEPS
+                 if (archive or (s.name != 'archive')) and (s.name != 'initialize')]
     exp.store()
 
     # Filter steps based on from_step and to_step
@@ -598,6 +707,9 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
         except ValueError as e:
             logger.error(f"Error filtering steps: {e}")
             return False
+
+        logger.debug(f"Running steps: {', '.join(s.name for s in steps_to_run)}")
+        rprint(f"[green]Running steps: {', '.join(s.name for s in steps_to_run)}[/green]")
     else:
         steps_to_run = exp.steps
 
@@ -607,11 +719,12 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
 
     for step in steps_to_run:
         logger.info(f"Running step: {step.name}")
+        rprint(f"\n[bold]>> Step: {step.name}[/bold]  –  {step.doc}")
         try:
             if step.command not in globals():
                 logger.error(f"Command '{step.command}' not found for step '{step.name}'")
                 return False
-                
+
             if not globals()[step.command](exp):
                 logger.error(f"Step {step.name} failed.")
                 rprint(f"[red]Step {step.name} failed. Check logs for details.[/red]")

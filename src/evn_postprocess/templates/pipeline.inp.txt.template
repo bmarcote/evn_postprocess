@@ -1,0 +1,85 @@
+# -----------------------------------------------
+# required parameters
+version=31DEC21
+# tmask is a range of steps to be carried out. tmask=1 will run the whole
+# pipeline.
+tmask = 1
+
+# if a multiple pass experiment then append the pass number to the experiment
+# name (e.g. n05c3_1)
+experiment = {expname}
+userno = {userno}
+
+# refant is a prioritised list of reference antennas
+refant = {refant}
+
+# plotref is a list of antennas, baselines to which will be plotted.
+plotref = {plotref}
+
+# bpass is a list of sources for bandpass calibration
+bpass = {bpass}
+
+# phaseref and target must be set if phase referencing. Each source in target
+# list will be phase calibrated by the corresponding source in phaseref list.
+{dophaseref}phaseref = {phaseref}
+{dophaseref}target = {target}
+
+
+# solint defaults to typical scan length on phase calibrator. Must be set if
+# not phase referencing.
+{dosolint}solint = {solint}
+
+# to generate PB correction SN file for phase centers
+doprimarybeam = {doprimarybeam}
+setup_station = {setup_station}
+
+# -----------------------------------------------
+# optional parameters
+
+# directories default to $IN/<experiment>, $OUT/<experiment>,
+# $PIPEFITS/<experiment>
+#fitsdir = /jop21_2/reynolds/evnpipe/test/fits/
+#indir =  /jop21_2/reynolds/evnpipe/test/fits/
+#outdir =   /jop21_2/reynolds/evnpipe/test/out/
+
+# fits_file defaults to EVN archive standard names. Do not give the full path
+# (the directory will be taken from the fitsdir parameter)
+#fits_file = myfitsfile
+
+# sciter is the no of iterations of selfcal - defaults to 2 (0 is a valid
+# input, not default)
+#sciter=4
+
+# nfits defaults to all fits files that match experiment
+#nfits = 0
+
+# glue_pass defaults to 1. This is a list of correlator passes that should be
+# glued together (see help file for explanation).
+#glue_pass = 1, 2
+
+# freqid should *not* be set unless you have multiple freqids in the dataset.
+# In that case, select the freqid you want to process.
+#freqid = 1
+
+# averages default to 0
+#avg = 0
+#plotavg = 0.5
+
+# -----------------------------------------------
+# advanced optional parameters
+
+# fring_snr defaults to 9
+#fring_snr = 9
+
+
+# doplot defaults to 1
+#doplot = 1
+
+# disk is the aips disk to use (defaults to 1)
+#disk = 1
+
+# msgkill is the level of messages output from aips (defaults to 0)
+#msgkill =
+
+# sources defaults to all sources in the SU table
+{do_all_sources}sources = {all_sources}

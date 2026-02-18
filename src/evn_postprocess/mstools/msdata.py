@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from collections import Counter
 import datetime as dt
 import functools
 import json
@@ -562,6 +563,13 @@ class Ms:
         
         self.scans = scan_antennas
         
+    def most_common_subband(self) -> int:
+        """Find the subband with most antenna coverage."""
+        counting: Counter = Counter()
+        for antenna in self.antennas:
+            counting.update(antenna.subbands)
+
+        return counting.most_common()[0][0]
 
     @property
     def msfile(self) -> Path:

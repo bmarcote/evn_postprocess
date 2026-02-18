@@ -2,9 +2,11 @@
 """Post-Processing of EVN experiments.
 """
 import os
+import sys
 import json
 import glob
 import argparse
+from loguru import logger
 from rich import print as rprint
 from rich_argparse import RawTextRichHelpFormatter
 from pathlib import Path
@@ -118,6 +120,78 @@ help_gui = 'Type of GUI to use for interactions with the user:\n' \
            '- "gui": uses the Graphical User Interface.'
 
 
+def _apply_refant(exp: experiment.Experiment, refant_args: list[str]):
+    """Validates and applies reference antenna override to the experiment.
+
+    Args:
+        exp: Experiment object.
+        refant_args: List of antenna codes from CLI.
+    """
+    known = set(exp.antennas.names)
+    invalid = [a for a in refant_args if a not in known]
+    if invalid:
+        rprint(f"[red]Unknown antenna(s): {', '.join(invalid)}[/red]")
+        rprint(f"[dim]Available antennas: {', '.join(sorted(known))}[/dim]")
+        sys.exit(1)
+
+    exp.refant = list(refant_args)
+    rprint(f"[green]Reference antenna(s) set to: {', '.join(exp.refant)}[/green]")
+
+
+def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
+    """Handles the 'postprocess edit' subcommand.
+
+    If values is empty, lists available options. Otherwise validates and applies the change.
+
+    Args:
+        exp: Experiment object.
+        field: One of 'refant', 'target', 'phasecal', 'fringefinder'.
+        values: Values provided by the user (may be empty to list options).
+    """
+    if field == 'refant':
+        if not values:
+            rprint("[bold]Available antennas:[/bold]")
+            for ant in exp.antennas:
+                status = "[green]observed[/green]" if ant.observed else "[red]not observed[/red]"
+                rprint(f"  {ant.name}  {status}")
+            if exp.refant:
+                rprint(f"\n[dim]Current refant: {', '.join(exp.refant)}[/dim]")
+            return
+
+        _apply_refant(exp, values)
+        return
+
+    # Source-type fields: target, phasecal, fringefinder
+    type_map = {'target': experiment.SourceType.target, 'phasecal': experiment.SourceType.calibrator,
+                'fringefinder': experiment.SourceType.fringefinder}
+    src_type = type_map[field]
+
+    if not values:
+        rprint(f"[bold]Available sources[/bold] (current {field} sources marked with *):")
+        for src in exp.sources:
+            marker = " *" if src.type == src_type else ""
+            rprint(f"  {src.name}  [dim]({src.type.name})[/dim]{marker}")
+        return
+
+    known_sources = set(exp.sources.names)
+    for src_name in values:
+        if src_name not in known_sources:
+            rprint(f"[red]Unknown source '{src_name}'.[/red]")
+            rprint(f"[dim]Available sources: {', '.join(sorted(known_sources))}[/dim]")
+            sys.exit(1)
+
+        exp.sources[src_name].type = src_type
+        rprint(f"[green]Source '{src_name}' set to {field}.[/green]")
+
+    # Propagate type changes to per-pass sources
+    for a_pass in exp.correlator_passes:
+        if not a_pass.sources:
+            continue
+        for src_name in values:
+            if src_name in a_pass.sources.names:
+                a_pass.sources[src_name].type = src_type
+
+
 def main():
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
                                      formatter_class=RawTextRichHelpFormatter)
@@ -134,46 +208,58 @@ def main():
                         help='Skip the archive part of the files to the EVN archive.')
     parser.add_argument('--debug', action='store_true', default=False,
                         help='Debug mode: shows a more verbose output')
-    parser.add_argument('--j2ms2par', type=str, default=None,
-                        help='Additional attributes for j2ms2 (like the fo:XXXXX).')
+    # parser.add_argument('--j2ms2par', type=str, default=None,
+    #                     help='Additional attributes for j2ms2 (like the fo:XXXXX).')
     parser.add_argument('-s', '--steps', type=str, nargs='+', default=None,
                         help='Run from a specific step (and optionally to another step).\n'
                         'If one step is given, runs from that step to the end.\n'
                         'If two steps are given, runs from the first to the second (inclusive).')
+    parser.add_argument('--refant', type=str, nargs='+', default=None,
+                        help='Reference antenna(s) to use (space-separated two-letter codes).\n'
+                        'Overrides the auto-selected reference antenna after loading the experiment.')
     parser.add_argument('-v', '--version', action='version',
                         version='%(prog)s {}'.format(__version__))
-    subparsers = parser.add_subparsers(help='[bold]If no command is provided, the full ' \
-                                       'postprocessing will run ' \
+    subparsers = parser.add_subparsers(help='[bold]If no command is provided, the full postprocessing will run ' \
                                        'from the last successful step.[/bold]', dest='subpar')
     _ = subparsers.add_parser('info', help='Shows the metadata associated to the experiment',
                               description=help_info,
                               formatter_class=parser.formatter_class)
-    _ = subparsers.add_parser('list', help='Shows the different steps to be run.',
+    _ = subparsers.add_parser('list', help='Shows the different steps to be run and which ones have been run.',
                               description=help_last,
                               formatter_class=parser.formatter_class)
-    parser_exec = subparsers.add_parser('exec', help='Runs a single task from the post-processing workflow',
-                                        formatter_class=parser.formatter_class)
+    _ = subparsers.add_parser('last', help='Shows the different steps to be run and which ones have been run.',
+                              description=help_last,
+                              formatter_class=parser.formatter_class)
+    help_exec = workflow.build_exec_help()
+    parser_exec = subparsers.add_parser('exec', help='Runs a single command from the post-processing workflow.',
+                                        description=help_exec, formatter_class=parser.formatter_class)
     parser_exec.add_argument('task_name', type=str, nargs='?', default=None,
-                             help="Name of the task to run. If not provided, lists all available tasks.")
+                             help='Name of the command to run. If not provided, lists all available commands.')
+    parser_edit = subparsers.add_parser('edit', help='Edit experiment metadata.',
+                                        description=help_edit, formatter_class=parser.formatter_class)
+    parser_edit.add_argument('field', type=str, choices=['refant', 'target', 'phasecal', 'fringefinder'],
+                             help='Metadata field to edit.')
+    parser_edit.add_argument('values', type=str, nargs='*', default=[],
+                             help='Value(s) to set. If omitted, lists available options.')
     args = parser.parse_args()
 
+    logger.remove()
+    logger.add(sys.stdout, colorize=True, level="DEBUG" if args.debug else "INFO",
+               format=lambda record: "{level}: {message}\n" if record["level"].no >= 40 else "{message}\n")
     try:
         expname = args.expname.upper() if args.expname else experiment.retrieve_expname()
     except (ValueError, FileNotFoundError) as e:
-        rprint(f"[red]Error retrieving experiment name: {e}[/red]")
+        rprint("[bold red]Error retrieving experiment name[/bold red]")
+        rprint(f"[red]{e}[/red]")
         rprint("[red]Please specify the experiment name with -e/--expname or run from the experiment directory[/red]")
-        return
+        sys.exit(1)
     
     try:
-        if not args.dir:
-            servers = experiment.retrieve_servers()
-            cwd = Path(eval(f"f'{servers['eee'].path}'", {'expname': expname}))
-        else:
-            cwd = Path(args.dir)
+        cwd = Path(args.dir if args.dir else experiment.retrieve_servers()['eee'].path / expname.upper())
     except (FileNotFoundError, KeyError) as e:
         rprint(f"[red]Error setting up directory: {e}[/red]")
         rprint("[red]Please check the server configuration or specify a directory with -d/--dir[/red]")
-        return
+        sys.exit(1)
 
     if (not args.subpar) or (args.subpar == 'info'):
         try:
@@ -181,72 +267,101 @@ def main():
             os.chdir(cwd)
         except (OSError, PermissionError) as e:
             rprint(f"[red]Error creating or accessing directory {cwd}: {e}[/red]")
-            return
+            sys.exit(1)
             
-        # A previous execution of the post-process has been done
         if Path(f"{expname.lower()}.json").exists():
             rprint(f"[bold]Recovering previously-stored information for {expname}[/bold]")
             try:
                 exp = experiment.Experiment.load(expname)
                 # Just to avoid that the user deleted some folders
                 workflow.create_folder_structure()
-                
-                # Check if correlator passes are empty but .lis files exist
-                if len(exp.correlator_passes) == 0 and len(glob.glob(f"{expname.lower()}*.lis")) > 0:
-                    rprint("[bold yellow]No correlator passes found but .lis files exist. Reloading .lis files...[/bold yellow]")
+                # User may have changed the lis files...
+                if len(exp.correlator_passes) != len(glob.glob(f"{expname.lower()}*.lis")):
+                    rprint("[bold yellow]Reloading .lis files information...[/bold yellow]")
                     if not lisfiles.get_passes_from_lisfiles(exp):
                         rprint("[red]Error: Failed to reload .lis files[/red]")
-                        return
-                        
+                        sys.exit(1)
             except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
                 rprint(f"[red]Error loading experiment data: {e}[/red]")
-                rprint("[red]The experiment file may be corrupted. Consider reinitializing the experiment.[/red]")
-                return
+                rprint("[red]The experiment file may be corrupted. Consider reinitializing the experiment by removing the json file.[/red]")
+                sys.exit(1)
         else:
             try:
                 supsci = args.supsci if args.supsci else experiment.retrieve_username()
+                if supsci == 'unknown':
+                    raise ValueError("Could not determine the username. Please specify it with --supsci.")
+
                 exp = workflow.initialize_experiment(expname, supsci)
-                if args.j2ms2par is not None:
-                    exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
-                    exp.store()
+                # if args.j2ms2par is not None:
+                #     exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
+                exp.store()
             except (ValueError, FileNotFoundError, RuntimeError) as e:
                 rprint(f"[red]Error initializing experiment: {e}[/red]")
-                return
+                sys.exit(1)
+
+        # Apply --refant override if provided
+        if args.refant:
+            _apply_refant(exp, args.refant)
+            exp.store()
 
         if not args.subpar:
             from_step, to_step = None, None
             if args.steps:
                 if len(args.steps) > 2:
                     rprint("[red]Error: --steps accepts at most two step names.[/red]")
-                    return
+                    sys.exit(1)
                 from_step = args.steps[0]
                 to_step = args.steps[1] if len(args.steps) == 2 else None
                 valid, error_msg = workflow.validate_steps(from_step, to_step)
                 if not valid:
                     rprint(f"[red]Error: {error_msg}[/red]")
-                    return
+                    sys.exit(1)
             workflow.run_workflow(exp, args.no_archive, debug=args.debug, from_step=from_step, to_step=to_step)
         else:  # elif args.subpar == 'info':
             exp.print_blessed(outputfile=None)
-    elif args.subpar == 'list':
+    elif args.subpar == 'list' or args.subpar == 'last':
         try:
             workflow.list_tasks(expname, print_docs=True)
         except (FileNotFoundError, KeyError) as e:
             rprint(f"[red]Error listing tasks: {e}[/red]")
-            return
+            sys.exit(1)
+    elif args.subpar == 'edit':
+        try:
+            cwd.mkdir(exist_ok=True)
+            os.chdir(cwd)
+        except (OSError, PermissionError) as e:
+            rprint(f"[red]Error creating or accessing directory {cwd}: {e}[/red]")
+            sys.exit(1)
+
+        try:
+            exp = experiment.Experiment.load(expname)
+        except FileNotFoundError:
+            rprint(f"[red]No stored experiment found for {expname}. Run postprocess first.[/red]")
+            sys.exit(1)
+        except (json.JSONDecodeError, KeyError) as e:
+            rprint(f"[red]Error loading experiment data: {e}[/red]")
+            sys.exit(1)
+
+        _handle_edit(exp, args.field, args.values)
+        exp.store()
+
     elif args.subpar == 'exec':
         if args.task_name is None:
-            try:
-                workflow.list_tasks(expname, print_docs=True)
-            except (FileNotFoundError, KeyError) as e:
-                rprint(f"[red]Error listing tasks: {e}[/red]")
-                return
-        else:
-            try:
-                workflow.run_isolated_task(args.task_name, expname)
-            except (FileNotFoundError, KeyError, AttributeError) as e:
-                rprint(f"[red]Error running task '{args.task_name}': {e}[/red]")
-                return
+            workflow.list_exec_commands()
+            sys.exit(1)
+
+        try:
+            cwd.mkdir(exist_ok=True)
+            os.chdir(cwd)
+        except (OSError, PermissionError) as e:
+            rprint(f"[red]Error creating or accessing directory {cwd}: {e}[/red]")
+            sys.exit(1)
+
+        try:
+            workflow.run_isolated_task(args.task_name, expname)
+        except (FileNotFoundError, KeyError, AttributeError) as e:
+            rprint(f"[red]Error running task '{args.task_name}': {e}[/red]")
+            sys.exit(1)
 
 
 if __name__ == '__main__':

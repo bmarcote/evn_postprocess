@@ -1,0 +1,1043 @@
+from __future__ import print_function
+import os
+import re
+import sys
+import glob
+import json
+import socket
+import signal
+import subprocess
+import collections
+import http.server
+import threading
+from operator import methodcaller
+from functools import reduce, partial
+from pathlib import Path
+from typing import List, Optional, Generator
+from loguru import logger
+import numpy as np
+from pyrap import tables as pt
+from jiveplot import jplotter, command
+
+
+
+
+# program default(s)
+NoWgt = True    # do not produce weight plots
+ScanNo = None    # automatic scan selection
+Version = "$Id: standardplots,v 1.1 2014-08-08 15:38:41 jive_cc Exp $"
+# Polarization colour scheme as per JIVE standard.
+# Single pol data gets coloured black.
+PolCMap = "ckey p[rr]=2 p[ll]=3 p[rl]=4 p[lr]=5 p[none]=1"
+
+# One-liner to split a list of things into two lists, one satisfying the predicate, the other not
+partition = lambda p, l: reduce(lambda y_n, x: (y_n[0]+[x], y_n[1]) if p(x) else (y_n[0], y_n[1]+[x]), l, ([], []))
+# function composition is really great
+compose = lambda *fns: lambda x: reduce(lambda a, f: f(a), reversed(fns), x)
+Map = lambda fn: partial(map, fn)
+
+# full MS path to plot base name transformation
+mk_basenm = compose(partial(re.sub, r'\.ms', ''), os.path.basename, partial(re.sub, r'/*$', ''))
+# CalSrc must be transformed such that it can be fed into "/{0}/i" regex,
+# even if CalSrc is comma-separated list of sources.
+# So: split CalSrc by ',', escape the individual source names and transform
+#     to "(<src>|<src>|....)" as regex alternatives for matching
+mk_calsrc = compose("({0})".format, "|".join, Map(re.escape), methodcaller('split', ','))
+
+# We need to capture errors and terminate in stead of going on.
+# replace the errorfunction from hvutil with one that terminates
+def mkerrf(pfx):
+    def actualerrf(msg):
+        print("{0} {1}".format(pfx, msg))
+        sys.exit(-1)
+    return actualerrf
+jplotter.hvutil.mkerrf = mkerrf
+
+# returns None if the argument wasn't present, tp(<value>) if it was
+# (such that it will give an exception if e.g. you expect int but
+#  the user didn't pass a valid int
+def get_val(arg, tp=str):
+    conversion_error = False
+    try:
+        # is 'arg' given?
+        aidx = sys.argv.index(arg)  # raises ValueError if not found FFS
+        aval = sys.argv[aidx+1]     # raises IndexError
+
+        # Check it doesn't start with a '-'!
+        if aval[0]=='-':
+            raise RuntimeError("Option {0} expects argument, got another option '{1}'" .format(arg, aval))
+
+        # remove those arguments
+        del sys.argv[aidx]; del sys.argv[aidx]
+        # now set 'conversion_error' to True because the following
+        # statement could (also) raise a ValueError (like the
+        # "sys.argv.index()"). FFS Python! So we must take measures to tell
+        # them apart
+        conversion_error = True
+        return tp(aval)
+    except ValueError:
+        if conversion_error:
+            raise
+        # no 'arg' given, don't complain
+        return None
+    except IndexError:
+        # Mission option value to option
+        raise RuntimeError("Mission optionvalue to {0}".format(arg))
+
+
+def chunkert(f, l, cs, verbose=True):
+    while f<l:
+        n = min(cs, l-f)
+        yield (f, n)
+        f = f + n
+
+def get_observed_subbands(ms):
+    """Given a MS file, it checks which subbands each antenna actually observed.
+    Meaning for which subbands each antenna has non-zero data.
+
+    Returns a dictionary with the antenna names as keys,
+    and a Python set with the observed subbands as values.
+    """
+    ants_spws = collections.defaultdict(set)
+    with pt.table(ms, readonly=True, ack=False) as mstable:
+        with pt.table(mstable.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ants:
+            antenna_names = ms_ants.getcol('NAME')
+
+        with pt.table(mstable.getkeyword('DATA_DESCRIPTION'), readonly=True, ack=False) as ms_spws:
+            spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
+
+        for (start, nrow) in chunkert(0, len(mstable), 5000):
+            ants1 = mstable.getcol('ANTENNA1', startrow=start, nrow=nrow)
+            ants2 = mstable.getcol('ANTENNA2', startrow=start, nrow=nrow)
+            spws = mstable.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
+            msdata = mstable.getcol('DATA', startrow=start, nrow=nrow)
+
+            for antenna in antenna_names:
+                for spw in spw_names:
+                    cond = np.where((ants1 == antenna) & (ants2 == antenna) & (spws == spw))
+                    if (msdata[cond] < 1e-7).all():
+                        ants_spws[antenna].add(spw)
+
+    return ants_spws
+
+def find_best_subband(ants_spws):
+    """Given the dictionary with the subbands that each antenna observed
+    (format from get_observed_subbands' output), it returns the subband number
+    at which most of the antennas are present.
+    """
+    counting = collections.Counter()
+    for antenna in ants_spws:
+        counting.update(ants_spws[antenna])
+
+    # .most_common() returns a list with the orderered elements,
+    # each in a two-elemen tuple: the element and the number of repetitions.
+    return counting.most_common()[0][0]
+
+
+
+# Default antenna priority for reference antenna fallback.
+# Ordered by preference; the first antenna present in a scan with the most subbands wins.
+DEFAULT_REFANT_PRIORITY = ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt', 'Jb', 'Wb', 'Tr', 'Nt', 'Sv', 'Zc', 'Bd', 'Sh', 'Ur')
+
+
+class Jplot:
+    """Class for creating JIVE standard plots from Measurement Sets.
+
+    Discovers which scans contain the requested calibrator sources, picks the
+    best reference antenna per scan, and produces plots with the scan number
+    embedded in every output filename so nothing is overwritten.
+    """
+
+    def __init__(self, ms: str, refant: str, calsrc: str, weight_plots: bool = False,
+                 debug: bool = False, refant_priority: Optional[tuple[str, ...]] = None):
+        """Initialize the Jplot instance.
+
+        Args:
+            ms: Path to the Measurement Set file.
+            refant: Preferred reference antenna (two-letter station code).
+            calsrc: Calibrator source(s), comma-separated.
+            weight_plots: Whether to include weight plots (default: False).
+            debug: Enable debug output (default: False).
+            refant_priority: Ordered tuple of antenna codes used as fallback
+                when *refant* is absent from a scan. Defaults to DEFAULT_REFANT_PRIORITY.
+        """
+        self.measurementset = ms
+        self.refant = refant
+        self.calsrc_raw = calsrc
+        self.calsrc = mk_calsrc(calsrc)
+        self.weight_plots = weight_plots
+        self.debug = debug
+        self.refant_priority = refant_priority or DEFAULT_REFANT_PRIORITY
+        self.myBasename = mk_basenm(self.measurementset)
+        self.tempFileName = "/tmp/sptf-{0}.ps".format(os.getpid())
+
+        # Determine the best subband for time plots
+        self.subbandNo = self._find_best_subband()
+        print(f"Subband {self.subbandNo} selected for amp & phase VS time plot.")
+    
+    def cleanup(self):
+        """Clean up temporary files."""
+        try:
+            os.unlink(self.tempFileName)
+        except OSError:
+            pass  # File might not exist
+    
+    def _find_best_subband(self) -> int:
+        """Find the subband with most antenna coverage."""
+        ants_spws = self._get_observed_subbands()
+        counting: collections.Counter = collections.Counter()
+        for antenna in ants_spws:
+            counting.update(ants_spws[antenna])
+        return counting.most_common()[0][0]
+
+    def _get_observed_subbands(self) -> dict[str, set[int]]:
+        """Get observed subbands for each antenna.
+
+        Returns:
+            dict mapping antenna name -> set of subband indices with non-zero data.
+        """
+        ants_spws: dict[str, set[int]] = collections.defaultdict(set)
+        with pt.table(self.measurementset, readonly=True, ack=False) as mstable:
+            with pt.table(mstable.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ants:
+                antenna_names = ms_ants.getcol('NAME')
+
+            with pt.table(mstable.getkeyword('DATA_DESCRIPTION'), readonly=True, ack=False) as ms_spws:
+                spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
+
+            for (start, nrow) in chunkert(0, len(mstable), 5000):
+                ants1 = mstable.getcol('ANTENNA1', startrow=start, nrow=nrow)
+                ants2 = mstable.getcol('ANTENNA2', startrow=start, nrow=nrow)
+                spws = mstable.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
+                msdata = mstable.getcol('DATA', startrow=start, nrow=nrow)
+
+                for antenna in antenna_names:
+                    for spw in spw_names:
+                        cond = np.where((ants1 == antenna) & (ants2 == antenna) & (spws == spw))
+                        if (msdata[cond] < 1e-7).all():
+                            ants_spws[antenna].add(spw)
+
+        return ants_spws
+
+    # ------------------------------------------------------------------
+    #  Scan discovery & reference-antenna selection
+    # ------------------------------------------------------------------
+
+    def get_scans_for_sources(self, sources: list[str]) -> dict[int, dict]:
+        """Find all scans that contain any of the requested sources.
+
+        Reads SCAN_NUMBER, FIELD_ID and ANTENNA1/2 columns to build a map
+        of scan_number -> {source, antennas, antenna_spws}.
+
+        Args:
+            sources: List of source names to match.
+
+        Returns:
+            dict mapping scan_number (int) -> {
+                'source':       str,          # field name for this scan
+                'antennas':     set[str],     # antenna names with data
+                'antenna_spws': dict[str, set[int]]  # per-antenna subband set
+            }
+        """
+        source_set = {s.upper() for s in sources}
+        result: dict[int, dict] = {}
+
+        with pt.table(self.measurementset, readonly=True, ack=False) as mstable:
+            with pt.table(mstable.getkeyword('ANTENNA'), readonly=True, ack=False) as ant_tab:
+                ant_names = list(ant_tab.getcol('NAME'))
+
+            with pt.table(mstable.getkeyword('FIELD'), readonly=True, ack=False) as field_tab:
+                field_names = list(field_tab.getcol('NAME'))
+
+            for (start, nrow) in chunkert(0, len(mstable), 5000, verbose=False):
+                scan_col = mstable.getcol('SCAN_NUMBER', startrow=start, nrow=nrow)
+                field_col = mstable.getcol('FIELD_ID', startrow=start, nrow=nrow)
+                ant1_col = mstable.getcol('ANTENNA1', startrow=start, nrow=nrow)
+                ant2_col = mstable.getcol('ANTENNA2', startrow=start, nrow=nrow)
+                spw_col = mstable.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
+                data_col = mstable.getcol('DATA', startrow=start, nrow=nrow)
+
+                for i in range(nrow):
+                    fid = int(field_col[i])
+                    fname = field_names[fid] if fid < len(field_names) else ''
+                    if fname.upper() not in source_set:
+                        continue
+
+                    scanno = int(scan_col[i])
+                    if scanno not in result:
+                        result[scanno] = {'source': fname, 'antennas': set(), 'antenna_spws': collections.defaultdict(set)}
+
+                    a1 = int(ant1_col[i])
+                    a2 = int(ant2_col[i])
+                    spw = int(spw_col[i])
+                    amp = np.max(np.abs(data_col[i]))
+
+                    if a1 == a2 and amp > 1e-5:
+                        aname = ant_names[a1]
+                        result[scanno]['antennas'].add(aname)
+                        result[scanno]['antenna_spws'][aname].add(spw)
+
+        return dict(sorted(result.items()))
+
+    def pick_refant_for_scan(self, scan_info: dict) -> str:
+        """Choose the best reference antenna for a single scan.
+
+        If the preferred refant is present in the scan it is returned directly.
+        Otherwise the antenna from the priority list that observed the most
+        subbands in this scan is selected.
+
+        Args:
+            scan_info: Dict with 'antennas' (set[str]) and
+                       'antenna_spws' (dict[str, set[int]]) as returned by
+                       get_scans_for_sources().
+
+        Returns:
+            Two-letter antenna code to use as reference antenna.
+
+        Raises:
+            ValueError: If no suitable reference antenna can be found.
+        """
+        if self.refant in scan_info['antennas']:
+            return self.refant
+
+        # Build candidates from the priority list that are present in this scan
+        candidates = [a for a in self.refant_priority if a in scan_info['antennas']]
+        if not candidates:
+            # Fall back to any antenna present, sorted by subband count descending
+            candidates = list(scan_info['antennas'])
+
+        if not candidates:
+            raise ValueError("No antennas found in scan to use as reference antenna")
+
+        # Pick the candidate with the most subbands
+        ant_spws = scan_info['antenna_spws']
+        best = max(candidates, key=lambda a: len(ant_spws.get(a, set())))
+        print(f"  refant fallback: {self.refant} not in scan, using {best} "
+              f"({len(ant_spws.get(best, set()))} subbands)")
+        return best
+
+    def open_ms(self) -> Generator[str, None, None]:
+        """Open MS and run indexr - returns generator of jplotter commands."""
+        yield "ms {0}".format(self.measurementset)
+        yield "indexr"
+        yield "refile {0}".format(self.tempFileName)
+
+    # ------------------------------------------------------------------
+    #  Plot generators (each yields jplotter command strings)
+    # ------------------------------------------------------------------
+
+    def anp_chan_cross_plot(self, refant: str, scanno: int) -> Generator[str, None, None]:
+        """Generate amplitude/phase vs channel cross-baseline plots for one scan.
+
+        Args:
+            refant: Reference antenna code for this scan.
+            scanno: Scan number to select.
+
+        Returns:
+            Generator of jplotter commands.
+        """
+        print(f"generating cross plots [anp/channel] scan {scanno}")
+        yield "bl {0}* -auto".format(refant)
+        yield "fq *;ch none"
+        yield "avt vector;avc none"
+        yield "pt anpchan"
+        yield "y local"
+        yield "scan mid-30s to mid+30s where scan_number={0}".format(scanno)
+        yield "new all false bl true sb false"
+        yield "multi true"
+        yield "sort bl"
+        yield PolCMap
+        yield "nxy 2 4"
+        yield "refile {0}-cross-scan{1}.ps/cps".format(self.myBasename, scanno)
+        yield "pl"
+        print(f"done cross plots scan {scanno}")
+
+    def amp_chan_auto_plot(self, scanno: int) -> Generator[str, None, None]:
+        """Generate amplitude vs channel auto-correlation plots for one scan.
+
+        Args:
+            scanno: Scan number to select.
+
+        Returns:
+            Generator of jplotter commands.
+        """
+        print(f"generating auto plots [amp/channel] scan {scanno}")
+        yield "bl auto"
+        yield "fq */p;ch none"
+        yield "avt scalar;avc none"
+        yield "time none"
+        yield "pt ampchan"
+        yield "y 0 2"
+        yield "scan mid-30s to mid+30s where scan_number={0}".format(scanno)
+        yield "new all false bl true sb false time true"
+        yield "multi true"
+        yield "sort bl"
+        yield PolCMap
+        yield "nxy 2 4"
+        yield "refile {0}-auto-scan{1}.ps/cps".format(self.myBasename, scanno)
+        yield "pl"
+        print(f"done auto plots scan {scanno}")
+
+    def amp_time_auto_plot(self, scanno: int) -> Generator[str, None, None]:
+        """Generate amplitude vs time auto-correlation plots for one scan.
+
+        Args:
+            scanno: Scan number to select.
+
+        Returns:
+            Generator of jplotter commands.
+        """
+        print(f"generating auto plots [amp/time] scan {scanno}")
+        yield "bl auto"
+        yield "fq *;ch 0.1*last:0.9*last"
+        yield "new all f bl t"
+        yield "avt none;avc vector"
+        yield "pt amptime"
+        yield "y local"
+        yield "scan start-20m to end+100m where scan_number={0}".format(scanno)
+        yield "time"
+        yield "sort bl"
+        yield "refile {0}-amptime-scan{1}.ps/cps".format(self.myBasename, scanno)
+        yield "pl"
+        print(f"done amp/time auto plots scan {scanno}")
+
+    def anp_time_cross_plot(self, refant: str, timesel: str, sbsel: str, label: str) -> Generator[str, None, None]:
+        """Generate amplitude/phase vs time cross-baseline plots (all scans).
+
+        Args:
+            refant: Reference antenna code.
+            timesel: Time selection string.
+            sbsel: Subband selection string.
+            label: Suffix label for output filename.
+
+        Returns:
+            Generator of jplotter commands.
+        """
+        print(f"generating cross plots [anp/time] all scans ({label})")
+        yield "bl {0}* -auto".format(refant)
+        yield "fq {0}/p;ch 0.1*last:0.9*last".format(sbsel)
+        yield "new all f bl t"
+        yield "avt none;avc vector"
+        yield "pt anptime"
+        yield "y local"
+        yield "src none"
+        yield "time {0}".format(timesel)
+        yield "sort bl"
+        yield "ckey src src[none]=1"
+        yield "ptsz 2"
+        yield "refile {0}-ampphase-{1}.ps/cps".format(self.myBasename, label)
+        yield "pl"
+        print(f"done amplitude/phase vs time plots ({label})")
+
+    def weight_plot(self) -> Generator[str, None, None]:
+        """Generate weight plots for auto-correlations.
+
+        Returns:
+            Generator of jplotter commands.
+        """
+        print("generating weight plot")
+        yield "ms {0}".format(self.measurementset)
+        yield "bl auto; fq */p"
+        yield "src none"
+        yield "time none"
+        yield "ch mid"
+        yield "pt wt"
+        yield "new all f bl t"
+        yield "y global"
+        yield "sort bl"
+        yield "refile {0}-weight.ps/cps".format(self.myBasename)
+        yield "wt 0.1"
+        yield "pl"
+        print("done weight plot")
+
+
+    def create_plot(self, sources: list[str], plots: Optional[List[str]] = None) -> bool:
+        """Discover scans for the given sources and create plots for each scan.
+
+        For every scan that contains one of *sources*, cross- and auto-correlation
+        plots are generated with the scan number in the filename.  The reference
+        antenna is chosen per-scan (falls back through the priority list when the
+        preferred refant is absent).
+
+        Amplitude/phase-vs-time and weight plots are produced once (not per-scan).
+
+        Args:
+            sources: Calibrator source names to look for in the MS.
+            plots: Plot types to create. If None, creates all standard plots.
+                   Available options: 'cross', 'auto', 'time', 'weight'.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        if not sources:
+            print("ERROR: No calibrator sources provided for plotting.")
+            return False
+
+        try:
+            todo: list[Generator[str, None, None]] = [self.open_ms()]
+
+            if plots is None:
+                plots = ['cross', 'auto', 'time']
+                if self.weight_plots:
+                    plots.append('weight')
+
+            # --- discover scans containing the requested sources ---
+            scan_map = self.get_scans_for_sources(sources)
+            if not scan_map:
+                print(f"WARNING: No scans found for sources {sources}. Skipping per-scan plots.")
+            else:
+                print(f"Found {len(scan_map)} scans for sources {sources}: "
+                      f"{list(scan_map.keys())}")
+
+            # --- per-scan plots (cross + auto) ---
+            for scanno, info in scan_map.items():
+                refant = self.pick_refant_for_scan(info)
+                if 'cross' in plots:
+                    todo.append(self.anp_chan_cross_plot(refant, scanno))
+                if 'auto' in plots:
+                    todo.append(self.amp_chan_auto_plot(scanno))
+                    todo.append(self.amp_time_auto_plot(scanno))
+
+            # --- amplitude/phase vs time (full observation, not per-scan) ---
+            if 'time' in plots:
+                for i, time_sel in enumerate(('none', '$start-5m to +55m')):
+                    todo.append(self.anp_time_cross_plot(self.refant, time_sel,
+                                                        str(self.subbandNo), str(i)))
+
+            # --- weight plots ---
+            if 'weight' in plots and self.weight_plots:
+                todo.append(self.weight_plot())
+
+            # --- info ---
+            todo.append(self._info_command())
+
+            jplotter.run_plotter(command.scripted(*todo), debug=self.debug)
+            return True
+
+        except Exception as e:
+            print(f"Error during plotting: {e}")
+            return False
+        finally:
+            self.cleanup()
+
+    def _info_command(self) -> Generator[str, None, None]:
+        """Generate MS info command."""
+        yield "r"
+
+
+def convert_ps_to_png(plots_dir: Path, expname: str, resolution: int = 150) -> list[Path]:
+    """Convert all PostScript (.ps) plot files to PNG format using Ghostscript.
+
+    Multi-page PS files produce one PNG per page, named with a ``-pageNNN`` suffix.
+    Single-page PS files produce a single PNG without the suffix.
+
+    Args:
+        plots_dir: Destination directory for the PNG files (typically Dirs.plots).
+        expname: Experiment name (lowercase) used to glob matching .ps files.
+        resolution: DPI resolution for the output PNGs. Default 150.
+
+    Returns:
+        List of Path objects for the created PNG files.
+    """
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    ps_files = sorted(glob.glob(f"{expname}*.ps"))
+    if not ps_files:
+        logger.warning(f"No .ps files found matching '{expname}*.ps'")
+        return []
+
+    created: list[Path] = []
+    for ps_file in ps_files:
+        stem = Path(ps_file).stem
+        # Use %03d placeholder so Ghostscript writes one PNG per page (1-based)
+        out_pattern = plots_dir / f"{stem}-page%03d.png"
+        cmd = ["gs", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=png16m",
+               f"-r{resolution}", f"-sOutputFile={out_pattern}", str(ps_file)]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0:
+                page_files = sorted(plots_dir.glob(f"{stem}-page*.png"))
+                if len(page_files) == 1:
+                    # Single-page PS: rename to drop the -page001 suffix
+                    clean_path = plots_dir / f"{stem}.png"
+                    page_files[0].rename(clean_path)
+                    page_files = [clean_path]
+                logger.info(f"Converted {ps_file} -> {len(page_files)} page(s)")
+                created.extend(page_files)
+            else:
+                logger.error(f"Ghostscript failed for {ps_file}: {result.stderr.strip()}")
+        except FileNotFoundError:
+            logger.error("Ghostscript (gs) not found. Install it to convert PS to PNG.")
+            break
+        except subprocess.TimeoutExpired:
+            logger.error(f"Ghostscript timed out converting {ps_file}")
+
+    return created
+
+
+def _find_available_port(start: int = 8050, end: int = 8150) -> int:
+    """Find an available TCP port in the given range.
+
+    Args:
+        start: First port to try.
+        end: Last port to try (exclusive).
+
+    Returns:
+        An available port number.
+
+    Raises:
+        RuntimeError: If no port in the range is available.
+    """
+    for port in range(start, end):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No available port found in range {start}-{end}")
+
+
+def _build_experiment_summary(exp) -> dict:
+    """Extract experiment metadata into a plain dict for the dashboard JSON API.
+
+    Args:
+        exp: experiment.Experiment object.
+
+    Returns:
+        dict with keys suitable for JSON serialization.
+    """
+    from astropy import units as u
+
+    summary: dict = {
+        "expname": exp.expname,
+        "obsdate": exp.obsdate.strftime("%d/%m/%Y") if exp.obsdate else "Unknown",
+        "timerange": (f"{exp.timerange[0].strftime('%H:%M')}-{exp.timerange[1].strftime('%H:%M')} UTC"
+                      if exp.timerange else ""),
+        "eEVNname": exp.eEVNname,
+        "supsci": exp.supsci,
+        "pi": [{"name": p.name, "email": p.email} for p in exp.pi] if exp.pi else [],
+        "credentials": {"username": exp.credentials.username, "password": exp.credentials.password}
+                        if exp.credentials else None,
+        "refant": exp.refant,
+        "feedback_page": exp.feedback_page(),
+        "archive_page": exp.archive_page,
+    }
+
+    # Sources and per-source type lookup (used to color scan rows)
+    summary["sources"] = {
+        "fringefinder": exp.sources.fringefinder,
+        "target": exp.sources.target,
+        "calibrator": exp.sources.calibrator,
+    }
+    source_type_map: dict[str, str] = {}
+    for src in exp.sources:
+        source_type_map[src.name] = src.type.name
+    summary["source_types"] = source_type_map
+
+    # Antennas
+    summary["antennas"] = {
+        "observed": [a.name for a in exp.antennas if a.observed],
+        "not_observed": [a.name for a in exp.antennas if not a.observed],
+        "polswap": exp.antennas.polswap,
+        "polconvert": exp.antennas.polconvert,
+        "onebit": exp.antennas.onebit,
+    }
+
+    # Correlator passes (freq setup)
+    passes = []
+    for i, cp in enumerate(exp.correlator_passes):
+        p: dict = {"index": i, "lisfile": str(cp.lisfile), "msfile": str(cp.msfile)}
+        if cp.freqsetup:
+            p["frequency"] = f"{cp.freqsetup.frequency.to(u.GHz):0.04}"
+            p["bandwidth"] = f"{cp.freqsetup.bandwidth.to(u.MHz):0.04}"
+            p["subbands"] = int(cp.freqsetup.subbands)
+            p["channels"] = int(cp.freqsetup.channels)
+        passes.append(p)
+    summary["correlator_passes"] = passes
+
+    # Scans overview
+    all_antennas = sorted(exp.antennas.names)
+    scans_overview: list[dict] = []
+    for scan in exp.scans:
+        scheduled = set(scan.stations_scheduled)
+        observed = set(scan.stations_observed)
+        row: dict = {"scanno": scan.scanno, "source": scan.source, "antennas": {}}
+        for ant in all_antennas:
+            if ant in scheduled:
+                row["antennas"][ant] = "observed" if ant in observed else "missing"
+            else:
+                row["antennas"][ant] = "not_scheduled"
+        scans_overview.append(row)
+    summary["scans"] = scans_overview
+    summary["all_antennas"] = all_antennas
+
+    return summary
+
+
+def _build_dashboard_html() -> str:
+    """Return the full HTML/CSS/JS for the experiment dashboard single-page app.
+
+    The page fetches /api/summary and /api/plots from the embedded HTTP server,
+    then renders an experiment overview on the left column and a plot viewer with
+    selectors on the right column.
+
+    Returns:
+        HTML string.
+    """
+    return r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EVN Post-Processing Dashboard</title>
+<style>
+  :root { --bg: #1e1e2e; --surface: #2a2a3c; --border: #3a3a4c; --text: #e0e0e8;
+           --accent: #7c8dff; --green: #50c878; --red: #ff6b6b; --dim: #888; --header-bg: #252538; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { background: var(--header-bg); padding: 1rem 2rem; border-bottom: 2px solid var(--accent);
+           display: flex; align-items: center; gap: 1rem; }
+  header h1 { font-size: 1.4rem; font-weight: 600; }
+  header h1 span { color: var(--accent); }
+  .container { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 1rem; height: calc(100vh - 60px); }
+  .panel { background: var(--surface); border-radius: 8px; border: 1px solid var(--border);
+           overflow-y: auto; padding: 1rem; }
+  .panel h2 { font-size: 1.1rem; color: var(--accent); margin-bottom: 0.8rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; }
+  .info-grid .label { color: var(--dim); font-weight: 500; white-space: nowrap; }
+  .info-grid .value { word-break: break-all; }
+  .info-grid .value a { color: var(--accent); text-decoration: none; }
+  .section { margin-top: 1rem; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin: 2px; }
+  .tag-green { background: #1a3a2a; color: var(--green); }
+  .tag-red { background: #3a1a1a; color: var(--red); }
+  .tag-blue { background: #1a2a3a; color: var(--accent); }
+  .tag-dim { background: #2a2a2a; color: var(--dim); }
+  /* Scan table */
+  .scan-table-wrap { overflow-x: auto; max-height: 400px; overflow-y: auto; margin-top: 0.5rem; }
+  .scan-table { border-collapse: collapse; font-size: 0.75rem; width: 100%; }
+  .scan-table th, .scan-table td { padding: 3px 6px; border: 1px solid var(--border); text-align: center; white-space: nowrap; }
+  .scan-table th { background: var(--header-bg); position: sticky; top: 0; z-index: 1; }
+  .scan-table .cell-obs { background: #1a4a2a; color: var(--green); font-weight: bold; }
+  .scan-table .cell-miss { background: #4a1a1a; color: var(--red); font-weight: bold; }
+  .scan-table .cell-na { color: var(--border); }
+  .src-fringefinder { color: #48dbfb; font-weight: 600; }
+  .src-target { color: #ff9f43; font-weight: 600; }
+  .src-calibrator { color: #feca57; font-weight: 600; }
+  .src-other { color: var(--dim); }
+  .scan-table th.ant-missing { color: var(--red); }
+  /* Right panel: plots */
+  .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+  .controls label { font-size: 0.85rem; color: var(--dim); }
+  .controls select { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+                     border-radius: 4px; padding: 4px 8px; font-size: 0.85rem; }
+  #plot-img { max-width: 100%; border-radius: 4px; border: 1px solid var(--border); display: block; margin: 0 auto; }
+  #plot-placeholder { text-align: center; color: var(--dim); padding: 3rem; }
+  .footer-note { text-align: center; color: var(--dim); font-size: 0.8rem; margin-top: 1rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>EVN Post-Processing Dashboard</span></h1>
+</header>
+<div class="container">
+  <!-- Left panel: experiment summary -->
+  <div class="panel" id="summary-panel">
+    <h2>Experiment Summary</h2>
+    <div id="summary-content"><p style="color:var(--dim)">Loading...</p></div>
+  </div>
+  <!-- Right panel: plots -->
+  <div class="panel" id="plots-panel">
+    <h2>Standard Plots</h2>
+    <div class="controls">
+      <div><label for="sel-type">Plot type:</label><br>
+        <select id="sel-type"><option value="">-- select --</option></select></div>
+      <div><label for="sel-scan">Scan:</label><br>
+        <select id="sel-scan"><option value="">all</option></select></div>
+    </div>
+    <div id="plot-area">
+      <p id="plot-placeholder">Select a plot type above to view.</p>
+    </div>
+    <div class="footer-note">Press Ctrl+C in the terminal to stop the dashboard server.</div>
+  </div>
+</div>
+<script>
+const API = '';
+let plotFiles = [];
+let summaryData = null;
+
+async function loadSummary() {
+  const resp = await fetch(API + '/api/summary');
+  summaryData = await resp.json();
+  document.getElementById('exp-title', '').textContent = summaryData.expname || '';
+  renderSummary(summaryData);
+}
+
+function renderSummary(d) {
+  let h = '<div class="info-grid">';
+  h += row('Experiment', '<span style="color:#ff8c00;font-weight:bold">' + d.expname + '</span>');
+  h += row('Obs. date', d.obsdate + (d.timerange ? ' ' + d.timerange : ''));
+  if (d.eEVNname) h += row('e-EVN run', d.eEVNname);
+  (d.pi || []).forEach((p, i) => { h += row(i === 0 ? 'P.I.' : 'co-PI', `${p.name} (${p.email})`); });
+  h += row('Sup. Sci.', d.supsci);
+  if (d.credentials) { h += row('Username', d.credentials.username); h += row('Password', d.credentials.password); }
+  if (d.feedback_page) h += row('Feedback', `<a href="${d.feedback_page}" target="_blank">${d.feedback_page}</a>`);
+  if (d.archive_page) h += row('Archive', `<a href="${d.archive_page}" target="_blank">${d.archive_page}</a>`);
+  h += '</div>';
+
+  // Setup
+  if (d.correlator_passes && d.correlator_passes.length) {
+    h += '<div class="section"><h2>Setup</h2>';
+    d.correlator_passes.forEach((cp, i) => {
+      if (d.correlator_passes.length > 1) h += `<strong>Pass #${i+1}</strong><br>`;
+      h += '<div class="info-grid">';
+      if (cp.frequency) h += row('Frequency', cp.frequency);
+      if (cp.bandwidth) h += row('Bandwidth', `${cp.subbands}-${cp.bandwidth} subbands × ${cp.channels} ch`);
+      h += row('LIS file', cp.lisfile);
+      h += row('MS file', cp.msfile);
+      h += row('FITS-IDI files', cp.fitsidi);
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+
+  // Sources
+  h += '<div class="section"><h2>Sources</h2>';
+  for (const [label, key] of [['Fringe-finder','fringefinder'],['Target','target'],['Phase-cal','calibrator']]) {
+    const srcs = (d.sources || {})[key] || [];
+    if (srcs.length) h += `<div><span style="color:var(--dim)">${label}:</span> ${srcs.map(s=>`<span class="tag tag-blue">${s}</span>`).join(' ')}</div>`;
+  }
+  h += '</div>';
+
+  // Antennas
+  const a = d.antennas || {};
+  h += '<div class="section"><h2>Antennas</h2>';
+  h += `<div>Observed (${(a.observed||[]).length}): ${(a.observed||[]).map(n=>`<span class="tag tag-green">${n}</span>`).join(' ')}</div>`;
+  if ((a.not_observed||[]).length) h += `<div>Not observed: ${a.not_observed.map(n=>`<span class="tag tag-red">${n}</span>`).join(' ')}</div>`;
+  h += row('Ref. ant.', (d.refant || []).join(', '));
+  if ((a.polswap||[]).length) h += `<div>Polswap: ${a.polswap.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
+  if ((a.polconvert||[]).length) h += `<div>PolConvert: ${a.polconvert.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
+  if ((a.onebit||[]).length) h += `<div>1-bit: ${a.onebit.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
+  h += '</div>';
+
+  // Scan overview table
+  if (d.scans && d.scans.length && d.all_antennas) {
+    h += '<div class="section"><h2>Scan Overview</h2>';
+    h += '<div style="font-size:0.8rem;margin-bottom:4px"><span class="tag tag-green">&#10003;</span> Observed '
+       + '<span class="tag tag-red">&#10007;</span> Scheduled but missing '
+       + '<span style="color:var(--dim)">—</span> Not scheduled</div>';
+    h += '<div style="font-size:0.8rem;margin-bottom:4px">Source type: '
+       + '<span class="src-fringefinder">Fringe-finder</span> · '
+       + '<span class="src-target">Target</span> · '
+       + '<span class="src-calibrator">Phase-cal</span></div>';
+    const notObs = new Set(a.not_observed || []);
+    const stMap = d.source_types || {};
+    h += '<div class="scan-table-wrap"><table class="scan-table"><thead><tr><th>Scan</th><th>Source</th>';
+    d.all_antennas.forEach(a => { h += notObs.has(a) ? `<th class="ant-missing">${a}</th>` : `<th>${a}</th>`; });
+    h += '</tr></thead><tbody>';
+    d.scans.forEach(s => {
+      const stype = stMap[s.source] || 'other';
+      const cls = 'src-' + stype;
+      h += `<tr><td class="${cls}">${s.scanno}</td><td class="${cls}">${s.source}</td>`;
+      d.all_antennas.forEach(a => {
+        const st = s.antennas[a];
+        if (st === 'observed') h += '<td class="cell-obs">&#10003;</td>';
+        else if (st === 'missing') h += '<td class="cell-miss">&#10007;</td>';
+        else h += '<td class="cell-na">—</td>';
+      });
+      h += '</tr>';
+    });
+    h += '</tbody></table></div></div>';
+  }
+
+  document.getElementById('summary-content').innerHTML = h;
+}
+
+function row(label, value) { return `<div class="label">${label}</div><div class="value">${value || '—'}</div>`; }
+
+async function loadPlots() {
+  const resp = await fetch(API + '/api/plots');
+  plotFiles = await resp.json();
+  populateSelectors();
+}
+
+function populateSelectors() {
+  const typeSet = new Set();
+  const scanSet = new Set();
+  plotFiles.forEach(f => {
+    const m = f.match(/-(weight|auto|cross|ampphase|amptime)/);
+    if (m) typeSet.add(m[1]);
+    const sm = f.match(/-scan(\d+)/);
+    if (sm) scanSet.add(sm[1]);
+  });
+  const selType = document.getElementById('sel-type');
+  // Map internal names to user-friendly labels
+  const labels = {weight:'Weight', auto:'Auto-correlation (amp/chan)', cross:'Cross-correlation (anp/chan)',
+                  ampphase:'Amp+Phase vs time', amptime:'Auto amp vs time'};
+  typeSet.forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = labels[t]||t; selType.appendChild(o); });
+  const selScan = document.getElementById('sel-scan');
+  [...scanSet].sort((a,b)=>+a - +b).forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = `Scan ${s}`; selScan.appendChild(o); });
+  selType.addEventListener('change', updatePlot);
+  selScan.addEventListener('change', updatePlot);
+}
+
+function updatePlot() {
+  const ptype = document.getElementById('sel-type').value;
+  const pscan = document.getElementById('sel-scan').value;
+  if (!ptype) { document.getElementById('plot-area').innerHTML = '<p id="plot-placeholder">Select a plot type above to view.</p>'; return; }
+  const matches = plotFiles.filter(f => {
+    if (!f.includes('-' + ptype)) return false;
+    if (pscan && !f.includes('-scan' + pscan)) return false;
+    if (!pscan && f.match(/-scan\d+/) && (ptype === 'weight' || ptype === 'ampphase')) return false;
+    return true;
+  });
+  if (!matches.length) {
+    document.getElementById('plot-area').innerHTML = '<p id="plot-placeholder">No plots match the current selection.</p>';
+    return;
+  }
+  let html = '';
+  matches.forEach(f => { html += `<div style="margin-bottom:1rem"><p style="font-size:0.8rem;color:var(--dim);margin-bottom:4px">${f}</p><img id="plot-img" src="/plots/${f}" alt="${f}"></div>`; });
+  document.getElementById('plot-area').innerHTML = html;
+}
+
+loadSummary();
+loadPlots();
+</script>
+</body>
+</html>"""
+
+
+class _DashboardHandler(http.server.BaseHTTPRequestHandler):
+    """HTTP request handler for the experiment dashboard.
+
+    Class attributes (set before serving):
+        experiment_summary: dict with experiment metadata.
+        plots_dir: Path to the directory containing PNG plot files.
+        expname: Experiment name (lowercase) for filtering plot files.
+        dashboard_html: Pre-built HTML string for the dashboard page.
+    """
+    experiment_summary: dict = {}
+    plots_dir: Path = Path("plots")
+    expname: str = ""
+    dashboard_html: str = ""
+
+    def do_GET(self):
+        """Route GET requests to the appropriate handler."""
+        if self.path == "/" or self.path == "/index.html":
+            self._serve_html()
+        elif self.path == "/api/summary":
+            self._serve_json(self.experiment_summary)
+        elif self.path == "/api/plots":
+            self._serve_plot_list()
+        elif self.path.startswith("/plots/"):
+            self._serve_plot_file()
+        else:
+            self.send_error(404)
+
+    def _serve_html(self):
+        """Serve the dashboard HTML page."""
+        content = self.dashboard_html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+    def _serve_json(self, data: dict):
+        """Serve a JSON response."""
+        body = json.dumps(data, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_plot_list(self):
+        """Return a JSON list of available PNG plot filenames."""
+        pngs = sorted(f.name for f in self.plots_dir.glob(f"{self.expname}*.png"))
+        self._serve_json(pngs)
+
+    def _serve_plot_file(self):
+        """Serve a PNG plot image file."""
+        filename = self.path.split("/plots/", 1)[-1]
+        # Sanitize to prevent path traversal
+        filename = Path(filename).name
+        filepath = self.plots_dir / filename
+        if not filepath.exists() or not filepath.is_file():
+            self.send_error(404)
+            return
+        data = filepath.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, format, *args):
+        """Suppress default request logging to keep terminal clean."""
+        pass
+
+
+def serve_dashboard(exp, plots_dir: Path) -> None:
+    """Start an HTTP dashboard server showing experiment summary and standard plots.
+
+    Converts any .ps files to PNG (if not already done), then serves a web dashboard
+    with the experiment overview (same info as print_blessed), scan overview table,
+    and a plot viewer with selectors for plot type and scan number.
+
+    The server picks the first available port in the 8050-8150 range and runs
+    until the user interrupts with Ctrl+C.
+
+    Args:
+        exp: experiment.Experiment object with all metadata populated.
+        plots_dir: Path to the directory where PNG plot files are stored (Dirs.plots).
+    """
+    # Ensure PNGs exist
+    existing_pngs = list(plots_dir.glob(f"{exp.expname.lower()}*.png"))
+    if not existing_pngs:
+        logger.info("Converting PostScript plots to PNG for the dashboard...")
+        convert_ps_to_png(plots_dir, exp.expname.lower())
+
+    port = _find_available_port()
+
+    # Configure the handler class
+    _DashboardHandler.experiment_summary = _build_experiment_summary(exp)
+    _DashboardHandler.plots_dir = plots_dir
+    _DashboardHandler.expname = exp.expname.lower()
+    _DashboardHandler.dashboard_html = _build_dashboard_html()
+
+    server = http.server.HTTPServer(("0.0.0.0", port), _DashboardHandler)
+    url = f"http://localhost:{port}"
+    print(f"\n{'=' * 60}")
+    print(f"  EVN Dashboard for {exp.expname} running at:")
+    print(f"  {url}")
+    print(f"{'=' * 60}")
+    print("  Press Ctrl+C to stop the server.\n")
+    logger.info(f"Dashboard server started at {url}")
+
+    # Handle Ctrl+C gracefully
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    def _shutdown(signum, frame):
+        print("\nShutting down dashboard server...")
+        threading.Thread(target=server.shutdown).start()
+
+    signal.signal(signal.SIGINT, _shutdown)
+    try:
+        server.serve_forever()
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+        server.server_close()
+        logger.info("Dashboard server stopped.")
+
+
+# Example usage at the bottom of the file:
+if __name__ == "__main__":
+    # Example: Create all standard plots for a fringe-finder
+    plotter = Jplot("experiment.ms", "Ef", "J0613+5209", weight_plots=True)
+    success = plotter.create_plot(sources=["J0613+5209"])
+
+    # Example: Create only specific plot types
+    # plotter = Jplot("experiment.ms", "Ef", "J0613+5209")
+    # success = plotter.create_plot(sources=["J0613+5209"], plots=['cross', 'time'])
+
+    print(f"Plotting {'succeeded' if success else 'failed'}")
