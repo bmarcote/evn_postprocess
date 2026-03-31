@@ -15,16 +15,21 @@ from typing import Optional, Union
 from pathlib import Path
 from collections import defaultdict
 from datetime import timedelta
+import shutil
 import subprocess
 import numpy as np
 from loguru import logger
 from astropy import units as u
 from astropy.io import fits
 from rich import print as rprint
+from rich.panel import Panel
+from rich.console import Console
 from concurrent.futures import ThreadPoolExecutor
 from itertools import product
 from . import experiment, utils, mstools
 from .plotting import convert_ps_to_png, serve_dashboard
+from .scripts.polconvert import main as polconvert_main
+from evn_support import find_idi_with_time as find_idi_mod
 
 
 def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
@@ -65,16 +70,16 @@ def archive(exp: experiment.Experiment) -> bool:
         utils.shell_command("gzip", "*ps", shell=True)
 
     if exp.credentials is not None:
-        utils.shell_command("archive.pl", ["-auth", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
+        utils.shell_command("archive.pl", ["-auth", "-e", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
                                                  "-n", exp.credentials.username, "-p", exp.credentials.password])
         logger.info(f"archive.pl -auth {exp.expname}_{exp.obsdate.strftime('%y%m%d')}")
     else:
         assert len(glob.glob("*_*.auth")) == 0, 'No credentials stored but auth file found'
 
-    utils.shell_command("archive.pl", ["-stnd", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}", "*ps.gz"])
-    utils.shell_command("archive.pl", ["-stnd", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
+    utils.shell_command("archive.pl", ["-stnd", "-e", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}", "*ps.gz"])
+    utils.shell_command("archive.pl", ["-stnd", "-e", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
                                        f"{exp.expname.lower()}.piletter"])
-    utils.shell_command("archive.pl", ["-fits", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}", "*IDI*"])
+    utils.shell_command("archive.pl", ["-fits", "-e", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}", "*IDI*"])
     return True
 
 
@@ -509,14 +514,23 @@ def polswap(exp: experiment.Experiment) -> bool:
 
 def flag_weights(exp: experiment.Experiment) -> bool:
     """Flags visibilities based on weight thresholds for all correlator passes.
-    
+
+    Skips passes where flag_weights was already applied with the same threshold
+    (i.e. flagged_weights.percentage != -1).
+
     Args:
         exp (experiment.Experiment): Experiment object with flagged_weights information.
-    
+
     Returns:
         bool: True if weight flagging was applied successfully.
     """
     def _flag_weights_pass(a_pass):
+        if a_pass.flagged_weights.percentage >= 0:
+            logger.info(f"flag_weights: {a_pass.msfile.name} already flagged with "
+                        f"threshold={a_pass.flagged_weights.threshold} "
+                        f"({a_pass.flagged_weights.percentage:.2f}% non-zero flagged). Skipping.")
+            return
+
         total_vis, pct_total, pct_nonzero = mstools.flag_weights(a_pass.msfile, a_pass.flagged_weights.threshold)
         a_pass.flagged_weights.percentage = pct_nonzero
         logger.info(f"flag_weights: {a_pass.msfile.name} threshold={a_pass.flagged_weights.threshold}\n"
@@ -713,6 +727,31 @@ def _find_best_fringefinder_scan(exp: experiment.Experiment) -> Optional[experim
     return best_scan
 
 
+def _get_all_fringefinder_scans(exp: experiment.Experiment) -> list[experiment.Scan]:
+    """Get all fringe-finder scans sorted by number of observing antennas (descending).
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        List of Scan objects on fringe-finder sources, sorted by observed station count.
+    """
+    ff_sources = exp.sources.fringefinder
+    if not ff_sources:
+        return []
+
+    ff_scans = []
+    for scan in exp.scans:
+        if scan.source in ff_sources:
+            ff_scans.append(scan)
+
+    # Sort by number of observed stations (descending)
+    ff_scans.sort(key=lambda s: len(s.stations_observed) if s.stations_observed else len(s.stations_scheduled),
+                  reverse=True)
+
+    return ff_scans
+
+
 def _scan_to_aips_timerange(scan: experiment.Scan, obsdate, trim_start_min: int = 1, trim_end_min: int = 0) -> list[int]:
     """Convert a scan's time range to AIPS format with optional trimming.
 
@@ -728,8 +767,8 @@ def _scan_to_aips_timerange(scan: experiment.Scan, obsdate, trim_start_min: int 
     Returns:
         8-element list in AIPS time format.
     """
-    from datetime import datetime as dt_cls
-    obs_midnight = dt_cls.combine(obsdate, dt_cls.min.time())
+    from datetime import datetime as dt
+    obs_midnight = dt.combine(obsdate, dt.min.time())
     start = scan.starttime + timedelta(minutes=trim_start_min)
     end = scan.starttime + timedelta(seconds=scan.duration_s) - timedelta(minutes=trim_end_min)
 
@@ -749,8 +788,13 @@ def _scan_to_aips_timerange(scan: experiment.Scan, obsdate, trim_start_min: int 
 def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
     """Check FRINGE.PEAKS .dat files to verify PolConvert solution quality.
 
-    For each .dat file, extracts the first RR, LL, RL, LR amplitude values.
-    The solution is acceptable if RR and LL are >5x max(RL, LR) for all files.
+    Each .dat file corresponds to one subband and contains lines like
+    ``POL: <amplitude> ; <snr>`` for RR, LL, RL, LR.
+
+    Two checks are applied:
+      1. Per-subband amplitude ratio ``(RR + LL) / (RL + LR) > 5``.
+      2. Across subbands, the ``(RR + LL)`` and ``(RL + LR)`` SNR values must
+         each stay within 40 % of their respective median.
 
     Args:
         logdir: Path to the polconvert log directory.
@@ -768,29 +812,49 @@ def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
         logger.warning("No .dat files found in FRINGE.PEAKS directory")
         return False
 
+    # Parse amplitude and SNR for every polarization in each subband
+    amps: list[dict[str, float]] = []
+    snrs: list[dict[str, float]] = []
     for dat_file in dat_files:
         content = dat_file.read_text()
-        values: dict[str, float] = {}
+        a, s = {}, {}
         for pol in ('RR', 'LL', 'RL', 'LR'):
-            for line in content.splitlines():
-                if f'{pol}:' in line:
-                    match = re.search(rf'{pol}:\s*([\d.eE+-]+)\s*;', line)
-                    if match:
-                        values[pol] = float(match.group(1))
-                        break
-
-        if not all(pol in values for pol in ('RR', 'LL', 'RL', 'LR')):
+            match = re.search(rf'{pol}:\s*([\d.eE+-]+)\s*;\s*([\d.eE+-]+)', content)
+            if not match:
+                break
+            a[pol], s[pol] = float(match.group(1)), float(match.group(2))
+        if len(a) != 4:
             logger.debug(f"Could not extract all polarization values from {dat_file.name}")
             continue
+        amps.append(a)
+        snrs.append(s)
 
-        cross_max = max(values['RL'], values['LR'])
-        if cross_max <= 0:
+    if not amps:
+        logger.warning("No valid .dat files found in FRINGE.PEAKS")
+        return False
+
+    # Check 1: amplitude ratio (RR+LL)/(RL+LR) > 5 per subband
+    for i, a in enumerate(amps):
+        cross = a['RL'] + a['LR']
+        if cross <= 0:
             continue
+        ratio = (a['RR'] + a['LL']) / cross
+        if ratio < 5:
+            logger.info(f"Subband {i}: (RR+LL)/(RL+LR)={ratio:.1f} — below 5x threshold")
+            return False
 
-        rr_ratio = values['RR'] / cross_max
-        ll_ratio = values['LL'] / cross_max
-        if rr_ratio < 5 or ll_ratio < 5:
-            logger.info(f"{dat_file.name}: RR/cross={rr_ratio:.1f}, LL/cross={ll_ratio:.1f} — below 5x threshold")
+    # Check 2: SNR consistency across subbands (each value within 40% of median)
+    snr_parallel = np.array([s['RR'] + s['LL'] for s in snrs])
+    snr_cross = np.array([s['RL'] + s['LR'] for s in snrs])
+    for label, values in (('RR+LL', snr_parallel), ('RL+LR', snr_cross)):
+        med = np.median(values)
+        if med <= 0:
+            continue
+        dev = np.abs(values - med) / med
+        if np.any(dev > 0.4):
+            worst = int(np.argmax(dev))
+            logger.info(f"SNR {label} subband {worst}: {values[worst]:.1f} deviates "
+                        f"{dev[worst]*100:.0f}% from median {med:.1f} (>40% threshold)")
             return False
 
     return True
@@ -805,40 +869,32 @@ def _store_polconvert_params(exp: experiment.Experiment, params: dict,
         params: Dict with the successful polconvert.main() arguments.
         output_file: Path for the output TOML file.
     """
-    lines = [
-        "# PolConvert input file — auto-generated with successful parameters",
-        "",
-        "[inputs]",
-        f"ref_idi = '{params['ref_idi']}'",
-        f"idi_files = '{exp.expname.lower()}_*_1.IDI*'",
-        f"linants = [{', '.join(repr(a) for a in params['linear_antennas'])}]",
-        f"refant = '{params['ref_antenna']}'",
-        f"exclude_ants = [{', '.join(repr(a) for a in params['exclude_antennas'])}]",
-        f"exclude_baselines = {params['exclude_baselines']}",
-        "",
-        "[options]",
-        f"do_if = {params['do_ifs']}",
-        f"time_range = {params['time_range']}",
-        f"chanavg = {params['chan_avg']}",
-        f"timeavg = {params['time_avg']}",
-        f"solve_weight = {params['solve_weight']}",
-        "solve_amp = true",
-        "to_compute = true",
-        "to_apply = true",
-        "",
-        "[config]",
-        "suffix = '.PCONVERT'",
-        f"logdir = '{params['logdir']}'",
-    ]
-    output_file.write_text('\n'.join(lines) + '\n')
+    template_path = Path(__file__).parent / 'templates' / 'polconvert_inputs.toml.template'
+    template = template_path.read_text()
+    
+    content = template.format(
+        ref_idi=params['ref_idi'],
+        expname=exp.expname.lower(),
+        linants=', '.join(repr(a) for a in params['linear_antennas']),
+        refant=params['ref_antenna'],
+        exclude_ants=', '.join(repr(a) for a in params['exclude_antennas']),
+        exclude_baselines=params['exclude_baselines'],
+        do_if=params['do_ifs'],
+        time_range=params['time_range'],
+        chanavg=params['chan_avg'],
+        timeavg=params['time_avg'],
+        solve_weight=params['solve_weight'],
+        logdir=params['logdir'],
+    )
+    output_file.write_text(content)
     logger.info(f"Stored successful parameters to {output_file}")
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
     """Run PolConvert automatically with iterative parameter tuning.
 
-    Finds the best fringe-finder scan, computes parameters, and iteratively
-    tries different solve_weight / time_avg / time_range combinations until
+    Finds fringe-finder scans and iteratively tries different scans combined with
+    different solve_weight / time_avg / time_range combinations until
     FRINGE.PEAKS quality checks pass. Then applies the solution to all IDI files.
 
     Args:
@@ -855,18 +911,16 @@ def polconvert(exp: experiment.Experiment) -> bool:
         logger.info("PolConvert output files already exist. Skipping.")
         return True
 
-    # Find the best fringe-finder scan (most observed antennas)
-    scan = _find_best_fringefinder_scan(exp)
-    if scan is None:
-        logger.error("No fringe-finder scan found for PolConvert.")
+    # Get all fringe-finder scans sorted by quality (most observed antennas first)
+    ff_scans = _get_all_fringefinder_scans(exp)
+    if not ff_scans:
+        logger.error("No fringe-finder scans found for PolConvert.")
         return False
 
-    n_stations = len(scan.stations_observed) if scan.stations_observed else len(scan.stations_scheduled)
-    logger.info(f"Selected scan {scan.scanno} on {scan.source} ({n_stations} stations, "
-                f"{scan.duration_s}s duration)")
+    logger.info(f"Found {len(ff_scans)} fringe-finder scan(s) to try")
 
     # Common parameters
-    lin_ants = exp.antennas.polconvert
+    lin_ants = [a for a in exp.antennas.polconvert]
     refant = exp.refant[0] if exp.refant else None
     if not refant:
         logger.error("No reference antenna set for PolConvert.")
@@ -880,10 +934,9 @@ def polconvert(exp: experiment.Experiment) -> bool:
         elif ant.name not in lin_ants and ant.name != refant:
             if not subbands_to_polconvert.issubset(set(ant.subbands)):
                 exclude_ants.append(ant.name)
+
     exclude_ants = sorted(set(exclude_ants))
-
-    do_ifs = sorted(list(subbands_to_polconvert))
-
+    do_ifs = [i+1 for i in sorted(list(subbands_to_polconvert))]
     idi_files = sorted(glob.glob(f"{exp.expname.lower()}_*_1.IDI*"))
     if not idi_files:
         logger.error("No FITS-IDI files found for PolConvert.")
@@ -891,81 +944,87 @@ def polconvert(exp: experiment.Experiment) -> bool:
 
     logdir = 'polconvert_logs'
 
-    from .scripts.polconvert import main as polconvert_main
-    from evn_support import find_idi_with_time as find_idi_mod
-
-    # Iterative parameter search: solve_weight, time_avg, and time trimming
+    # Iterative parameter search: scans, solve_weight, time_avg, and time trimming
     solve_weights = [0.1, 0.01, 0.001]
     time_avgs = [20, 30, 60]
     trim_configs = [(1, 0), (2, 1), (3, 2)]
 
-    for trim_start, trim_end in trim_configs:
-        time_range = _scan_to_aips_timerange(scan, exp.obsdate, trim_start, trim_end)
+    # Loop over different fringe-finder scans
+    for scan_idx, scan in enumerate(ff_scans, start=1):
+        n_stations = len(scan.stations_observed) if scan.stations_observed else len(scan.stations_scheduled)
+        logger.info(f"Trying scan {scan_idx}/{len(ff_scans)}: scan {scan.scanno} on {scan.source} "
+                    f"({n_stations} stations, {scan.duration_s}s duration)")
 
-        ref_idi = find_idi_mod.find_idi_with_time(
-            idi_files=sorted(idi_files), aipstime=time_range[:4], verbose=False)
-        if ref_idi is None:
-            logger.warning(f"No IDI file contains time with trim=({trim_start},{trim_end})min. Skipping.")
-            continue
+        for trim_start, trim_end in trim_configs:
+            time_range = _scan_to_aips_timerange(scan, exp.obsdate, trim_start, trim_end)
 
-        for solve_weight in solve_weights:
-            for time_avg in time_avgs:
-                logger.info(f"PolConvert attempt: solve_weight={solve_weight}, time_avg={time_avg}, "
-                            f"trim=({trim_start},{trim_end})min")
-                try:
-                    polconvert_main(
-                        ref_idi=ref_idi, idi_files=idi_files, linear_antennas=lin_ants,
-                        ref_antenna=refant, exclude_antennas=exclude_ants, exclude_baselines=[],
-                        do_ifs=do_ifs, time_range=time_range, chan_avg=16, time_avg=time_avg,
-                        solve_weight=solve_weight, solve_amp=True,
-                        to_compute=True, to_apply=False, logdir=logdir)
-                except Exception as e:
-                    logger.warning(f"PolConvert compute failed: {e}")
-                    traceback.print_exc()
-                    continue
+            ref_idi = find_idi_mod.find_idi_with_time(
+                idi_files=sorted(idi_files), aipstime=time_range[:4], verbose=False)
+            if ref_idi is None:
+                logger.warning(f"No IDI file contains time with trim=({trim_start},{trim_end})min. Skipping.")
+                continue
 
-                if _check_fringe_peaks(logdir):
-                    logger.info("PolConvert solution quality check passed!")
-                    params = {'ref_idi': ref_idi, 'linear_antennas': lin_ants, 'ref_antenna': refant,
-                              'exclude_antennas': exclude_ants, 'exclude_baselines': [], 'do_ifs': do_ifs,
-                              'time_range': time_range, 'chan_avg': 16, 'time_avg': time_avg,
-                              'solve_weight': solve_weight, 'logdir': logdir}
-                    _store_polconvert_params(exp, params)
-
-                    logger.info("Applying PolConvert solution to all IDI files...")
+            for solve_weight in solve_weights:
+                for time_avg in time_avgs:
+                    logger.info(f"PolConvert attempt: solve_weight={solve_weight}, time_avg={time_avg}, "
+                                f"trim=({trim_start},{trim_end})min")
                     try:
-                        polconvert_main(
-                            ref_idi=ref_idi, idi_files=idi_files, linear_antennas=lin_ants,
-                            ref_antenna=refant, exclude_antennas=exclude_ants, exclude_baselines=[],
+                        polconvert_main(ref_idi=ref_idi, idi_files=idi_files, linear_antennas=[l.upper() for l in lin_ants],
+                            ref_antenna=[l.upper() for l in refant], exclude_antennas=[l.upper() for l in exclude_ants], exclude_baselines=[],
                             do_ifs=do_ifs, time_range=time_range, chan_avg=16, time_avg=time_avg,
                             solve_weight=solve_weight, solve_amp=True,
-                            to_compute=False, to_apply=True, logdir=logdir)
+                            to_compute=True, to_apply=False, logdir=logdir)
                     except Exception as e:
-                        logger.error(f"PolConvert apply failed: {e}")
+                        logger.warning(f"PolConvert compute failed: {e}")
                         traceback.print_exc()
                         return False
 
-                    exp.store()
-                    return True
+                    if _check_fringe_peaks(logdir):
+                        logger.info(f"PolConvert solution quality check passed using scan {scan.scanno}!")
+                        params = {'ref_idi': ref_idi, 'linear_antennas': lin_ants, 'ref_antenna': refant,
+                                  'exclude_antennas': exclude_ants, 'exclude_baselines': [], 'do_ifs': do_ifs,
+                                  'time_range': time_range, 'chan_avg': 16, 'time_avg': time_avg,
+                                  'solve_weight': solve_weight, 'logdir': logdir}
+                        _store_polconvert_params(exp, params)
 
-                logger.info("Solution quality insufficient, trying next parameters...")
+                        logger.info("Applying PolConvert solution to all IDI files...")
+                        try:
+                            polconvert_main(
+                                ref_idi=ref_idi, idi_files=idi_files, linear_antennas=lin_ants,
+                                ref_antenna=refant, exclude_antennas=exclude_ants, exclude_baselines=[],
+                                do_ifs=do_ifs, time_range=time_range, chan_avg=16, time_avg=time_avg,
+                                solve_weight=solve_weight, solve_amp=True,
+                                to_compute=False, to_apply=True, logdir=logdir)
+                        except Exception as e:
+                            logger.error(f"PolConvert apply failed: {e}")
+                            traceback.print_exc()
+                            return False
 
-    logger.error("PolConvert could not reach a good solution with any parameter combination.")
+                        exp.store()
+                        return True
+
+                    logger.info("Solution quality insufficient, trying next parameters...")
+
+        if scan_idx < len(ff_scans):
+            logger.info(f"No good solution found with scan {scan.scanno}, moving to next scan...")
+
+    logger.error(f"PolConvert could not reach a good solution with any of the {len(ff_scans)} fringe-finder scan(s) "
+                 f"and parameter combinations.")
     return False
 
 
 def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
-    """Renames PolConvert output files and creates verification plots.
+    """Converts PCONVERTed FITS-IDI files to MS and creates verification plots.
 
-    Moves original IDI files to idi_ori/, renames .PCONVERT files to standard
-    names, creates a verification MS from the first pass, and runs standardplots
-    on it using Jplot.
+    Imports the .PCONVERT FITS-IDI files into a new MS using casatasks, then
+    runs standardplots (cross) on it and converts the resulting PS files to PNG,
+    overriding any previous plot images.
 
     Args:
         exp: Experiment object.
 
     Returns:
-        True if completed or not needed, None if user should verify plots first.
+        True if completed or not needed, False on error.
     """
     if not exp.antennas.polconvert:
         return True
@@ -974,25 +1033,20 @@ def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
         return True
 
     cwd = Path.cwd()
-    idi_ori = cwd / 'idi_ori'
-    idi_ori.mkdir(exist_ok=True)
-
-    for an_idi in cwd.glob('*.IDI*'):
-        if '.PCONVERT' not in an_idi.name:
-            an_idi.rename(idi_ori / an_idi.name)
-
     pconverted_idi = list(cwd.glob('*IDI*.PCONVERT'))
-    for an_idi in pconverted_idi:
-        an_idi.rename(cwd / an_idi.name.replace('.PCONVERT', ''))
 
-    logger.info(f"Moved original IDI files to {idi_ori}")
-    logger.info(f"Renamed {len(pconverted_idi)} PCONVERT files to standard names")
-
-    # Create a verification MS and run standardplots to check the conversion
+    # Convert PCONVERTed FITS-IDI files to MS and create verification plots
     if any('_1_1' in pp.name for pp in pconverted_idi):
         pconv_ms = exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')
-        idi_files = ','.join(idi.name.replace('.PCONVERT', '') for idi in pconverted_idi if '_1_1' in idi.name)
-        utils.shell_command("idi2ms.py", ['--delete', pconv_ms, idi_files])
+        idi_files = [str(idi) for idi in sorted(pconverted_idi) if '_1_1' in idi.name]
+
+        pconv_ms_path = cwd / pconv_ms
+        if pconv_ms_path.exists():
+            shutil.rmtree(pconv_ms_path)
+
+        import casatasks
+        casatasks.importfitsidi(vis=pconv_ms, fitsidifile=idi_files, constobsid=True, scanreindexgap_s=8.0, specframe='GEO')
+        logger.info(f"Created {pconv_ms} from {len(idi_files)} PCONVERT IDI files.")
 
         if not exp.refant:
             logger.error("No reference antenna set for polconvert verification plots.")
@@ -1006,28 +1060,55 @@ def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
         from .plotting import Jplot
         plotter = Jplot(ms=pconv_ms, refant=exp.refant[0], calsrc=','.join(calsources))
         plotter.create_plot(sources=calsources, plots=['cross'])
-        logger.info("PolConvert verification plots created.")
 
-    logger.info("PolConvert post-processing complete. Verification plots created.")
+        # Rename pconv plot files to standard names so they override the previous ones
+        for stdplot_file in glob.glob('*-pconv*.ps'):
+            Path(stdplot_file).rename(stdplot_file.replace('-pconv', ''))
+
+        # Convert PS plots to PNG images, overriding previous ones
+        convert_ps_to_png(exp.dirs.plots, exp.expname.lower())
+        logger.info("PolConvert verification plots created and converted to images.")
+
+    logger.info("PolConvert post-processing complete.")
     exp.store()
     return True
 
 
 def post_post_polconvert(exp: experiment.Experiment) -> bool:
-    """Renames polconvert verification plot files to standard names.
+    """Copies original FITS-IDI files to idi_ori/ and renames PCONVERT files.
+
+    Preserves the original IDI files in a backup directory, then renames the
+    .PCONVERT output files to standard IDI names so downstream tools can find them.
 
     Args:
         exp: Experiment object.
 
     Returns:
-        True always (no-op if no polconvert antennas or no plots found).
+        True if completed or not needed.
     """
     if not exp.antennas.polconvert:
         return True
 
-    for stdplot_file in glob.glob('*-pconv*.ps'):
-        Path(stdplot_file).rename(stdplot_file.replace('-pconv', ''))
+    if len(glob.glob('*IDI*.PCONVERT')) == 0:
+        return True
 
+    cwd = Path.cwd()
+    idi_ori = cwd / 'idi_ori'
+    idi_ori.mkdir(exist_ok=True)
+
+    # Copy original FITS-IDI files to idi_ori/
+    for an_idi in cwd.glob('*.IDI*'):
+        if '.PCONVERT' not in an_idi.name:
+            shutil.copy2(str(an_idi), str(idi_ori / an_idi.name))
+
+    logger.info(f"Copied original IDI files to {idi_ori}")
+
+    # Rename PCONVERT files to standard IDI names
+    pconverted_idi = list(cwd.glob('*IDI*.PCONVERT'))
+    for an_idi in pconverted_idi:
+        an_idi.rename(cwd / an_idi.name.replace('.PCONVERT', ''))
+
+    logger.info(f"Renamed {len(pconverted_idi)} PCONVERT files to standard names")
     return True
 
 
@@ -1081,7 +1162,8 @@ def protect_experiment_files(exp: experiment.Experiment) -> bool:
         return True
 
     try:
-        utils.shell_command("auth_pipe.py", ["-e", exp.expname, "-s", ','.join(protected_sources), "-p", "source"])
+        utils.shell_command("auth_pipe.py", ["-e", f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}",
+                            "-s", ' '.join(protected_sources), "-p", "source"])
         logger.info(f"Protected sources: {', '.join(protected_sources)}")
     except ValueError:
         logger.error("Could not protect experiment files in archive.")
@@ -1157,6 +1239,9 @@ def check_consistency(fitsfile, verbose: bool = True) -> bool:
 def append_antab(exp: experiment.Experiment) -> bool:
     """Appends Tsys and GC information from the ANTAB file into the FITS-IDI files.
 
+    Reads ANTAB files from exp.dirs.pipe_in and applies them to the FITS-IDI files
+    in the current working directory by calling append_tsys.py and append_gc.py.
+
     Args:
         exp: Experiment object.
 
@@ -1169,20 +1254,93 @@ def append_antab(exp: experiment.Experiment) -> bool:
         logger.error("Could not find FITS-IDI files to append Tsys/GC.")
         return False
 
-    if (not all(check_consistency(f, verbose=False) for f in fits2check)) \
-            or (len(glob.glob(f"{exp.expname.lower()}*.antab")) == 0):
-        utils.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
-        if not all(check_consistency(f) for f in fits2check):
-            logger.error("The Tsys/GC could not be imported into the FITS-IDI files.")
-            return False
-    else:
+    if all(check_consistency(f, verbose=False) for f in fits2check):
         logger.info("ANTAB information already appended into the FITS-IDI files.")
+        return True
+
+    antabfiles = sorted(exp.dirs.pipe_in.glob(f"{exp.expname.lower()}*.antab"))
+    if not antabfiles:
+        logger.error(f"No ANTAB files found in {exp.dirs.pipe_in}.")
+        return False
+
+    idifiles = sorted(
+        glob.glob(f"{exp.expname.lower()}_*_1.IDI*"),
+        key=lambda s: [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', s)]
+    )
+    if not idifiles:
+        logger.error("No FITS-IDI files found.")
+        return False
+
+    def _parse_pass(filename):
+        i0 = filename.index('_')
+        i1 = i0 + 1 + filename[i0+1:].index('_')
+        return int(filename[i0+1:i1])
+
+    def _run_append(antabfile, idi_list):
+        antabfile = str(antabfile)
+        for pc in sorted(set(_parse_pass(idi) for idi in idi_list)):
+            pc_files = [idi for idi in idi_list if _parse_pass(idi) == pc]
+            logger.debug(f"Running append_tsys.py {antabfile} {' '.join(pc_files)}")
+            proc = subprocess.Popen(["append_tsys.py", "--replace", antabfile, *pc_files],
+                                    stdout=None, stderr=subprocess.STDOUT)
+            proc.wait()
+        for idifile in [idi for idi in idi_list if idi.endswith('.IDI1') or idi.endswith('IDI')]:
+            logger.debug(f"Running append_gc.py {antabfile} {idifile}")
+            proc = subprocess.Popen(["append_gc.py", "--replace", antabfile, idifile],
+                                    stdout=None, stderr=subprocess.STDOUT)
+            proc.wait()
+
+    if len(antabfiles) == 1:
+        _run_append(antabfiles[0], idifiles)
+    else:
+        for i, antabfile in enumerate(antabfiles):
+            pass_files = [idi for idi in idifiles if f"_{i+1}_1.IDI" in idi]
+            _run_append(antabfile, pass_files)
+
+    if not all(check_consistency(f) for f in fits2check):
+        logger.error("The Tsys/GC could not be imported into the FITS-IDI files.")
+        return False
 
     return True
 
 
+def create_piletter_auth(exp: experiment.Experiment) -> bool:
+    """Creates a copy of the PI letter with download credentials appended.
+
+    Copies {expname}.piletter to {expname}.piletter_auth and appends the
+    archive download credentials. Does nothing if no credentials are set.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True if the file was created or no credentials are set, False on error.
+    """
+    if exp.credentials is None or exp.credentials.password is None:
+        logger.debug("No credentials set; skipping .piletter_auth creation.")
+        return True
+
+    piletter = Path(f"{exp.expname.lower()}.piletter")
+    piletter_auth = Path(f"{exp.expname.lower()}.piletter_auth")
+
+    if not piletter.exists():
+        logger.error(f"{piletter} not found; cannot create {piletter_auth.name}.")
+        return False
+
+    shutil.copy2(piletter, piletter_auth)
+    with open(piletter_auth, 'a') as f:
+        f.write(f"\nTo access the data, use the EVN Data Archive ({exp.archive_page})\n")
+        f.write("with the following credentials:\n")
+        f.write(f"  username: {exp.credentials.username}\n")
+        f.write(f"  password: {exp.credentials.password}\n")
+
+    logger.info(f"Created {piletter_auth.name} with download credentials.")
+    return True
+
+
 def send_letters(exp: experiment.Experiment) -> bool:
-    """Reminds the user to send the PI letter to the PIs.
+    """Creates the authenticated PI letter (if needed), archives it, and
+    reminds the user to send it to the PIs.
 
     Args:
         exp: Experiment object.
@@ -1191,9 +1349,19 @@ def send_letters(exp: experiment.Experiment) -> bool:
         True always.
     """
     has_auth = exp.credentials is not None and exp.credentials.password is not None
+    if has_auth:
+        if not create_piletter_auth(exp):
+            return False
+
     piletter_name = f"{exp.expname.lower()}.piletter{'_auth' if has_auth else ''}"
-    pi_info = "\n".join(f"  {p.name}: {p.email}" for p in exp.pi)
-    logger.info(f"--- Send the PI letter ---\nSend {piletter_name} to:\n{pi_info}\nand CC jops@jive.eu.")
+    utils.shell_command("archive.pl", ["-stnd", "-e", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
+                                       piletter_name])
+    body = f"[bold]Send[/bold] [bold green]{piletter_name}[/bold green] [bold]to [/bold]" \
+           f"[bold cyan]{', '.join(p.name for p in exp.pi)}[/bold cyan]: " \
+           f"[bold]{', '.join(p.email for p in exp.pi)}[/bold]" \
+           f"\nAnd CC [cyan]jops@jive.eu[/cyan]"
+    Console().print(Panel(body, title="[bold yellow]Send the PI Letter[/bold yellow]",
+                          border_style="yellow", padding=(1, 2)))
     return True
 
 
@@ -1206,9 +1374,13 @@ def antenna_feedback(exp: experiment.Experiment) -> bool:
     Returns:
         True always.
     """
-    logger.info("--- Update the database with observed issues ---")
-    logger.info("Type '/feedback' in Mattermost to bookkeep antenna issues.")
-    logger.info("Also update JIVE RedMine: https://jrm.jive.nl/projects/science-support/news")
+    body = ("[bold]Update the database with observed issues:[/bold]\n\n"
+            "  1. Type [bold cyan]/feedback[/bold cyan] in Mattermost to bookkeep antenna issues.\n"
+            "  2. Update JIVE RedMine:\n"
+            "     [link=https://jrm.jive.nl/projects/science-support/news]"
+            "https://jrm.jive.nl/projects/science-support/news[/link]")
+    Console().print(Panel(body, title="[bold yellow]Station Feedback[/bold yellow]",
+                          border_style="yellow", padding=(1, 2)))
     return True
 
 

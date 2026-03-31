@@ -14,6 +14,8 @@ from typing import Callable
 from dataclasses import dataclass
 from loguru import logger
 from rich import print as rprint
+from rich.panel import Panel
+from rich.console import Console
 from astropy import units as u
 from astropy import coordinates as coord
 from . import experiment
@@ -22,6 +24,7 @@ from . import process
 from . import pipeline
 from . import lisfiles
 from . import dialog
+from . import utils
 
 
 @dataclass
@@ -64,8 +67,8 @@ _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
                    Task('antab', 'antfiles', "Retrieves the .antabfs and .log files from vlbeer. Creates "
                         "the .antab (requires graphical interaction via antab_editor), and the .uvflg file."),
                    Task('pipeline', 'run_pipeline', "Prepares the input file for the EVN Pypeline and runs it."),
-                   Task('post_pipe', 'pipeline_diagnostics', 'Runs diagnostics on the pipeline outputs.'),
-                   Task('final_data', 'pre_archive', "Prepares the experiment for archiving. Attaches the Tsys "
+                   Task('postpipe', 'pipeline_diagnostics', 'Runs diagnostics on the pipeline outputs.'),
+                   Task('prearchive', 'pre_archive', "Prepares the experiment for archiving. Attaches the Tsys "
                         "information to the FITS-IDI files."),
                    Task('archive', 'archive', "Sets the credentials, protechs the files, and archives the "
                         "experiment. In case of an NME, it will prepare the .tex file for the NME feedback.")]
@@ -341,8 +344,9 @@ def msops(exp: experiment.Experiment) -> bool:
 def polconvert(exp: experiment.Experiment) -> bool:
     """Runs PolConvert automatically with iterative parameter tuning.
 
-    Calls process.polconvert() which finds the best scan, iterates over
-    parameter combinations, checks quality, and applies the solution.
+    Calls process.polconvert() which finds all fringe-finder scans and iterates over
+    different scans, parameter combinations (solve_weight, time_avg, time_range),
+    checks quality, and applies the best solution found.
     Then renames output files via post_polconvert/post_post_polconvert.
 
     Args:
@@ -352,7 +356,7 @@ def polconvert(exp: experiment.Experiment) -> bool:
         bool: True if PolConvert completed successfully, False on failure.
     """
     if not exp.antennas.polconvert:
-        logger.debug("No antennas require PolConvert. Skipping.")
+        logger.info("No antennas require PolConvert. Skipping.")
         return True
 
     if not process.polconvert(exp):
@@ -383,35 +387,35 @@ def antfiles(exp: experiment.Experiment) -> bool:
     Args:
         expobj_file: Path to experiment JSON file
     """
-    if len(glob.glob("pipeline/in/*.antab")) > 0:
-        logger.debug("Antenna ANTAB files already exist. Skipping.")
+    if len(list(exp.dirs.pipe_in.glob("*.antab"))) > 0:
+        logger.info("Antenna ANTAB files already exist. Skipping.")
         return True
 
-    if len(glob.glob("pipeline/temp/*.antab")) > 0:
-        for afile in Path(exp.dirs.pipe_temp).glob("*.antab"):
+    if len(list(exp.dirs.pipe_temp.glob("*.antab"))) > 0:
+        for afile in exp.dirs.pipe_temp.glob("*.antab"):
             shutil.copy(afile, exp.dirs.pipe_in / afile.name)
 
-        logger.debug("Antenna ANTAB files already created. Copied to the pipeline input directory.")
+        logger.info("Antenna ANTAB files already created. Copied to the pipeline input directory.")
         return True
 
     if (exp.eEVNname is None) or (exp.expname == exp.eEVNname):
+        pipeline.get_files_from_vlbeer(exp, experiment.retrieve_servers()['vlbeer'])
+        if any(s.lower() in ('br', 'kp', 'la', 'yy', 'mk') for s in exp.antennas.names):
+            pipeline.get_vlba_antab(exp)
+
         if not pipeline.create_uvflg(exp):
             logger.error("uvflg creation needs manual intervention.")
             rprint("[bold red]STOPPED PROCESS:[/bold red] [red]uvflg creation needs manual intervention.[/red]")
             return False
 
-        pipeline.get_files_from_vlbeer(exp, experiment.retrieve_servers()['vlbeer'])
-        if any(s.lower() in ('br', 'kp', 'la', 'yy', 'mk') for s in exp.antennas.names):
-            pipeline.get_vlba_antab(exp)
-
         if not pipeline.run_antab_editor(exp):  # TODO: use the correct codes if eEVN or line
             rprint("[bold yellow]STOPPED PROCESS:[/bold yellow] [yellow]antab_editor needs manual intervention.[/yellow]")
             return False
 
-        for afile in Path(exp.dirs.pipe_temp).glob("*.antab"):
+        for afile in exp.dirs.pipe_temp.glob("*.antab"):
             shutil.copy(afile, exp.dirs.pipe_in / afile.name)
 
-        for afile in Path(exp.dirs.pipe_temp).glob("*.uvflg"):
+        for afile in exp.dirs.pipe_temp.glob("*.uvflg"):
             shutil.copy(afile, exp.dirs.pipe_in / afile.name)
     else:
         eEVNpath = Path(str(experiment.retrieve_servers()['eee'].path).format(expname=exp.eEVNname)) \
@@ -439,12 +443,21 @@ def run_pipeline(exp: experiment.Experiment) -> bool:
 
 
 def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
-    """Creates diagnostic files after pipeline completion.
+    """Creates diagnostic files after pipeline completion and updates the PI letter.
+
+    Runs comment_tasav, feedback, and then auto-fills the PI letter with:
+    - "Could not observe" for non-participating antennas
+    - PolConvert remarks (if applicable)
+    - Bandwidth limitation notes
+    - Opacity correction notes
 
     Args:
-        expobj_file: Path to experiment JSON file
+        exp: Experiment object.
     """
-    return pipeline.comment_tasav_files(exp) & pipeline.pipeline_feedback(exp)
+    result = pipeline.comment_tasav_files(exp) & pipeline.pipeline_feedback(exp)
+    if result:
+        result &= process.update_piletter(exp)
+    return result 
 
 
 def pre_archive(exp: experiment.Experiment) -> bool:
@@ -463,7 +476,7 @@ def archive(exp: experiment.Experiment) -> bool:
         expobj_file: Path to experiment JSON file
     """
     return process.set_credentials(exp) & process.protect_experiment_files(exp) & process.print_exp(exp, display_in_terminal=False) & \
-           process.archive(exp) & process.send_letters(exp) & process.antenna_feedback(exp) & process.nme_report(exp)
+           process.archive(exp) & pipeline.archive(exp) & process.send_letters(exp) & process.antenna_feedback(exp) & process.nme_report(exp)
 
 
 @dataclass
@@ -536,6 +549,8 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
                                      "Create the .comment and .tasav files."),
         'feedback':      ExecCommand(pipeline.pipeline_feedback,
                                      "Run the Pipeline Feedback script."),
+        'piletter':      ExecCommand(process.update_piletter,
+                                     "Auto-fill the PI letter (non-observing antennas, PolConvert, etc.)."),
     }
 
 
@@ -666,11 +681,12 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
         logger.remove()  # Remove default stderr handler to avoid duplicate messages
         logger.add(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log", colorize=False,
                    level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
-                   format="time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
+                   format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
                           "{module}:{function}:{line} | {message}" if debug else "{level: <8} | {message}")
-        
         logger.add(sys.stdout, colorize=True, level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
                    format=lambda record: "{level}: {message}\n{exception}" if record["level"].no >= 40 else "{message}\n")
+        logger.add(sys.stderr, colorize=True, level="ERROR", backtrace=True, diagnose=True,
+                   format=lambda record: "{level}: {message}\n{exception}")
     except (OSError, PermissionError) as e:
         rprint(f"[yellow]Warning: Could not create debug log file: {e}[/yellow]")
 
@@ -679,18 +695,20 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
                  from_step: str | None = None, to_step: str | None = None):
     """Run the workflow for the given experiment.
 
+    When from_step is None the workflow resumes: steps already marked done are skipped and
+    execution begins at the first pending step.  When from_step is given the workflow re-runs
+    from that step, resetting the done flag for it and all subsequent steps.
+
     Args:
         exp: The experiment object.
         archive: Whether to include the archive step.
         debug: Whether to enable debug logging.
-        from_step: Starting step name (optional).
-        to_step: Ending step name (optional).
+        from_step: Re-run from this step name (optional).
+        to_step: Stop after this step name (optional, only used with from_step).
 
     Returns:
-        bool: True if workflow completed successfully, False otherwise.
+        bool: True if workflow completed successfully (or paused at postpipe), False otherwise.
     """
-    # Create (or re-create) post_processing.log with full header on fresh runs;
-    # on resumed runs the file already exists so just append a session marker.
     if not (f := Path(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log")).exists():
         exp.write_log_file(f)
 
@@ -698,39 +716,51 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
     if not archive:
         logger.debug("The data will not be stored in the EVN archive.")
 
-    exp.steps = [s for s in _WORKFLOW_STEPS
-                 if (archive or (s.name != 'archive')) and (s.name != 'initialize')]
-    exp.store()
+    all_steps = [s for s in _WORKFLOW_STEPS if (archive or s.name != 'archive') and s.name != 'initialize']
+    step_names = [s.name for s in all_steps]
 
-    # Filter steps based on from_step and to_step
+    # Deserialize stored steps from JSON dicts into Task objects if needed
+    stored_steps = [Task.from_dict(s) if isinstance(s, dict) else s for s in (exp.steps or [])]
+
     if from_step is not None:
-        step_names = [s.name for s in exp.steps]
-        try:
-            from_idx = step_names.index(from_step)
-            to_idx = step_names.index(to_step) + 1 if to_step is not None else len(step_names)
-            steps_to_run = exp.steps[from_idx:to_idx]
-        except ValueError as e:
-            logger.error(f"Error filtering steps: {e}")
-            return False
+        # Explicit restart: preserve done state for steps before from_step, reset from it onwards
+        stored_done = {s.name: s.done for s in stored_steps}
+        from_idx = step_names.index(from_step)
+        for i, s in enumerate(all_steps):
+            s.done = stored_done.get(s.name, False) if i < from_idx else False
+        exp.steps = all_steps
+        exp.store()
 
-        logger.debug(f"Running steps: {', '.join(s.name for s in steps_to_run)}")
-        rprint(f"[green]Running steps: {', '.join(s.name for s in steps_to_run)}[/green]")
+        to_idx = step_names.index(to_step) + 1 if to_step is not None else len(all_steps)
+        steps_to_run = all_steps[from_idx:to_idx]
     else:
-        steps_to_run = exp.steps
+        # Resume: restore stored done state and only queue steps that are not yet done
+        if stored_steps:
+            stored_done = {s.name: s.done for s in stored_steps}
+            for s in all_steps:
+                s.done = stored_done.get(s.name, False)
+        exp.steps = all_steps
+        exp.store()
+        steps_to_run = [s for s in all_steps if not s.done]
 
     if not steps_to_run:
-        rprint("[yellow]No steps to run.[/yellow]")
+        rprint("[yellow]No pending steps — the post-processing is already complete.[/yellow]")
         return True
 
+    logger.debug(f"Running steps: {', '.join(s.name for s in steps_to_run)}")
+    rprint(f"[green]Running steps: {', '.join(s.name for s in steps_to_run)}[/green]")
+
     for step in steps_to_run:
-        logger.info(f"<bold> -- {step.name}</bold>")
+        rprint(f"[bold]-- {step.name}[/bold]")
         try:
             if step.command not in globals():
                 logger.error(f"Command '{step.command}' not found for step '{step.name}'")
+                utils.notify(f"{exp.expname} post-processing", f"Step {step.name} failed (command not found)")
                 return False
 
             if not globals()[step.command](exp):
                 logger.error(f"Step {step.name} failed.")
+                utils.notify(f"{exp.expname} post-processing", f"Step {step.name} failed")
                 return False
 
             step.done = True
@@ -739,7 +769,27 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
         except Exception as e:
             logger.error(f"Unexpected error in step {step.name}: {e}")
             traceback.print_exc()
+            utils.notify(f"{exp.expname} post-processing", f"Crashed at step {step.name}: {e}")
             return False
 
+        # After postpipe, pause and ask the user to review before archiving
+        if step.name == 'postpipe':
+            remaining = steps_to_run[steps_to_run.index(step) + 1:]
+            if remaining:
+                piletter = f"{exp.expname.lower()}.piletter"
+                body = (f"[bold]Please do the following before continuing:[/bold]\n\n"
+                        f"  1. Check the pipeline output plots and logs.\n"
+                        f"  2. Review the PI letter ([bold cyan]{piletter}[/bold cyan]).\n"
+                        f"     Non-observing antennas and PolConvert remarks have been\n"
+                        f"     filled in automatically — verify and edit if needed.\n\n"
+                        f"[bold]When ready, run one of:[/bold]\n\n"
+                        f"  [bold green]postprocess run[/bold green]           — finalize and archive everything\n"
+                        f"  [bold green]postprocess run postpipe[/bold green]  — re-run diagnostics\n")
+                Console().print(Panel(body, title="[bold yellow]Pipeline Results Ready for Review[/bold yellow]",
+                                      border_style="yellow", padding=(1, 2)))
+                utils.notify(f"{exp.expname} post-processing", "Paused — review pipeline results before continuing")
+                return True
+
     logger.info(f"The processing of {exp.expname} seems to have finalized properly.")
+    utils.notify(f"{exp.expname} post-processing", "Completed successfully")
     return True
