@@ -645,7 +645,8 @@ def _build_experiment_summary(exp) -> dict:
     # Correlator passes (freq setup)
     passes = []
     for i, cp in enumerate(exp.correlator_passes):
-        p: dict = {"index": i, "lisfile": str(cp.lisfile), "msfile": str(cp.msfile)}
+        p: dict = {"index": i, "lisfile": str(cp.lisfile), "msfile": str(cp.msfile),
+                   "fitsidi": cp.fitsidifile if cp.fitsidifile else ""}
         if cp.freqsetup:
             p["frequency"] = f"{cp.freqsetup.frequency.to(u.GHz):0.04}"
             p["bandwidth"] = f"{cp.freqsetup.bandwidth.to(u.MHz):0.04}"
@@ -766,10 +767,18 @@ let plotFiles = [];
 let summaryData = null;
 
 async function loadSummary() {
-  const resp = await fetch(API + '/api/summary');
-  summaryData = await resp.json();
-  document.getElementById('exp-title', '').textContent = summaryData.expname || '';
-  renderSummary(summaryData);
+  try {
+    const resp = await fetch(API + '/api/summary');
+    if (!resp.ok) { throw new Error('Server returned ' + resp.status); }
+    summaryData = await resp.json();
+    if (summaryData.error) { throw new Error(summaryData.error); }
+    const expTitle = document.getElementById('exp-title');
+    if (expTitle) expTitle.textContent = summaryData.expname || '';
+    renderSummary(summaryData);
+  } catch (e) {
+    document.getElementById('summary-content').innerHTML = '<p style="color:var(--red)">Failed to load summary: ' + e.message + '</p>';
+    console.error('loadSummary error:', e);
+  }
 }
 
 function renderSummary(d) {
@@ -800,20 +809,27 @@ function renderSummary(d) {
     h += '</div>';
   }
 
-  // Sources
+  // Sources (editable type via dropdown)
+  const typeLabels = {fringefinder:'Fringe-finder', target:'Target', calibrator:'Phase-cal', other:'Other'};
+  const stAll = d.source_types || {};
   h += '<div class="section"><h2>Sources</h2>';
-  for (const [label, key] of [['Fringe-finder','fringefinder'],['Target','target'],['Phase-cal','calibrator']]) {
-    const srcs = (d.sources || {})[key] || [];
-    if (srcs.length) h += `<div><span style="color:var(--dim)">${label}:</span> ${srcs.map(s=>`<span class="tag tag-blue">${s}</span>`).join(' ')}</div>`;
+  h += '<table style="font-size:0.9rem;border-collapse:collapse">';
+  for (const [name, stype] of Object.entries(stAll)) {
+    h += `<tr><td style="padding:2px 8px"><span class="src-${stype}">${name}</span></td>`;
+    h += `<td style="padding:2px 4px"><select onchange="changeSourceType('${name}',this.value)" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85rem">`;
+    for (const [k,v] of Object.entries(typeLabels)) {
+      h += `<option value="${k}"${k===stype?' selected':''}>${v}</option>`;
+    }
+    h += '</select></td></tr>';
   }
-  h += '</div>';
+  h += '</table></div>';
 
   // Antennas
   const a = d.antennas || {};
   h += '<div class="section"><h2>Antennas</h2>';
   h += `<div>Observed (${(a.observed||[]).length}): ${(a.observed||[]).map(n=>`<span class="tag tag-green">${n}</span>`).join(' ')}</div>`;
   if ((a.not_observed||[]).length) h += `<div>Not observed: ${a.not_observed.map(n=>`<span class="tag tag-red">${n}</span>`).join(' ')}</div>`;
-  h += row('Ref. ant.', (d.refant || []).join(', '));
+  h += '<div>Ref. ant.: ' + (d.refant || []).map(n => `<span class="tag">${n}</span>`).join(' ') + '</div>';
   if ((a.polswap||[]).length) h += `<div>Polswap: ${a.polswap.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
   if ((a.polconvert||[]).length) h += `<div>PolConvert: ${a.polconvert.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
   if ((a.onebit||[]).length) h += `<div>1-bit: ${a.onebit.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
@@ -899,6 +915,16 @@ function updatePlot() {
   document.getElementById('plot-area').innerHTML = html;
 }
 
+async function changeSourceType(name, newType) {
+  const resp = await fetch(API + '/api/set_source_type', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({source: name, type: newType})
+  });
+  const result = await resp.json();
+  if (result.ok) { await loadSummary(); }
+  else { alert('Error: ' + (result.error || 'unknown')); }
+}
+
 loadSummary();
 loadPlots();
 </script>
@@ -919,19 +945,76 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
     plots_dir: Path = Path("plots")
     expname: str = ""
     dashboard_html: str = ""
+    exp: object = None
 
     def do_GET(self):
         """Route GET requests to the appropriate handler."""
-        if self.path == "/" or self.path == "/index.html":
-            self._serve_html()
-        elif self.path == "/api/summary":
-            self._serve_json(self.experiment_summary)
-        elif self.path == "/api/plots":
-            self._serve_plot_list()
-        elif self.path.startswith("/plots/"):
-            self._serve_plot_file()
+        try:
+            if self.path == "/" or self.path == "/index.html":
+                self._serve_html()
+            elif self.path == "/api/summary":
+                self._serve_json(self.experiment_summary)
+            elif self.path == "/api/plots":
+                self._serve_plot_list()
+            elif self.path.startswith("/plots/"):
+                self._serve_plot_file()
+            else:
+                self.send_error(404)
+        except Exception as exc:
+            logger.error(f"Dashboard GET {self.path} failed: {exc}")
+            body = json.dumps({"error": str(exc)}).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def do_POST(self):
+        """Route POST requests. Only /api/set_source_type is supported."""
+        if self.path == "/api/set_source_type":
+            self._handle_set_source_type()
         else:
             self.send_error(404)
+
+    def _handle_set_source_type(self):
+        """Change a source's type and persist via exp.store().
+
+        Expects JSON body: {"source": "NAME", "type": "target|calibrator|fringefinder|other"}
+        Updates the exp object in-place, rebuilds the summary dict, and stores to disk.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            src_name = body["source"]
+            new_type_name = body["type"]
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            self._serve_json({"ok": False, "error": str(exc)})
+            return
+
+        exp = self.__class__.exp
+        # Find the source and get the SourceType enum class from it
+        target_src = None
+        for src in exp.sources:
+            if src.name == src_name:
+                target_src = src
+                break
+
+        if target_src is None:
+            self._serve_json({"ok": False, "error": f"Source '{src_name}' not found"})
+            return
+
+        source_type_cls = type(target_src.type)  # the SourceType enum class
+        try:
+            target_src.type = source_type_cls[new_type_name]
+        except KeyError:
+            valid = [e.name for e in source_type_cls]
+            self._serve_json({"ok": False, "error": f"Invalid type '{new_type_name}'. Valid: {valid}"})
+            return
+
+        exp.store()
+        self.__class__.experiment_summary = _build_experiment_summary(exp)
+        logger.info(f"Source '{src_name}' type changed to '{new_type_name}' and stored.")
+        self._serve_json({"ok": True})
 
     def _serve_html(self):
         """Serve the dashboard HTML page."""
@@ -973,8 +1056,12 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def log_message(self, format, *args):
-        """Suppress default request logging to keep terminal clean."""
+        """Suppress routine access logs but let errors through via loguru."""
         pass
+
+    def log_error(self, format, *args):
+        """Forward HTTP errors to loguru so they are visible in the terminal."""
+        logger.error(f"Dashboard HTTP error: {format % args}")
 
 
 def serve_dashboard(exp, plots_dir: Path) -> None:
@@ -1000,6 +1087,7 @@ def serve_dashboard(exp, plots_dir: Path) -> None:
     port = _find_available_port()
 
     # Configure the handler class
+    _DashboardHandler.exp = exp
     _DashboardHandler.experiment_summary = _build_experiment_summary(exp)
     _DashboardHandler.plots_dir = plots_dir
     _DashboardHandler.expname = exp.expname.lower()
