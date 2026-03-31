@@ -17,6 +17,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from rich import print as rprint
 from . import experiment
 from . import utils
+from . import comment_tasav
 
 
 def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
@@ -34,8 +35,8 @@ def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
             rprint(f"[bold yellow]Could not find the {ext} files in vlbeer.[/bold yellow]")
             logger.warning("Could not retrieve {ext} files from vlbeer")
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [executor.submit(fetch_file, a_file) for a_file in ('antabfs', 'log')]
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(fetch_file, a_file) for a_file in ('antabfs', 'log', 'flag')]
         for future in futures:
             future.result()
 
@@ -137,7 +138,7 @@ def run_antab_editor(exp) -> Optional[bool]:
     if '_line' in ''.join(glob.glob(f"{exp.expname.lower()}*.lis")):
         utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", "..", "-l"], shell=True, stdout=None)
     else:
-        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", ".."], shell=True, stdout=None)
+        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-p", "1", "-f", ".."], shell=True, stdout=None)
     
     if len(missing_antabs := [a.name for a in exp.antennas if not a.antabfsfile]) > 0:
         rprint(f"[red]Note that you are missing ANTAB files from: {', '.join(missing_antabs)}[/red]")
@@ -150,12 +151,50 @@ def create_uvflg(exp) -> Optional[bool]:
     """Produces the combined uvflg file containing the full flagging from all telescopes.
     """
     if len(glob.glob(str(exp.dirs.pipe_temp / "*.uvflg"))) > 0:
-        logger.debug("uvflg files already created. Skipping.")
+        logger.info("uvflg files already created. Skipping.")
         return True
 
+    if len(glob.glob(str(exp.dirs.pipe_temp / "*.log"))) == 0:
+        logger.error("No log files found in the temp directory.")
+        rprint("[bold red]ERROR:[/bold red] [red]No log files found in the temp directory.[/red]")
+        return False
     original_cwd = os.getcwd()
     os.chdir(exp.dirs.pipe_temp)
     utils.shell_command("uvflgall.sh")
+
+    # Check which observed antennas are missing .uvflgfs files and supplement
+    # them with a-priori flagging from the experiment .flag file (from vlbeer).
+    uvflgfs_files = glob.glob("*.uvflgfs")
+    antennas_with_uvflgfs = {
+        Path(f).stem.replace(exp.expname.lower(), '').upper()
+        for f in uvflgfs_files
+    }
+    missing_antennas = {a.upper() for a in exp.antennas.observed} - antennas_with_uvflgfs
+    if missing_antennas:
+        logger.info(f"Antennas missing .uvflgfs files: {', '.join(sorted(missing_antennas))}")
+        flag_files = glob.glob(f"{exp.expname.lower()}*.flag")
+        if flag_files:
+            flag_file = Path(flag_files[0])
+            with open(flag_file, 'r') as fh:
+                flag_lines = fh.readlines()
+            for ant in sorted(missing_antennas):
+                ant_lines = [l for l in flag_lines if f"antenna='{ant}'" in l]
+                if ant_lines:
+                    uvflgfs_out = Path(f"{exp.expname.lower()}{ant.lower()}.uvflgfs")
+                    with open(uvflgfs_out, 'w') as fh:
+                        fh.write(f"! A-priori flagging for {ant} from {flag_file.name}\n")
+                        fh.write("opcode='FLAG'\n")
+                        fh.write("dtimrang = 1   timeoff=0\n")
+                        fh.writelines(ant_lines)
+                    logger.info(f"Created {uvflgfs_out.name} from {flag_file.name} for {ant}")
+                else:
+                    logger.debug(f"No flagging entries found for {ant} in {flag_file.name}")
+        else:
+            rprint(f"[yellow]Antennas {', '.join(sorted(missing_antennas))} are missing .uvflgfs files "
+                   f"and no .flag file was found in the temp directory.[/yellow]")
+            logger.warning(f"Missing .uvflgfs for {', '.join(sorted(missing_antennas))} "
+                           "and no .flag file available")
+
     utils.shell_command("cat", ["*uvflgfs", ">", f"{exp.expname.lower()}.uvflg"])
     if len(pipepass := [apass.pipeline for apass in exp.correlator_passes if apass.pipeline]) > 1:
         for p in range(1, len(pipepass) + 1):
@@ -209,16 +248,16 @@ def create_input_file(exp) -> bool:
             '{userno}': subprocess.run(['aips_userno.py', exp.supsci.lower()], 
                                        capture_output=True, text=True).stdout.strip() or '100',
             '{refant}': exp.refant[0] if len(exp.refant) > 0 else '',
-            '{plotref}': ', '.join(exp.refant),
+            '{plotref}': exp.refant[0],
             '{bpass}': ', '.join(apass.sources.fringefinder),
             '{dophaseref}': '' if apass.sources.calibrator else '#',
             # '{phaseref}': ', '.join(apass.sources.calibrator),
             # '{target}': ', '.join(apass.sources.target),
             '{target}': ', '.join(apass.sources.target),
             '{phaseref}': ', '.join([apass.sources.calibrator_for_target(tgt) for tgt in apass.sources.target]) if apass.sources.calibrator else '',
-            '{dosolint}': '' if apass.sources.calibrator else '#',
-            '{solint}': '2' if apass.sources.calibrator else '1',
-            '{doprimarybeam}': '' if exp.multi_phase_center else '-1',
+            '{dosolint}': '#' if apass.sources.calibrator else '',
+            '{solint}': '2',
+            '{doprimarybeam}': '1' if exp.multi_phase_center else '-1',
             '{setup_station}': exp.refant[0],
             '{do_all_sources}': '' if exp.multi_phase_center else '#',
             '{all_sources}': ', '.join(set(apass.sources.target + apass.sources.fringefinder + apass.sources.calibrator)) if exp.multi_phase_center else '',
@@ -248,6 +287,7 @@ def run_pipeline(exp) -> bool:
             logger.error(f"Pipeline input directory does not exist: {exp.dirs.pipe_in}")
             return False
             
+        os.environ['PIPEFITS'] = str(original_cwd)
         os.chdir(exp.dirs.pipe_in)
         pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
         
@@ -255,6 +295,7 @@ def run_pipeline(exp) -> bool:
             logger.error("No pipeline passes found")
             return False
             
+        logger.info(f"Setting the PIPEFITS environment variable to {os.environ.get('PIPEFITS')}")
         if len(pipepasses) > 1:
             with ProcessPoolExecutor() as executor:
                 futures = [executor.submit(utils.shell_command, "EVN.py", [f"{exp.expname.lower()}_{i}.inp.txt"], stdout=None) 
@@ -267,12 +308,7 @@ def run_pipeline(exp) -> bool:
                         traceback.print_exc()
                         return False
         else:
-            try:
-                utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=subprocess.PIPE)
-            except Exception as e:
-                logger.error(f"Pipeline execution failed: {e}")
-                traceback.print_exc()
-                return False
+            utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=None) #subprocess.PIPE)
 
         os.chdir(original_cwd)
         return True
@@ -290,104 +326,79 @@ def comment_tasav_files(exp) -> bool:
     """Creates the comment and tasav files after the EVN Pipeline has run.
     """
     try:
-        original_cwd = os.getcwd()
-        
         # Check if files already exist
         comment_files = list(exp.dirs.pipe_out.glob(f"{exp.expname.lower()}*.comment"))
         tasav_files = list(exp.dirs.pipe_in.glob(f"{exp.expname.lower()}*.tasav.txt"))
-        
+
         if comment_files and tasav_files:
             logger.debug("Comment and tasav files already exist. Skipping.")
-            os.chdir(original_cwd)
             return True
-            
+
         if not exp.dirs.pipe_in.exists():
             logger.error(f"Pipeline input directory does not exist: {exp.dirs.pipe_in}")
             return False
-            
-        os.chdir(exp.dirs.pipe_in)
+
         pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
-        
+
         if not pipepasses:
             logger.error("No pipeline passes found")
             return False
-            
+
         if len(pipepasses) > 1:
-            for p in range(1, len(pipepasses) + 1):
-                if p-1 >= len(pipepasses):
-                    logger.error(f"Pipeline pass {p} not found")
-                    continue
-                    
-                if not pipepasses[p-1].freqsetup:
+            for p, ppass in enumerate(pipepasses, start=1):
+                if not ppass.freqsetup:
                     logger.warning(f"No frequency setup for pipeline pass {p}")
                     continue
-                    
-                try:
-                    if pipepasses[p-1].freqsetup.channels >= 512:
-                        # We assume that it is a spectral line experiment
-                        utils.shell_command("comment_tasav_file.py", ["--line", f"{exp.expname.lower()}_{p}"], stdout=None)
-                    else:
-                        utils.shell_command("comment_tasav_file.py", [f"{exp.expname.lower()}_{p}"], stdout=None)
-                except Exception as e:
-                    logger.error(f"Error creating comment/tasav files for pass {p}: {e}")
-                    traceback.print_exc()
-                    return False
+                is_line = ppass.freqsetup.channels >= 512
+                comment_tasav.create_comment_and_tasav(exp, f"{exp.expname.lower()}_{p}", is_line)
         else:
-            if not exp.correlator_passes or not exp.correlator_passes[0].freqsetup:
+            if not exp.correlator_passes[0].freqsetup:
                 logger.error("No frequency setup available")
                 return False
-                
-            try:
-                if exp.correlator_passes[0].freqsetup.channels >= 512:
-                    utils.shell_command("comment_tasav_file.py", ["--line", exp.expname.lower()], stdout=None)
-                else:
-                    utils.shell_command("comment_tasav_file.py", [exp.expname.lower()], stdout=None)
-            except Exception as e:
-                logger.error(f"Error creating comment/tasav files: {e}")
-                traceback.print_exc()
-                return False
+            is_line = exp.correlator_passes[0].freqsetup.channels >= 512
+            comment_tasav.create_comment_and_tasav(exp, exp.expname.lower(), is_line)
 
-        os.chdir(original_cwd)
         return True
     except Exception as e:
         logger.error(f"Unexpected error creating comment/tasav files: {e}")
         traceback.print_exc()
-        try:
-            os.chdir(original_cwd)
-        except OSError:
-            pass
         return False
 
 
 def pipeline_feedback(exp) -> bool:
     """Runs the feedback.pl script after the EVN Pipeline has run.
     """
-    original_cwd = os.getcwd()
-    os.chdir(exp.dirs.pipe_out)
-    pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
-    sources_str = ' '.join([s.name for s in exp.sources])
-    if len(pipepasses) > 1:
-        for p in range(1, len(pipepasses) + 1):
+    try:
+        original_cwd = os.getcwd()
+        os.chdir(exp.dirs.pipe_out)
+        pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
+        sources_str = f"'{' '.join([s.name for s in exp.sources])}'"
+        if len(pipepasses) > 1:
+            for p in range(1, len(pipepasses) + 1):
+                utils.shell_command("feedback.pl",
+                                    ["-exp", f"{exp.expname.lower()}_{p}", "-jss", exp.supsci, "-source", sources_str],
+                                    stdout=None)
+        else:
             utils.shell_command("feedback.pl",
-                                ["-exp", f"{exp.expname.lower()}_{p}", "-jss", exp.supsci, "-source", sources_str],
+                                ["-exp", exp.expname.lower(), "-jss", exp.supsci, "-source", sources_str],
                                 stdout=None)
-    else:
-        utils.shell_command("feedback.pl",
-                            ["-exp", exp.expname.lower(), "-jss", exp.supsci, "-source", sources_str],
-                            stdout=None)
-    os.chdir(original_cwd)
-    return True
+        return True
+    finally:
+        os.chdir(original_cwd)
 
 
 def archive(exp) -> bool:
     """Archives the EVN Pipeline results.
     """
-    original_cwd = os.getcwd()
-    for folder in (exp.dirs.pipe_in, exp.dirs.pipe_out):
-        os.chdir(folder)
-        utils.shell_command("archive.pl", ["-pipe", "-e", f"{exp.expname.lower()}_{exp.obsdate}"], stdout=None)
+    try:
+        original_cwd = os.getcwd()
+        for folder in (exp.dirs.pipe_in, exp.dirs.pipe_out):
+            os.chdir(folder)
+            utils.shell_command("archive.pl", ["-pipe", "-e", f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}"], stdout=None)
+            os.chdir(original_cwd)
+    finally:
+        os.chdir(original_cwd)
 
-    os.chdir(original_cwd)
     return True
 
 
