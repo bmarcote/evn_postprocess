@@ -6,14 +6,15 @@ perform required changes in intermediate files.
 
 """
 import os
+import re
 import glob
 import string
 import random
 import traceback
-from importlib import resources
 from typing import Optional, Union
 from pathlib import Path
 from collections import defaultdict
+from datetime import timedelta
 import subprocess
 import numpy as np
 from loguru import logger
@@ -100,6 +101,7 @@ def getdata(exp: experiment.Experiment) -> bool:
                 return True
             except Exception as e:
                 logger.error(f"Error fetching data for {a_pass.lisfile.name}: {e}")
+                traceback.print_exc()
                 return False
 
         if len(exp.correlator_passes) == 0:
@@ -117,6 +119,7 @@ def getdata(exp: experiment.Experiment) -> bool:
         return True
     except Exception as e:
         logger.error(f"Unexpected error in getdata: {e}")
+        traceback.print_exc()
         return False
 
 
@@ -172,6 +175,7 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                 return True
             except Exception as e:
                 logger.error(f"Error running j2ms2 for {a_pass.lisfile.name}: {e}")
+                traceback.print_exc()
                 return False
 
         with ThreadPoolExecutor(max_workers=10) as pool:
@@ -180,6 +184,7 @@ def j2ms2(exp: experiment.Experiment) -> bool:
         return all(results)
     except Exception as e:
         logger.error(f"Unexpected error in j2ms2: {e}")
+        traceback.print_exc()
         return False
 
 
@@ -525,7 +530,7 @@ def flag_weights(exp: experiment.Experiment) -> bool:
     return True
 
 
-def update_piletter(exp) -> bool:
+def update_piletter(exp: experiment.Experiment) -> bool:
     """Updates the PI letter by changing two things:
     - Removing the trailing epoch-related character in the experiment name.
     - Adding the weightthreshold that was used and how much data were flagged.
@@ -579,10 +584,10 @@ def update_piletter(exp) -> bool:
                                            "antenna as reference station during fringe-fitting.\n")
 
                         ants_bw = {}
-                        if len(set([cp.freqsetup.n_subbands for cp in exp.correlator_passes])) == 1:
+                        if len(set([cp.freqsetup.subbands for cp in exp.correlator_passes])) == 1:
                             for antenna in exp.correlator_passes[0].antennas:
                                 if 0 < len(antenna.subbands) < \
-                                        exp.correlator_passes[0].freqsetup.n_subbands:
+                                        exp.correlator_passes[0].freqsetup.subbands:
                                     # In case the antenna observed a consecutive number of subbands
                                     ant_sbs = np.array(antenna.subbands)
                                     ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
@@ -594,7 +599,7 @@ def update_piletter(exp) -> bool:
                         else:
                             for antenna in exp.correlator_passes[0].antennas:
                                 for i,a_pass in enumerate(exp.correlator_passes):
-                                    if 0 < len(antenna.subbands) < a_pass.freqsetup.n_subbands:
+                                    if 0 < len(antenna.subbands) < a_pass.freqsetup.subbands:
                                         if antenna.name not in ants_bw:
                                             ant_sbs = np.array(antenna.subbands)
                                             ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
@@ -646,8 +651,17 @@ def update_piletter(exp) -> bool:
     return True
 
 
-def tconvert(exp) -> bool:
-    """Runs tConvert in all MS files available in the directory
+def tconvert(exp: experiment.Experiment) -> bool:
+    """Runs tConvert on all correlator passes to create FITS-IDI files from the MS.
+
+    Selects chunk_size based on estimated IDI file size. Skips passes where
+    FITS-IDI files already exist.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True if all passes converted successfully.
     """
     for a_pass in exp.correlator_passes:
         if len(glob.glob(f"{a_pass.fitsidifile}*")) > 0:
@@ -659,268 +673,459 @@ def tconvert(exp) -> bool:
 
         if idi_size < 20*u.Gb:
             utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
-                                      stdout=None, stderr=subprocess.STDOUT)
+                                stdout=None, stderr=subprocess.STDOUT)
         elif idi_size < 4*u.Tb:
-            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name,
-                                                   "-o", "chunk_size=8GB"],
-                                      stdout=None, stderr=subprocess.STDOUT)
+            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=8GB"],
+                                stdout=None, stderr=subprocess.STDOUT)
         else:
-            if utils.space_available(exp.cwd) <= 1.1*idi_size:
-                rprint("\n\n[bold red]There is no enough space in the computer to create " \
-                       "the FITS-IDI files[/bold red]")
+            if utils.space_available(Path.cwd()) <= 1.1*idi_size:
                 raise IOError("Not enough disk space to create the FITS-IDI files.")
 
             utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o",
-                                      f"chunk_size={int(idi_size.to(u.Tb).value)}GB"],
-                                      stdout=None, stderr=subprocess.STDOUT)
+                                f"chunk_size={int(idi_size.to(u.Tb).value)}GB"],
+                                stdout=None, stderr=subprocess.STDOUT)
 
     return True
 
 
-def prepare_polconvert(exp: experiment.Experiment, output_template: Path = Path('polconvert_inputs.toml')) -> bool:
-    """Checks if PolConvert is required for any antenna.
-    In that case, prepares the templates for running it and (potentially in the future?)
-    will run it. For now it just requests the user to run it manually.
+def _find_best_fringefinder_scan(exp: experiment.Experiment) -> Optional[experiment.Scan]:
+    """Find the fringe-finder scan observed by the most antennas.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        The Scan with the most observed stations on a fringe-finder source, or None.
     """
-    with resources.as_file(resources.files("templates").joinpath("polconvert_inputs.toml.template")) as template:
-        template_content = Path(template).read_text()
-
-    logger.debug("Creating the template file for polconvert (polconvert_inputs.toml)")
-
-    # Use only antennas that observed the same subbands as the antennas to PolConvert (at least)
-    subbands_to_polconvert = set().union(*(exp.antennas[p].subbands for p in exp.antennas.polconvert))
-    include_ants = []
-    for ant in exp.antennas:
-        if (ant not in exp.antennas.polconvert) and subbands_to_polconvert.issubset(set(ant.subbands)) and ant.observed:
-                include_ants.append(ant.name)
-
-    template_content = template_content.format(expname=exp.expname.lower(), refant=f"'{exp.refant[0].upper()}'",
-                                               linants=f"[{', '.join([f"'{ant.upper()}'" for ant in exp.antennas.polconvert])}]",
-                                               exclude_ants=f"[{', '.join([f"'{ant.name.upper()}'" for ant in exp.antennas \
-                                                                           if ant.name not in include_ants])}]",
-                                               do_if=f"[{', '.join([str(s) for s in subbands_to_polconvert])}]",
-                                               time_range=[],
-                                               chanavg=16, timeavg=30, solve_weight=0.001)
-
-    output_template.write_text(template_content)
-    return output_template.exists()
-
-
-def polconvert(exp) -> Optional[bool]:
-    """Checks if PolConvert is required for any antenna.
-    In that case, prepares the templates for running it and (potentially in the future?)
-    will run it. For now it just requests the user to run it manually.
-    """
-    if len(exp.antennas.polconvert) > 0:
-        polconv_inp = Path('./polconvert_inputs.toml')
-        if not polconv_inp.exists():
-            logger.info("cp ~/polconvert/polconvert_inputs.toml ./polconvert_inputs.toml")
-            utils.shell_command('cp', ['/home/jops/polconvert/polconvert_inputs.toml',
-                                      './polconvert_inputs.toml'], shell=True, stdout=None)
-
-            with open(polconv_inp, 'r') as pcfile:
-                pccontent = pcfile.read()
-
-            pccontent.replace("expname_1_1.IDI*", f"{exp.expname.lower()}_1_1.IDI*")
-            pccontent.replace("'T6'", ', '.join([f"'{ant.upper()}'" for ant in \
-                              exp.antennas.polconvert]))
-            pccontent.replace("'EF'", f"'{exp.refant[0].upper()}'")
-
-            excl_ants = []
-            for ant in exp.antennas:
-                if (ant.name != exp.refant[0]) and (ant not in exp.antennas.polconvert):
-                    if (not ant.observed):
-                        excl_ants.append(ant.name.upper())
-
-                    # I exclude all antennas that did not observe all subbands as the antenas
-                    # to PolConvert
-                    for pant in exp.antennas.polconvert:
-                        if not set(exp.antennas[pant].subbands).issubset(set(ant.subbands)):
-                            excl_ants.append(ant.name.upper())
-
-            pccontent.replace("'IR', 'CM', 'DE'", ', '.join([f"'{a}'" for a in excl_ants]))
-
-            with open(polconv_inp, 'w') as pcfile:
-                pcfile.write(pccontent)
-
-
-        if len(exp.antennas.polconvert) > 1:
-            verbose_polconv_ants = ', '.join(exp.antennas.polconvert[:-1]) + ' and ' + \
-                                    exp.antennas.polconvert[-1]
-        else:
-            verbose_polconv_ants = exp.antennas.polconvert[0]
-
-        rprint("\n\n[red bold]PolConvert needs to be run manually for " \
-               f"{verbose_polconv_ants}.[/red bold]\n")
-        print("You would find the input template in the current directory.")
-        print("Edit it manually and then run it with:\n")
-        rprint("[bold]> polconvert.py  polconvert_inputs.toml[/bold]")
-        rprint("\n\n[red bold]Once PolConvert has run, re-run me as ('postprocess')[/red bold]\n\n")
-        # Keep the following as it will require a manual interaction
-        exp.last_step = 'tconvert'
+    ff_sources = exp.sources.fringefinder
+    if not ff_sources:
         return None
-    else:
-        logger.info("# PolConvert is not required.")
-        # dialog_text = "PolConvert is required.\n"
-        # dialog_text += f"Please run it manually for {','.join(exp.polconvert_antennas)}."
-        # dialog_text += "Once you are done (all FITS properly corrected), press Continue."
-        # dialog.warning_dialog(dialog_text)
+
+    best_scan = None
+    best_count = 0
+    for scan in exp.scans:
+        if scan.source in ff_sources:
+            n_observed = len(scan.stations_observed) if scan.stations_observed else len(scan.stations_scheduled)
+            if n_observed > best_count:
+                best_count = n_observed
+                best_scan = scan
+
+    return best_scan
+
+
+def _scan_to_aips_timerange(scan: experiment.Scan, obsdate, trim_start_min: int = 1, trim_end_min: int = 0) -> list[int]:
+    """Convert a scan's time range to AIPS format with optional trimming.
+
+    AIPS format: [day_start, hour, minute, second, day_end, hour_end, minute_end, second_end]
+    where day is days since the beginning of the observation (0 if same day).
+
+    Args:
+        scan: Scan object with starttime (datetime) and duration_s (int).
+        obsdate: Observation start date (datetime.date).
+        trim_start_min: Minutes to remove from the scan start.
+        trim_end_min: Minutes to remove from the scan end.
+
+    Returns:
+        8-element list in AIPS time format.
+    """
+    from datetime import datetime as dt_cls
+    obs_midnight = dt_cls.combine(obsdate, dt_cls.min.time())
+    start = scan.starttime + timedelta(minutes=trim_start_min)
+    end = scan.starttime + timedelta(seconds=scan.duration_s) - timedelta(minutes=trim_end_min)
+
+    def _to_aips(t):
+        total_sec = int((t - obs_midnight).total_seconds())
+        days = total_sec // 86400
+        remainder = total_sec % 86400
+        hours = remainder // 3600
+        remainder = remainder % 3600
+        minutes = remainder // 60
+        seconds = remainder % 60
+        return [days, hours, minutes, seconds]
+
+    return _to_aips(start) + _to_aips(end)
+
+
+def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
+    """Check FRINGE.PEAKS .dat files to verify PolConvert solution quality.
+
+    For each .dat file, extracts the first RR, LL, RL, LR amplitude values.
+    The solution is acceptable if RR and LL are >5x max(RL, LR) for all files.
+
+    Args:
+        logdir: Path to the polconvert log directory.
+
+    Returns:
+        True if the solution quality is acceptable.
+    """
+    peaks_dir = Path(logdir) / 'FRINGE.PEAKS'
+    if not peaks_dir.exists():
+        logger.warning(f"FRINGE.PEAKS directory not found in {logdir}")
+        return False
+
+    dat_files = sorted(peaks_dir.glob('*.dat'))
+    if not dat_files:
+        logger.warning("No .dat files found in FRINGE.PEAKS directory")
+        return False
+
+    for dat_file in dat_files:
+        content = dat_file.read_text()
+        values: dict[str, float] = {}
+        for pol in ('RR', 'LL', 'RL', 'LR'):
+            for line in content.splitlines():
+                if f'{pol}:' in line:
+                    match = re.search(rf'{pol}:\s*([\d.eE+-]+)\s*;', line)
+                    if match:
+                        values[pol] = float(match.group(1))
+                        break
+
+        if not all(pol in values for pol in ('RR', 'LL', 'RL', 'LR')):
+            logger.debug(f"Could not extract all polarization values from {dat_file.name}")
+            continue
+
+        cross_max = max(values['RL'], values['LR'])
+        if cross_max <= 0:
+            continue
+
+        rr_ratio = values['RR'] / cross_max
+        ll_ratio = values['LL'] / cross_max
+        if rr_ratio < 5 or ll_ratio < 5:
+            logger.info(f"{dat_file.name}: RR/cross={rr_ratio:.1f}, LL/cross={ll_ratio:.1f} — below 5x threshold")
+            return False
+
     return True
 
 
-def post_polconvert(exp) -> Optional[bool]:
-    """Assumes that PolConvert has run, creating the new (corrected) files *IDI*.PCONVERT.
-    This function (if indeed PolConvert had run) would move all converted files to the
-    standard name (keeping the original ones in a folder (./unconverted_idi_files/),
-    and runs again standardplots to confirm that the conversion has been loaded properly.
+def _store_polconvert_params(exp: experiment.Experiment, params: dict,
+                             output_file: Path = Path('polconvert_inputs.toml')) -> None:
+    """Store the successful polconvert parameters to a TOML file for reference.
+
+    Args:
+        exp: Experiment object.
+        params: Dict with the successful polconvert.main() arguments.
+        output_file: Path for the output TOML file.
     """
-    if len(exp.antennas.polconvert) == 0:
+    lines = [
+        "# PolConvert input file — auto-generated with successful parameters",
+        "",
+        "[inputs]",
+        f"ref_idi = '{params['ref_idi']}'",
+        f"idi_files = '{exp.expname.lower()}_*_1.IDI*'",
+        f"linants = [{', '.join(repr(a) for a in params['linear_antennas'])}]",
+        f"refant = '{params['ref_antenna']}'",
+        f"exclude_ants = [{', '.join(repr(a) for a in params['exclude_antennas'])}]",
+        f"exclude_baselines = {params['exclude_baselines']}",
+        "",
+        "[options]",
+        f"do_if = {params['do_ifs']}",
+        f"time_range = {params['time_range']}",
+        f"chanavg = {params['chan_avg']}",
+        f"timeavg = {params['time_avg']}",
+        f"solve_weight = {params['solve_weight']}",
+        "solve_amp = true",
+        "to_compute = true",
+        "to_apply = true",
+        "",
+        "[config]",
+        "suffix = '.PCONVERT'",
+        f"logdir = '{params['logdir']}'",
+    ]
+    output_file.write_text('\n'.join(lines) + '\n')
+    logger.info(f"Stored successful parameters to {output_file}")
+
+
+def polconvert(exp: experiment.Experiment) -> bool:
+    """Run PolConvert automatically with iterative parameter tuning.
+
+    Finds the best fringe-finder scan, computes parameters, and iteratively
+    tries different solve_weight / time_avg / time_range combinations until
+    FRINGE.PEAKS quality checks pass. Then applies the solution to all IDI files.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True if PolConvert succeeded or not needed, False if no good solution found.
+    """
+    if not exp.antennas.polconvert:
+        logger.info("PolConvert is not required.")
+        return True
+
+    if len(glob.glob('*IDI*.PCONVERT')) > 0:
+        logger.info("PolConvert output files already exist. Skipping.")
+        return True
+
+    # Find the best fringe-finder scan (most observed antennas)
+    scan = _find_best_fringefinder_scan(exp)
+    if scan is None:
+        logger.error("No fringe-finder scan found for PolConvert.")
+        return False
+
+    n_stations = len(scan.stations_observed) if scan.stations_observed else len(scan.stations_scheduled)
+    logger.info(f"Selected scan {scan.scanno} on {scan.source} ({n_stations} stations, "
+                f"{scan.duration_s}s duration)")
+
+    # Common parameters
+    lin_ants = exp.antennas.polconvert
+    refant = exp.refant[0] if exp.refant else None
+    if not refant:
+        logger.error("No reference antenna set for PolConvert.")
+        return False
+
+    subbands_to_polconvert = set().union(*(exp.antennas[p].subbands for p in lin_ants))
+    exclude_ants: list[str] = []
+    for ant in exp.antennas:
+        if not ant.observed:
+            exclude_ants.append(ant.name)
+        elif ant.name not in lin_ants and ant.name != refant:
+            if not subbands_to_polconvert.issubset(set(ant.subbands)):
+                exclude_ants.append(ant.name)
+    exclude_ants = sorted(set(exclude_ants))
+
+    do_ifs = sorted(list(subbands_to_polconvert))
+
+    idi_files = sorted(glob.glob(f"{exp.expname.lower()}_*_1.IDI*"))
+    if not idi_files:
+        logger.error("No FITS-IDI files found for PolConvert.")
+        return False
+
+    logdir = 'polconvert_logs'
+
+    from .scripts.polconvert import main as polconvert_main
+    from evn_support import find_idi_with_time as find_idi_mod
+
+    # Iterative parameter search: solve_weight, time_avg, and time trimming
+    solve_weights = [0.1, 0.01, 0.001]
+    time_avgs = [20, 30, 60]
+    trim_configs = [(1, 0), (2, 1), (3, 2)]
+
+    for trim_start, trim_end in trim_configs:
+        time_range = _scan_to_aips_timerange(scan, exp.obsdate, trim_start, trim_end)
+
+        ref_idi = find_idi_mod.find_idi_with_time(
+            idi_files=sorted(idi_files), aipstime=time_range[:4], verbose=False)
+        if ref_idi is None:
+            logger.warning(f"No IDI file contains time with trim=({trim_start},{trim_end})min. Skipping.")
+            continue
+
+        for solve_weight in solve_weights:
+            for time_avg in time_avgs:
+                logger.info(f"PolConvert attempt: solve_weight={solve_weight}, time_avg={time_avg}, "
+                            f"trim=({trim_start},{trim_end})min")
+                try:
+                    polconvert_main(
+                        ref_idi=ref_idi, idi_files=idi_files, linear_antennas=lin_ants,
+                        ref_antenna=refant, exclude_antennas=exclude_ants, exclude_baselines=[],
+                        do_ifs=do_ifs, time_range=time_range, chan_avg=16, time_avg=time_avg,
+                        solve_weight=solve_weight, solve_amp=True,
+                        to_compute=True, to_apply=False, logdir=logdir)
+                except Exception as e:
+                    logger.warning(f"PolConvert compute failed: {e}")
+                    traceback.print_exc()
+                    continue
+
+                if _check_fringe_peaks(logdir):
+                    logger.info("PolConvert solution quality check passed!")
+                    params = {'ref_idi': ref_idi, 'linear_antennas': lin_ants, 'ref_antenna': refant,
+                              'exclude_antennas': exclude_ants, 'exclude_baselines': [], 'do_ifs': do_ifs,
+                              'time_range': time_range, 'chan_avg': 16, 'time_avg': time_avg,
+                              'solve_weight': solve_weight, 'logdir': logdir}
+                    _store_polconvert_params(exp, params)
+
+                    logger.info("Applying PolConvert solution to all IDI files...")
+                    try:
+                        polconvert_main(
+                            ref_idi=ref_idi, idi_files=idi_files, linear_antennas=lin_ants,
+                            ref_antenna=refant, exclude_antennas=exclude_ants, exclude_baselines=[],
+                            do_ifs=do_ifs, time_range=time_range, chan_avg=16, time_avg=time_avg,
+                            solve_weight=solve_weight, solve_amp=True,
+                            to_compute=False, to_apply=True, logdir=logdir)
+                    except Exception as e:
+                        logger.error(f"PolConvert apply failed: {e}")
+                        traceback.print_exc()
+                        return False
+
+                    exp.store()
+                    return True
+
+                logger.info("Solution quality insufficient, trying next parameters...")
+
+    logger.error("PolConvert could not reach a good solution with any parameter combination.")
+    return False
+
+
+def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
+    """Renames PolConvert output files and creates verification plots.
+
+    Moves original IDI files to idi_ori/, renames .PCONVERT files to standard
+    names, creates a verification MS from the first pass, and runs standardplots
+    on it using Jplot.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True if completed or not needed, None if user should verify plots first.
+    """
+    if not exp.antennas.polconvert:
         return True
 
     if len(glob.glob('*IDI*.PCONVERT')) == 0:
-        # Files would be expected but then let's assume the user already renamed them
         return True
 
-    idi_ori = Path(exp.cwd / 'idi_ori/')
+    cwd = Path.cwd()
+    idi_ori = cwd / 'idi_ori'
     idi_ori.mkdir(exist_ok=True)
 
-    for an_idi in Path(exp.cwd).glob('*.IDI*'):
+    for an_idi in cwd.glob('*.IDI*'):
         if '.PCONVERT' not in an_idi.name:
             an_idi.rename(idi_ori / an_idi.name)
 
-    pconverted_idi = list(Path(exp.cwd).glob('*IDI*.PCONVERT'))
+    pconverted_idi = list(cwd.glob('*IDI*.PCONVERT'))
     for an_idi in pconverted_idi:
-        # Path(an_idi.name.replace('.PCONVERT', '')).rename(idi_ori / an_idi.name)
-        an_idi.rename(an_idi.name.replace('.PCONVERT', ''))
+        an_idi.rename(cwd / an_idi.name.replace('.PCONVERT', ''))
 
-    logger.info("mkdir idi_ori")
-    logger.info("mv *IDI *IDI? *IDI?? *IDI??? *IDI???? idi_ori/")
-    logger.info("zmv '(*).PCONVERT' '$1'")
-    # Creates a new MS with the PolConverted-data in order to plot it
-    # to check if the conversion run properly
-    if any(['_1_1' in pp.name for pp in pconverted_idi]):
-        _ = utils.shell_command("idi2ms.py", ['--delete',
-                              f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
-                              ','.join([idi.name.replace('.PCONVERT', '') for idi in pconverted_idi \
-                                        if '_1_1' in idi.name])])
-        if exp.refant is not None:
-            refant = exp.refant[0] if len(exp.refant) == 1 else f"({'|'.join(exp.refant)})"
-        else:
-            for ant in ('EF', 'O8', 'YS', 'MC', 'GB', 'AT', 'PT'):
-                if (ant in exp.antennas.names) and (exp.antennas[ant].observed):
-                    refant = ant
-                    break
-            raise ValueError("Could not find a good reference antenna for standardplots. "
-                             "Please specify it manually.")
+    logger.info(f"Moved original IDI files to {idi_ori}")
+    logger.info(f"Renamed {len(pconverted_idi)} PCONVERT files to standard names")
 
-        _ = utils.shell_command("standardplots",
-                          [f"{exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')}",
-                           refant, ','.join(exp.sources_stdplot)], stdout=None,
-                           stderr=subprocess.STDOUT)
+    # Create a verification MS and run standardplots to check the conversion
+    if any('_1_1' in pp.name for pp in pconverted_idi):
+        pconv_ms = exp.correlator_passes[0].msfile.name.replace('.ms', '-pconv.ms')
+        idi_files = ','.join(idi.name.replace('.PCONVERT', '') for idi in pconverted_idi if '_1_1' in idi.name)
+        utils.shell_command("idi2ms.py", ['--delete', pconv_ms, idi_files])
 
-        for a_plot in glob.glob(f"{exp.expname.lower()}-*-pconv-cross*.ps"):
-            utils.shell_command("gv", a_plot, stdout=None, stderr=subprocess.STDOUT)
+        if not exp.refant:
+            logger.error("No reference antenna set for polconvert verification plots.")
+            return False
 
-    exp.last_step = 'post_polconvert'
-    rprint("\n\n[bold green]If PolConvert worked fine, re-run me to continue. " \
-           "Otherwise fix it manually before.[/bold green]\n")
-    return None
+        calsources = exp.sources.fringefinder
+        if not calsources:
+            logger.error("No fringe-finder sources found for polconvert verification.")
+            return False
+
+        from .plotting import Jplot
+        plotter = Jplot(ms=pconv_ms, refant=exp.refant[0], calsrc=','.join(calsources))
+        plotter.create_plot(sources=calsources, plots=['cross'])
+        logger.info("PolConvert verification plots created.")
+
+    logger.info("PolConvert post-processing complete. Verification plots created.")
+    exp.store()
+    return True
 
 
-def post_post_polconvert(exp) -> bool:
-    """When PolConvert run properly and the user continued, it checks if the standardplots from the
-    converted MS (exp-pconv.ms) exist and then rename those plots to the usual name.
+def post_post_polconvert(exp: experiment.Experiment) -> bool:
+    """Renames polconvert verification plot files to standard names.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True always (no-op if no polconvert antennas or no plots found).
     """
-    if len(exp.antennas.polconvert) == 0:
+    if not exp.antennas.polconvert:
         return True
 
-    stdplot_files = glob.glob('*-pconv*.ps')
-    if len(stdplot_files) > 0:
-        for stdplot_file in stdplot_files:
-            Path(stdplot_file).rename(stdplot_file.replace('-pconv', ''))
+    for stdplot_file in glob.glob('*-pconv*.ps'):
+        Path(stdplot_file).rename(stdplot_file.replace('-pconv', ''))
 
     return True
 
 
-def set_credentials(exp) -> bool:
+def set_credentials(exp: experiment.Experiment) -> bool:
     """Sets the credentials for the given experiment.
-    In case of an NME or test, it does not set any credential.
-    Otherwise, it will take the credentials from a .auth file if already exists,
-    or creates such file iwth a new password.
-    """
-    if (exp.expname.upper()[0] == 'N') or (exp.expname.upper()[0] == 'F'):
-        rprint(f"\n[green][bold]NOTE:[/bold] {exp.expname} is an NME or test experiment.\n"
-               "No authentification will be set.[/green]")
-    elif len(glob.glob("*_*.auth")) == 1:
-        # Some credentials are already in place.
-        exp.set_credentials(*glob.glob("*_*.auth")[0].split('.')[0].split('_'))
 
-    elif len(glob.glob("*_*.auth")) > 1:
-        raise ValueError("More than one .auth file found in the directory.")
+    For NME or test experiments (name starts with 'N' or 'F'), no credentials are set.
+    Otherwise recovers from an existing .auth file, or generates a new random password.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True if credentials were set or not needed, False on error.
+    """
+    if exp.expname.upper()[0] in ('N', 'F'):
+        logger.info(f"{exp.expname} is an NME or test experiment. No authentication set.")
+        return True
+
+    auth_files = glob.glob("*_*.auth")
+    if len(auth_files) == 1:
+        username, password = auth_files[0].split('.')[0].split('_')
+        exp.credentials = experiment.Credentials(username=username, password=password)
+        logger.info(f"Recovered credentials from {auth_files[0]}")
+    elif len(auth_files) > 1:
+        logger.error("More than one .auth file found in the directory.")
+        return False
     else:
         possible_char = string.digits + string.ascii_letters
-        exp.set_credentials(username=exp.expname.lower(),
-                            password="".join(random.sample(possible_char, 12)))
-        utils.shell_command("touch",
-                                  f"{exp.credentials.username}_{exp.credentials.password}.auth")
-        logger.info(f"touch {exp.credentials.username}_{exp.credentials.password}.auth")
+        password = "".join(random.sample(possible_char, 12))
+        exp.credentials = experiment.Credentials(username=exp.expname.lower(), password=password)
+        auth_file = Path(f"{exp.credentials.username}_{exp.credentials.password}.auth")
+        auth_file.touch()
+        logger.info(f"Created credentials: {auth_file.name}")
 
     return True
 
 
 def protect_experiment_files(exp: experiment.Experiment) -> bool:
-    """Sets the protection status for pipeline plots in the EVN Archive
-    
-    This function uses the auth_pipe.py script to set protection status for various 
-    pipeline plot types (BANDPASS, CPOL, FRING_DELAY, etc.) for the entire experiment.
-    
+    """Sets source protection in the EVN Archive using auth_pipe.py.
+
     Args:
-        exp: Experiment object containing experiment metadata
-        
+        exp: Experiment object.
+
     Returns:
-        bool: True if protection was successfully set, False otherwise
+        True if protection was set or not needed, False on error.
     """
-    if not [s.name for s in exp.sources if s.protected]:
+    protected_sources = [s.name for s in exp.sources if s.protected]
+    if not protected_sources:
         logger.info("No protection required for this experiment.")
         return True
 
     try:
-        utils.shell_command("auth_pipe.py", ["-e", exp.expname, "-s", [s.name for s in exp.sources if s.protected],
-                            "-p", "source"])
+        utils.shell_command("auth_pipe.py", ["-e", exp.expname, "-s", ','.join(protected_sources), "-p", "source"])
+        logger.info(f"Protected sources: {', '.join(protected_sources)}")
     except ValueError:
-        logger.error("Could not protect experiment files in archive")
+        logger.error("Could not protect experiment files in archive.")
         return False
 
     return True
 
 
-def has_Tsys(fitsfile):
-    """Checks if the FITS-IDI file has the SYSTEM_TEMPERATURE table.
+def has_Tsys(fitsfile) -> bool:
+    """Check if a FITS-IDI file has the SYSTEM_TEMPERATURE table.
+
+    Args:
+        fitsfile: Path to the FITS-IDI file.
+
+    Returns:
+        True if the table is present.
     """
     with fits.open(fitsfile) as hdu:
         return 'SYSTEM_TEMPERATURE' in hdu
 
 
-def has_GC(fitsfile):
-    """Checks if the FITS-IDI file has the GAIN_CURVE table.
+def has_GC(fitsfile) -> bool:
+    """Check if a FITS-IDI file has the GAIN_CURVE table.
+
+    Args:
+        fitsfile: Path to the FITS-IDI file.
+
+    Returns:
+        True if the table is present.
     """
     with fits.open(fitsfile) as hdu:
         return 'GAIN_CURVE' in hdu
 
 
-def check_consistency(fitsfile, verbose=True):
-    """Check if all FITS-IDI files associated to an experiment has the right
-    tables that they should have.
+def check_consistency(fitsfile, verbose: bool = True) -> bool:
+    """Check if a FITS-IDI file has the required Tsys and GC tables.
 
-    Arguments
-        - fitsfile : str
-            FITS-IDI file name to check. It should be the first FITS-IDI file
-            in case there are multiple (e.g. only exp_1_1.IDI1 even if there are
-            multiple *.IDIn, n > 1).
-            The rest of files would be not expected to have the tables.
+    Args:
+        fitsfile: FITS-IDI file path (str or Path). Should be the first IDI file
+            (e.g. exp_1_1.IDI1) as subsequent files are not expected to have the tables.
+        verbose: Log the check results.
 
-    Returns
-        - bool whenever everything is as expected.
+    Returns:
+        True if all expected tables are present.
     """
     if isinstance(fitsfile, str):
         fitsfile = Path(fitsfile)
@@ -931,89 +1136,95 @@ def check_consistency(fitsfile, verbose=True):
     all_good = True
     if has_Tsys(fitsfile):
         if verbose:
-            rprint(f"[green]{fitsfile} has SYSTEM_TEMPERATURE table.[/green]")
+            logger.info(f"{fitsfile} has SYSTEM_TEMPERATURE table.")
     else:
         if verbose:
-            rprint(f"[red]{fitsfile} does not have SYSTEM_TEMPERATURE table.[/red]")
-
+            logger.warning(f"{fitsfile} does not have SYSTEM_TEMPERATURE table.")
         all_good = False
 
     if has_GC(fitsfile):
         if verbose:
-            rprint("[green]Has GAIN_CURVE table.[/green]")
+            logger.info(f"{fitsfile} has GAIN_CURVE table.")
     else:
         if verbose:
-            rprint("[red]Does not have GAIN_CURVE table.[/red]")
-
+            logger.warning(f"{fitsfile} does not have GAIN_CURVE table.")
         all_good = False
 
     return all_good
 
 
 
-def append_antab(exp) -> bool:
-    """Appends the Tsys and GC information from the experiment ANTAB file into the FITS-IDI files.
-    It will also re-archive the files.
+def append_antab(exp: experiment.Experiment) -> bool:
+    """Appends Tsys and GC information from the ANTAB file into the FITS-IDI files.
 
-    If the ANTAB file is already present in the directory, it will assume that the information
-    was already appended.
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True if Tsys/GC information was appended or already present, False on error.
     """
     fits2check = glob.glob(f"{exp.expname.lower()}_*_*.IDI1") + \
                  glob.glob(f"{exp.expname.lower()}_*_*.IDI")
-    assert len(fits2check) > 0, "Could not find FITS-IDI to append Tsys/GC!"
+    if not fits2check:
+        logger.error("Could not find FITS-IDI files to append Tsys/GC.")
+        return False
 
-    if (not all([check_consistency(a_fits, verbose=False) \
-                 for a_fits in fits2check])) \
-                 or (len(glob.glob(f"{exp.expname.lower()}*.antab")) == 0):
+    if (not all(check_consistency(f, verbose=False) for f in fits2check)) \
+            or (len(glob.glob(f"{exp.expname.lower()}*.antab")) == 0):
         utils.shell_command("append_antab_idi.py", "-r", shell=True, stdout=None)
-        if not all([check_consistency(a_fits) for a_fits in fits2check]):
-            # As now everything should be OK. Means that something failed.
-            rprint("\n\n[red bold]The Tsys/GC could not be imported into the FITS-IDI.[/red bold]")
+        if not all(check_consistency(f) for f in fits2check):
+            logger.error("The Tsys/GC could not be imported into the FITS-IDI files.")
             return False
     else:
-        rprint("[green]ANTAB information already appended into the FITS-IDI files.[/green]")
+        logger.info("ANTAB information already appended into the FITS-IDI files.")
 
     return True
 
 
-def send_letters(exp) -> bool:
-    """Remembers you to update the PI letter and send it , and the pipeletter, to the PIs.
-    Finally, it runs parsePIletter.
+def send_letters(exp: experiment.Experiment) -> bool:
+    """Reminds the user to send the PI letter to the PIs.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True always.
     """
-    print("\n\n\n")
-    rprint("[center][bold red] --- Send the PI letter --- [/bold red][/center]")
-    pi = "\n"
-    if isinstance(exp.piname, list):
-        for a_piname,an_email in zip(exp.piname, exp.email):
-            pi += f"{a_piname.capitalize()}: {an_email}\n"
-    else:
-        pi += f"{exp.piname.capitalize()}: {exp.email}\n"
-
-    rprint(f"[green]Send the file [bold]{exp.expname.lower()}.piletter"
-           f"{'_auth' if exp.credentials.password is not None else ''}[/bold] to " + pi + \
-           "and CCing jops@jive.eu.[/green]")
+    has_auth = exp.credentials is not None and exp.credentials.password is not None
+    piletter_name = f"{exp.expname.lower()}.piletter{'_auth' if has_auth else ''}"
+    pi_info = "\n".join(f"  {p.name}: {p.email}" for p in exp.pi)
+    logger.info(f"--- Send the PI letter ---\nSend {piletter_name} to:\n{pi_info}\nand CC jops@jive.eu.")
     return True
 
 
-def antenna_feedback(exp) -> bool:
-    rprint("\n[center][bold red] --- Also update the database with the observed issues "
-           "--- [/bold red][/center]")
-    rprint("[bold]Now it is also time to bookkeep the issues that you may have "
-           "seen in the antennas by typing '/feedback' in Mattermost.[/bold]\n")
-    rprint("[bold]Also go to the JIVE RedMine to write down the relevant issues with "
-           "particular antennas[/bold]:")
-    rprint("https://jrm.jive.nl/projects/science-support/news\n\n")
+def antenna_feedback(exp: experiment.Experiment) -> bool:
+    """Reminds the user to report antenna issues via Mattermost and RedMine.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True always.
+    """
+    logger.info("--- Update the database with observed issues ---")
+    logger.info("Type '/feedback' in Mattermost to bookkeep antenna issues.")
+    logger.info("Also update JIVE RedMine: https://jrm.jive.nl/projects/science-support/news")
     return True
 
 
-def nme_report(exp) -> bool:
-    if exp.expname[0] == 'N':
-        # This is a NME.
-        rprint("[center][bold red]Now it is time to write the NME Report..."
-               "Good luck![/bold red][/center]")
+def nme_report(exp: experiment.Experiment) -> bool:
+    """Reminds the user to write the NME report if applicable.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True always.
+    """
+    if exp.expname[0].upper() == 'N':
+        logger.info("This is an NME — time to write the NME Report.")
     else:
-        rprint("[center][bold]Experiment done![/bold][/center]\n")
-        print("You may have a coffee/tea after finishing the last tasks!")
+        logger.info(f"Experiment {exp.expname} done.")
 
     return True
 

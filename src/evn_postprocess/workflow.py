@@ -7,6 +7,7 @@ import sys
 import json
 import glob
 import shutil
+import traceback
 from datetime import datetime as dt
 from pathlib import Path
 from typing import Callable
@@ -203,6 +204,7 @@ def retrieve_lisfiles(exp: experiment.Experiment) -> bool:
         return True
     except Exception as e:
         logger.error(f"Unexpected error retrieving .lis files: {e}")
+        traceback.print_exc()
         return False
 
 
@@ -233,6 +235,7 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
         return True
     except Exception as e:
         logger.error(f"Unexpected error checking .lis files: {e}")
+        traceback.print_exc()
         return False
 
 
@@ -269,6 +272,7 @@ def create_msfile(exp: experiment.Experiment) -> bool:
         return process.get_metadata_from_ms(exp)
     except Exception as e:
         logger.error(f"Unexpected error creating MS files: {e}")
+        traceback.print_exc()
         return False
 
 
@@ -308,7 +312,7 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
     # if not gui.show_scan_overview(exp):
     #     logger.info("User cancelled after scan overview.")
     #     return False
-    return process.standardplots(exp, do_weights=do_weights) & process.open_standardplot_files(exp)
+    return process.standardplots(exp, do_weights=do_weights)
 
 
 def msops(exp: experiment.Experiment) -> bool:
@@ -330,33 +334,33 @@ def msops(exp: experiment.Experiment) -> bool:
         return False
     
     exp.store()
-    return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) & process.tconvert(exp)
+    return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) \
+        & process.print_exp(exp, False) & process.tconvert(exp)
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
-    """Handles PolConvert if needed.
+    """Runs PolConvert automatically with iterative parameter tuning.
+
+    Calls process.polconvert() which finds the best scan, iterates over
+    parameter combinations, checks quality, and applies the solution.
+    Then renames output files via post_polconvert/post_post_polconvert.
 
     Args:
         exp (experiment.Experiment): Experiment object.
 
     Returns:
-        bool: True if PolConvert completed successfully, False if manual intervention needed.
+        bool: True if PolConvert completed successfully, False on failure.
     """
     if not exp.antennas.polconvert:
         logger.debug("No antennas require PolConvert. Skipping.")
         return True
 
-    if all(len(glob.glob(f"{p.fitsidifile}*")) > 0 for p in exp.correlator_passes) and Path('ori_idi').exists():
-        logger.debug("FITS IDI files already exist. Skipping creation.")
-        return True
+    if not process.polconvert(exp):
+        logger.error("PolConvert could not reach a good solution. Try running it manually.")
+        return False
 
-    process.prepare_polconvert(exp)
-    while (result := process.polconvert(exp)) is None:
-        rprint("[bold]Running PolConvert[/bold]")
-
-    if not result:
-        rprint("[red]PolConvert doesn't look to have reached a good solution. Try to run it manually[/red]")
-        sys.exit(1)
+    if not process.post_polconvert(exp):
+        return False
 
     return process.post_post_polconvert(exp)
 
@@ -614,6 +618,7 @@ def run_isolated_task(task_name: str, expname: str | None = None):
         return result
     except Exception as e:
         logger.error(f"Error running command '{task_name}': {e}")
+        traceback.print_exc()
         sys.exit(1)
 
 
@@ -664,8 +669,8 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
                    format="time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
                           "{module}:{function}:{line} | {message}" if debug else "{level: <8} | {message}")
         
-        logger.add(sys.stdout, colorize=True, level="DEBUG" if debug else "INFO",
-                   format=lambda record: "{level}: {message}\n" if record["level"].no >= 40 else "{message}\n")
+        logger.add(sys.stdout, colorize=True, level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
+                   format=lambda record: "{level}: {message}\n{exception}" if record["level"].no >= 40 else "{message}\n")
     except (OSError, PermissionError) as e:
         rprint(f"[yellow]Warning: Could not create debug log file: {e}[/yellow]")
 
@@ -718,8 +723,7 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
         return True
 
     for step in steps_to_run:
-        logger.info(f"Running step: {step.name}")
-        rprint(f"\n[bold]>> Step: {step.name}[/bold]  –  {step.doc}")
+        logger.info(f"<bold> -- {step.name}</bold>")
         try:
             if step.command not in globals():
                 logger.error(f"Command '{step.command}' not found for step '{step.name}'")
@@ -727,7 +731,6 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
 
             if not globals()[step.command](exp):
                 logger.error(f"Step {step.name} failed.")
-                rprint(f"[red]Step {step.name} failed. Check logs for details.[/red]")
                 return False
 
             step.done = True
@@ -735,8 +738,8 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
             logger.info(f"Step {step.name} completed successfully")
         except Exception as e:
             logger.error(f"Unexpected error in step {step.name}: {e}")
-            rprint(f"[red]Unexpected error in step {step.name}: {e}[/red]")
+            traceback.print_exc()
             return False
 
-    rprint(f"[italic green]The processing of {exp.expname} seems to have finalized properly.[/italic green]")
+    logger.info(f"The processing of {exp.expname} seems to have finalized properly.")
     return True

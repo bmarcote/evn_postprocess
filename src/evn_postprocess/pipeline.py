@@ -8,6 +8,7 @@ import os
 import glob
 import shutil
 import subprocess
+import traceback
 from importlib import resources
 from loguru import logger
 from pathlib import Path
@@ -188,7 +189,7 @@ def create_input_file(exp) -> bool:
             shutil.copy(f"{exp.expname.lower()}.uvflg", f"{exp.expname.lower()}_{p}.uvflg")
 
     # Copy and modify the pipeline input template
-    template_path = resources.files(__name__).joinpath("templates/pipeline.inp.txt.template")
+    template_path = resources.files("evn_postprocess.templates").joinpath("pipeline.inp.txt.template")
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
     
     for i, apass in enumerate(pipepasses, 1):
@@ -263,18 +264,21 @@ def run_pipeline(exp) -> bool:
                         future.result()
                     except Exception as e:
                         logger.error(f"Pipeline pass {i+1} failed: {e}")
+                        traceback.print_exc()
                         return False
         else:
             try:
                 utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=subprocess.PIPE)
             except Exception as e:
                 logger.error(f"Pipeline execution failed: {e}")
+                traceback.print_exc()
                 return False
 
         os.chdir(original_cwd)
         return True
     except Exception as e:
         logger.error(f"Unexpected error running pipeline: {e}")
+        traceback.print_exc()
         try:
             os.chdir(original_cwd)
         except OSError:
@@ -326,6 +330,7 @@ def comment_tasav_files(exp) -> bool:
                         utils.shell_command("comment_tasav_file.py", [f"{exp.expname.lower()}_{p}"], stdout=None)
                 except Exception as e:
                     logger.error(f"Error creating comment/tasav files for pass {p}: {e}")
+                    traceback.print_exc()
                     return False
         else:
             if not exp.correlator_passes or not exp.correlator_passes[0].freqsetup:
@@ -339,12 +344,14 @@ def comment_tasav_files(exp) -> bool:
                     utils.shell_command("comment_tasav_file.py", [exp.expname.lower()], stdout=None)
             except Exception as e:
                 logger.error(f"Error creating comment/tasav files: {e}")
+                traceback.print_exc()
                 return False
 
         os.chdir(original_cwd)
         return True
     except Exception as e:
         logger.error(f"Unexpected error creating comment/tasav files: {e}")
+        traceback.print_exc()
         try:
             os.chdir(original_cwd)
         except OSError:
