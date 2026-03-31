@@ -83,12 +83,12 @@ def retrieve_servers() -> Servers:
     Raises:
         FileNotFoundError: If the computers.toml file cannot be found.
     """
-    if (configpath := (Path(os.getenv('XDG_CONFIG_HOME', Path.home())) / 'evn_postproc')).exists():
+    if (configpath := (Path(os.getenv('XDG_CONFIG_HOME', Path.home())) / 'evn')).exists():
         pass
-    elif (configpath := (Path(os.path.expanduser('~jops')) / '.config/evn_postproc')).exists():
+    elif (configpath := (Path(os.path.expanduser('~jops')) / '.config/evn')).exists():
         pass
     else:
-        raise FileNotFoundError("No such file or directory: .config/evn_postproc/computers.toml neither "
+        raise FileNotFoundError("No such file or directory: .config/evn/computers.toml neither "
                                 "in local user nor jops")
 
     with open(configpath / 'computers.toml', 'rb') as f:

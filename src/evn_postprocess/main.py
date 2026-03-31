@@ -8,6 +8,7 @@ import glob
 import argparse
 from loguru import logger
 from rich import print as rprint
+from rich.console import Console
 from rich_argparse import RawTextRichHelpFormatter
 from pathlib import Path
 from importlib.metadata import version
@@ -68,8 +69,6 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
             - [bold green]post_polconvert[/bold green] : if polConvert did run, then this steps
                                                          renames the new *.PCONVERT files and do
                                                          standardplots on them.
-            - [bold green]archive[/bold green] : Sets the credentials for the experiment,
-                                                 create the pipe letter and archive all the data.
             - [bold green]antab[/bold green] : Retrieves the .antab file to be used in the pipeline.
                                                If it was not generated, Opens antab_editor.py.
                 Needs to run again once you have run antab_editor.py manually.
@@ -78,9 +77,11 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
             - [bold green]pipeline[/bold green] : Runs the EVN Pipeline for all correlated passes.
             - [bold green]postpipe[/bold green] : Runs all steps to be done after the pipeline:
                                                   creates tasav, comment files, feedback.pl
-            - [bold green]last[/bold green] : Appends Tsys/GC and re-archive FITS-IDI and
+            - [bold green]prearchive[/bold green] : Appends Tsys/GC and re-archive FITS-IDI and
                                               the PI letter. Asks to conduct the
                                               last post-processing steps.
+            - [bold green]archive[/bold green] : Sets the credentials for the experiment,
+                                                 create the pipe letter and archive all the data.
 """
 help_edit = """[bold]Edit some of the parameters related to the experiment[/bold].
 
@@ -210,10 +211,6 @@ def main():
                         help='Debug mode: shows a more verbose output')
     # parser.add_argument('--j2ms2par', type=str, default=None,
     #                     help='Additional attributes for j2ms2 (like the fo:XXXXX).')
-    parser.add_argument('-s', '--steps', type=str, nargs='+', default=None,
-                        help='Run from a specific step (and optionally to another step).\n'
-                        'If one step is given, runs from that step to the end.\n'
-                        'If two steps are given, runs from the first to the second (inclusive).')
     parser.add_argument('--refant', type=str, nargs='+', default=None,
                         help='Reference antenna(s) to use (space-separated two-letter codes).\n'
                         'Overrides the auto-selected reference antenna after loading the experiment.')
@@ -230,6 +227,11 @@ def main():
     _ = subparsers.add_parser('last', help='Shows the different steps to be run and which ones have been run.',
                               description=help_last,
                               formatter_class=parser.formatter_class)
+    parser_run = subparsers.add_parser('run', help='Runs the post-processing from a given step.',
+                                       description=help_run, formatter_class=parser.formatter_class)
+    parser_run.add_argument('steps', type=str, nargs='*', default=[],
+                            help='Optional step range: [STEP1 [STEP2]]. '
+                            'Runs from STEP1 to end, or from STEP1 to STEP2 (inclusive).')
     help_exec = workflow.build_exec_help()
     parser_exec = subparsers.add_parser('exec', help='Runs a single command from the post-processing workflow.',
                                         description=help_exec, formatter_class=parser.formatter_class)
@@ -243,9 +245,17 @@ def main():
                              help='Value(s) to set. If omitted, lists available options.')
     args = parser.parse_args()
 
+    _con = Console(stderr=False, highlight=False)
+    _err_con = Console(stderr=True, highlight=False)
+    def _initial_sink(message):
+        record = message.record
+        if record["level"].no >= 40:
+            _err_con.print(f"[bold red]{record['level'].name}[/bold red]: {record['message']}")
+        else:
+            _con.print(record["message"])
+
     logger.remove()
-    logger.add(sys.stdout, colorize=True, level="DEBUG" if args.debug else "INFO",
-               format=lambda record: "{level}: {message}\n" if record["level"].no >= 40 else "{message}\n")
+    logger.add(_initial_sink, level="DEBUG" if args.debug else "INFO", colorize=False)
     try:
         expname = args.expname.upper() if args.expname else experiment.retrieve_expname()
     except (ValueError, FileNotFoundError) as e:
@@ -261,7 +271,7 @@ def main():
         rprint("[red]Please check the server configuration or specify a directory with -d/--dir[/red]")
         sys.exit(1)
 
-    if (not args.subpar) or (args.subpar == 'info'):
+    if (not args.subpar) or (args.subpar in ('info', 'run')):
         try:
             cwd.mkdir(exist_ok=True)
             os.chdir(cwd)
@@ -304,11 +314,11 @@ def main():
             _apply_refant(exp, args.refant)
             exp.store()
 
-        if not args.subpar:
+        if not args.subpar or args.subpar == 'run':
             from_step, to_step = None, None
-            if args.steps:
+            if args.subpar == 'run' and args.steps:
                 if len(args.steps) > 2:
-                    rprint("[red]Error: --steps accepts at most two step names.[/red]")
+                    rprint("[red]Error: 'run' accepts at most two step names.[/red]")
                     sys.exit(1)
                 from_step = args.steps[0]
                 to_step = args.steps[1] if len(args.steps) == 2 else None
@@ -317,7 +327,7 @@ def main():
                     rprint(f"[red]Error: {error_msg}[/red]")
                     sys.exit(1)
             workflow.run_workflow(exp, args.no_archive, debug=args.debug, from_step=from_step, to_step=to_step)
-        else:  # elif args.subpar == 'info':
+        else:  # args.subpar == 'info'
             exp.print_blessed(outputfile=None)
     elif args.subpar == 'list' or args.subpar == 'last':
         try:

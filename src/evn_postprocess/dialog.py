@@ -1,8 +1,13 @@
 import abc
 import sys
 from rich import print as rprint
+from rich.panel import Panel
+from rich.console import Console
+from loguru import logger
 from . import experiment
 from . import utils
+
+_console = Console()
 
 class Dialog(object, metaclass=abc.ABCMeta):
     """Abstract class that implements the basic functionality for any
@@ -32,31 +37,46 @@ class Dialog(object, metaclass=abc.ABCMeta):
 
 class Terminal(Dialog):
 
-    def ask_for_antennas(self, exp, asking_text):
+    def _styled_input(self, label: str, hint: str = "") -> str:
+        """Prints a Rich-styled prompt label, then reads raw input on the next line.
+
+        Args:
+            label: Bold prompt text (Rich markup allowed).
+            hint: Optional dim hint shown below the label.
+
+        Returns:
+            The stripped user input string.
+        """
+        rprint(f"\n  [bold cyan]{label}[/bold cyan]")
+        if hint:
+            rprint(f"  [dim]{hint}[/dim]")
+        return input("  > ").strip()
+
+    def ask_for_antennas(self, exp, label: str, hint: str = ""):
         """Asks for a list of antennas and parses them.
         It verifies that all introduced antennas are included in the experiment.
-        
+
         Args:
             exp (experiment.Experiment): Experiment object containing valid antenna names.
-            asking_text (str): Text prompt to display to the user.
-        
+            label (str): Bold prompt text (Rich markup allowed).
+            hint (str): Optional dim hint shown below the label.
+
         Returns:
             list[str]: List of antenna names provided by the user, or empty list if none specified.
         """
         antennas = []
         while True:
             try:
-                output = input(asking_text).replace('\n', '')
+                output = self._styled_input(label, hint).replace('\n', '')
                 if output != '':
-                    antennas = [ant.strip().capitalize() for ant in \
-                                output.split(',' if ',' in output else ' ')]
+                    antennas = [ant.strip().capitalize() for ant in output.split(',' if ',' in output else ' ')]
                     for antenna in antennas:
                         if antenna not in exp.antennas.names:
                             raise ValueError(f"Antenna {antenna} not recognized (not included "
                                              f"in {', '.join(exp.antennas.names)})")
                 break
             except ValueError as e:
-                rprint(f"[bold red]ValueError:[/bold red] [red]{e}[/red]")
+                rprint(f"  [bold red]ValueError:[/bold red] [red]{e}[/red]")
                 continue
             except KeyboardInterrupt:
                 rprint('\n[bold red]Pipeline aborted![/bold red]')
@@ -88,40 +108,46 @@ class Terminal(Dialog):
             if (total_data := sum(ant.weights)) > 0:
                 if ((ant.weights[0] + ant.weights[6]) / total_data) < 0.95 or (ant.weights[6] == 0):
                     low_weight_antennas.append(ant.name)
-    
-        rprint("\n\n\n[bold]Please answer to the following questions:[/bold]\n")
+
+        ant_list = ', '.join(exp.antennas.names)
+        _console.print(Panel("[bold]Review the standard plots and answer the following questions.[/bold]\n"
+                             f"Available antennas: [cyan]{ant_list}[/cyan]",
+                             title="[bold yellow]MS Operations[/bold yellow]", border_style="yellow", padding=(1, 2)))
 
         if low_weight_antennas:
-            rprint("[bold yellow]Check weight plots[/bold yellow]"
-                   f"[yellow]The antennas {', '.join(low_weight_antennas)} show unexpectedly low weights.[/yellow]\n")
+            rprint(f"  [bold yellow]Warning:[/bold yellow] [yellow]{', '.join(low_weight_antennas)} "
+                   "show unexpectedly low weights — check the weight plots.[/yellow]")
             while True:
                 try:
-                    threshold = float(input("\n\033[1mThreshold for flagging weights in the MS:\n>\033[0m "))
+                    threshold = float(self._styled_input("Threshold for flagging weights in the MS",
+                                                        "Float between 0.0 and 1.0"))
                     if 0.0 < threshold < 1.0:
                         break
                     else:
-                        rprint("[red]The threshold needs to be a value within [0.0, 1.0)[/red].")
+                        rprint("  [red]The threshold needs to be a value within (0.0, 1.0).[/red]")
                 except ValueError:
-                    rprint('[bold red]ValueError:[/bold red] [red]could not convert input to float (for threshold).[/red]')
+                    rprint('  [bold red]ValueError:[/bold red] [red]Could not convert input to float.[/red]')
                     continue
         else:
-            rprint("Weight threshold automatically set to 0.9 in view of the weights in the data.")
+            rprint("  [dim]Weight threshold automatically set to 0.9 (weights look fine).[/dim]")
             threshold = 0.9
 
-        polswap = self.ask_for_antennas(exp, "\n\033[1mAntennas for polswap (comma or " \
-                                        "Fspace separated)\n\033[0m(possible antennas are: "
-                                             f"{', '.join(exp.antennas.names)})\n\033[1m>\033[0m ")
+        polswap = self.ask_for_antennas(exp, "Antennas for polswap", "Comma or space separated, leave empty if none")
         if utils.station_1bit_in_vix(exp.vixfile):
-            onebit = self.ask_for_antennas(exp, "\n\033[1mAntennas that recorded one-bit " \
-                                                "data:\n> \033[0m")
+            onebit = self.ask_for_antennas(exp, "Antennas that recorded one-bit data")
         else:
             onebit = []
 
-        polconvert = self.ask_for_antennas(exp, "\n\033[1mAntennas that requires PolConvert" \
-                                                ":\n> \033[0m")
+        polconvert = self.ask_for_antennas(exp, "Antennas that require PolConvert",
+                                           "Linear-pol antennas to convert, leave empty if none")
 
         for i in range(len(exp.correlator_passes)):
-            exp.correlator_passes[i].flagged_weights = experiment.FlagWeight(threshold, -1)
+            existing = exp.correlator_passes[i].flagged_weights
+            if existing and existing.threshold == threshold and existing.percentage >= 0:
+                logger.info(f"flag_weights threshold unchanged ({threshold}) for "
+                            f"{exp.correlator_passes[i].msfile.name}, keeping previous result.")
+            else:
+                exp.correlator_passes[i].flagged_weights = experiment.FlagWeight(threshold, -1)
 
         for antenna in polswap:
             exp.antennas[antenna].polswap = True
