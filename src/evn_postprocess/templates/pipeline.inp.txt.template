@@ -1,6 +1,6 @@
 # -----------------------------------------------
 # required parameters
-version=31DEC21
+version=31DEC25
 # tmask is a range of steps to be carried out. tmask=1 will run the whole
 # pipeline.
 tmask = 1

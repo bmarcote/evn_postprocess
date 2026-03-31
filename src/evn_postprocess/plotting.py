@@ -13,6 +13,7 @@ import threading
 from operator import methodcaller
 from functools import reduce, partial
 from pathlib import Path
+from rich import print as rprint
 from typing import List, Optional, Generator
 from loguru import logger
 import numpy as np
@@ -495,7 +496,6 @@ class Jplot:
                     todo.append(self.anp_chan_cross_plot(refant, scanno))
                 if 'auto' in plots:
                     todo.append(self.amp_chan_auto_plot(scanno))
-                    todo.append(self.amp_time_auto_plot(scanno))
 
             # --- amplitude/phase vs time (full observation, not per-scan) ---
             if 'time' in plots:
@@ -879,31 +879,52 @@ async function loadPlots() {
 function populateSelectors() {
   const typeSet = new Set();
   const scanSet = new Set();
+  const typeHasScans = {};  // type -> boolean: true if any file of that type contains a scan number
   plotFiles.forEach(f => {
-    const m = f.match(/-(weight|auto|cross|ampphase|amptime)/);
-    if (m) typeSet.add(m[1]);
+    const m = f.match(/-(weight|auto|cross|ampphase)/);
+    if (m) {
+      typeSet.add(m[1]);
+      const hasScan = /-scan\d+/.test(f);
+      if (hasScan) typeHasScans[m[1]] = true;
+      if (!(m[1] in typeHasScans)) typeHasScans[m[1]] = typeHasScans[m[1]] || false;
+    }
     const sm = f.match(/-scan(\d+)/);
     if (sm) scanSet.add(sm[1]);
   });
   const selType = document.getElementById('sel-type');
-  // Map internal names to user-friendly labels
   const labels = {weight:'Weight', auto:'Auto-correlation (amp/chan)', cross:'Cross-correlation (anp/chan)',
-                  ampphase:'Amp+Phase vs time', amptime:'Auto amp vs time'};
+                  ampphase:'Amp+Phase vs time'};
   typeSet.forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = labels[t]||t; selType.appendChild(o); });
   const selScan = document.getElementById('sel-scan');
   [...scanSet].sort((a,b)=>+a - +b).forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = `Scan ${s}`; selScan.appendChild(o); });
-  selType.addEventListener('change', updatePlot);
+  selType.addEventListener('change', onTypeChange);
   selScan.addEventListener('change', updatePlot);
+  window._typeHasScans = typeHasScans;
+}
+
+function onTypeChange() {
+  const ptype = document.getElementById('sel-type').value;
+  const selScan = document.getElementById('sel-scan');
+  if (!ptype) { selScan.disabled = false; selScan.value = ''; updatePlot(); return; }
+  const hasScans = window._typeHasScans[ptype];
+  if (!hasScans) {
+    selScan.value = '';
+    selScan.disabled = true;
+  } else {
+    selScan.disabled = false;
+  }
+  updatePlot();
 }
 
 function updatePlot() {
   const ptype = document.getElementById('sel-type').value;
-  const pscan = document.getElementById('sel-scan').value;
+  const selScan = document.getElementById('sel-scan');
+  const pscan = selScan.value;
   if (!ptype) { document.getElementById('plot-area').innerHTML = '<p id="plot-placeholder">Select a plot type above to view.</p>'; return; }
+  const hasScans = window._typeHasScans[ptype];
   const matches = plotFiles.filter(f => {
     if (!f.includes('-' + ptype)) return false;
-    if (pscan && !f.includes('-scan' + pscan)) return false;
-    if (!pscan && f.match(/-scan\d+/) && (ptype === 'weight' || ptype === 'ampphase')) return false;
+    if (hasScans && pscan && !f.includes('-scan' + pscan)) return false;
     return true;
   });
   if (!matches.length) {
@@ -1095,12 +1116,13 @@ def serve_dashboard(exp, plots_dir: Path) -> None:
 
     server = http.server.HTTPServer(("0.0.0.0", port), _DashboardHandler)
     url = f"http://localhost:{port}"
-    print(f"\n{'=' * 60}")
-    print(f"  EVN Dashboard for {exp.expname} running at:")
-    print(f"  {url}")
-    print(f"{'=' * 60}")
-    print("  Press Ctrl+C to stop the server.\n")
-    logger.info(f"Dashboard server started at {url}")
+    rprint(f"[green]\n{'=' * 60}[/green]")
+    rprint(f"[green]  EVN Dashboard for {exp.expname} running at:[/green]")
+    rprint(f"[bold green]  {url}[/bold green]")
+    rprint("[bold green]Create a tunnel to open it in your browser with "
+           f"'ssh -L {port}:localhost:{port} <user>@<eee2>'[/bold green]")
+    rprint("[green]  Press Ctrl+C to stop the server.\n[/green]")
+    rprint(f"[green]{'=' * 60}[/green]")
 
     # Handle Ctrl+C gracefully
     original_sigint = signal.getsignal(signal.SIGINT)

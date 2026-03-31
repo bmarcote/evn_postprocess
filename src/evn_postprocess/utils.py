@@ -7,6 +7,37 @@ from rich import print as rprint
 from loguru import logger
 import astropy.units as u
 
+def notify(title: str, body: str = "") -> None:
+    """Send a desktop notification via terminal escape sequences.
+
+    Works over SSH by writing escape sequences that the local terminal emulator
+    interprets. Supports iTerm2 (OSC 9), VTE-based terminals (OSC 777), and
+    a BEL fallback for any terminal that maps bell to a notification.
+    Automatically wraps sequences in a DCS passthrough when running inside tmux.
+
+    Args:
+        title: Short notification title (e.g. "EVN Post-Processing").
+        body: Longer notification body text. If empty, only the title is shown.
+    """
+    msg = f"{title}: {body}" if body else title
+
+    # OSC 9  — iTerm2, Windows Terminal
+    osc9 = f"\033]9;{msg}\a"
+    # OSC 777 — VTE-based terminals (GNOME Terminal, Tilix, etc.)
+    osc777 = f"\033]777;notify;{title};{body}\a"
+
+    in_tmux = "TMUX" in os.environ
+
+    for seq in (osc9, osc777):
+        if in_tmux:
+            # DCS passthrough: \ePtmux;\e<sequence>\e\\
+            seq = f"\033Ptmux;\033{seq}\033\\"
+        sys.stderr.write(seq)
+
+    sys.stderr.write("\a")  # BEL fallback
+    sys.stderr.flush()
+
+
 def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = None, **kwargs) -> bool:
     """Does a scp from originpath to destpath. If the process returns an error,
     then it raises ValueError.
@@ -22,12 +53,12 @@ def scp(originpath: str, destpath: str, timeout: Optional[Union[float,int]] = No
     Raises:
         ValueError: If the scp command returns a non-zero exit code.
     """
-    rprint(f"[bold]> scp {originpath} {destpath}[/bold]")
+    # rprint(f"[bold]> scp {originpath} {destpath}[/bold]")
     # CHANGED FOR THE JEX CALL. LIKELY PUT THIS BACK AND RUN DIRECTLY .RUN IN JEXP
     #for key, value in zip(('shell', 'stdout', 'stderr'), (False, None, subprocess.PIPE)):
     #    if key not in kwargs:
     #        kwargs[key] = value
-    logger.info(f"scp {originpath} {destpath}")
+    logger.info(f"[bold]> scp {originpath} {destpath}[/bold]")
     process = subprocess.run(["scp", originpath, destpath], timeout=timeout, **kwargs)
     if process.returncode != 0:
         raise ValueError(f"ERROR: could not retrieve {destpath} from {originpath}.")
@@ -53,7 +84,7 @@ def ssh(computer: str, commands: str, shell: bool = False, stdout: Optional[int]
     Raises:
         ValueError: If the ssh command returns a non-zero exit code.
     """
-    logger.info(f"> ssh {computer} {commands}")
+    logger.info(f"[bold]> ssh {computer} {commands}[/bold]")
     process = subprocess.Popen(["ssh", computer, commands], shell=shell, stdout=stdout,
                                stderr=stderr)
     if (process.returncode != 0) and (process.returncode is not None):
@@ -88,7 +119,7 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
     else:
         full_shell_command = [command] if parameters is None else [command, parameters]
 
-    logger.info(f"> {' '.join(full_shell_command)}")
+    logger.info(f"[bold]> {' '.join(full_shell_command)}[/bold]")
     process = subprocess.Popen(' '.join(full_shell_command), shell=shell,
                                stdout=stdout, stderr=stderr, bufsize=bufsize)
     output_lines = []
