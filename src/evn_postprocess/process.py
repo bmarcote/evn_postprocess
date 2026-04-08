@@ -28,7 +28,8 @@ from concurrent.futures import ThreadPoolExecutor
 from itertools import product
 from . import experiment, utils, mstools
 from .plotting import convert_ps_to_png, serve_dashboard
-from .scripts.polconvert import main as polconvert_main
+# polconvert_main kept for future use once version compatibility is resolved.
+# from .scripts.polconvert import main as polconvert_main
 from evn_support import find_idi_with_time as find_idi_mod
 
 
@@ -860,34 +861,50 @@ def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
     return True
 
 
-def _store_polconvert_params(exp: experiment.Experiment, params: dict,
-                             output_file: Path = Path('polconvert_inputs.toml')) -> None:
-    """Store the successful polconvert parameters to a TOML file for reference.
+def _write_polconvert_template(exp: experiment.Experiment, ref_idi: str, lin_ants: list, refant: str,
+                               exclude_ants: list, do_ifs: list, time_range: list, chan_avg: int,
+                               time_avg: int, solve_weight: float, logdir: str,
+                               output_file: Path = Path('polconvert_inputs.toml')) -> Path:
+    """Write the PolConvert input TOML file from the template with the given parameters.
+
+    Values are formatted as valid TOML: strings are single-quoted, lists use TOML array syntax.
+    The written file can be passed directly to 'polconvert.py <file> --compute' or '--apply'.
 
     Args:
-        exp: Experiment object.
-        params: Dict with the successful polconvert.main() arguments.
-        output_file: Path for the output TOML file.
+        exp: Experiment object (used for expname in the idi_files wildcard).
+        ref_idi: Resolved FITS-IDI filename containing the fringe-finder scan.
+        lin_ants: Antenna names observing linear polarization.
+        refant: Reference antenna name.
+        exclude_ants: Antennas to exclude during computation.
+        do_ifs: IF numbers to process (1-indexed, AIPS convention).
+        time_range: AIPS-format time range (8-element int list).
+        chan_avg: Channel averaging for bandpass solution.
+        time_avg: Time averaging in seconds.
+        solve_weight: Weight of circular antennas relative to linear ones in the solve.
+        logdir: Directory for PolConvert log files.
+        output_file: Path to write the TOML file.
+
+    Returns:
+        Path to the written TOML file.
     """
     template_path = Path(__file__).parent / 'templates' / 'polconvert_inputs.toml.template'
     template = template_path.read_text()
-    
     content = template.format(
-        ref_idi=params['ref_idi'],
         expname=exp.expname.lower(),
-        linants=', '.join(repr(a) for a in params['linear_antennas']),
-        refant=params['ref_antenna'],
-        exclude_ants=', '.join(repr(a) for a in params['exclude_antennas']),
-        exclude_baselines=params['exclude_baselines'],
-        do_if=params['do_ifs'],
-        time_range=params['time_range'],
-        chanavg=params['chan_avg'],
-        timeavg=params['time_avg'],
-        solve_weight=params['solve_weight'],
-        logdir=params['logdir'],
+        ref_idi=ref_idi,
+        linants=str([a.upper() for a in lin_ants]),
+        refant=repr(refant.upper()),
+        exclude_ants=str([a.upper() for a in exclude_ants]),
+        do_if=str(do_ifs),
+        time_range=str(time_range),
+        chanavg=chan_avg,
+        timeavg=time_avg,
+        solve_weight=solve_weight,
+        logdir=repr(logdir),
     )
     output_file.write_text(content)
-    logger.info(f"Stored successful parameters to {output_file}")
+    logger.info(f"Written PolConvert input file to {output_file}")
+    return output_file
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
@@ -968,36 +985,24 @@ def polconvert(exp: experiment.Experiment) -> bool:
                 for time_avg in time_avgs:
                     logger.info(f"PolConvert attempt: solve_weight={solve_weight}, time_avg={time_avg}, "
                                 f"trim=({trim_start},{trim_end})min")
-                    try:
-                        polconvert_main(ref_idi=ref_idi, idi_files=idi_files, linear_antennas=[l.upper() for l in lin_ants],
-                            ref_antenna=[l.upper() for l in refant], exclude_antennas=[l.upper() for l in exclude_ants], exclude_baselines=[],
-                            do_ifs=do_ifs, time_range=time_range, chan_avg=16, time_avg=time_avg,
-                            solve_weight=solve_weight, solve_amp=True,
-                            to_compute=True, to_apply=False, logdir=logdir)
-                    except Exception as e:
-                        logger.warning(f"PolConvert compute failed: {e}")
-                        traceback.print_exc()
+                    template_file = _write_polconvert_template(
+                        exp, ref_idi, lin_ants, refant, exclude_ants, do_ifs,
+                        time_range, 16, time_avg, solve_weight, logdir)
+                    result = subprocess.run(['polconvert.py', str(template_file), '--compute'],
+                                           capture_output=True, text=True)
+                    if result.returncode != 0:
+                        logger.warning(f"PolConvert compute failed (rc={result.returncode}): {result.stderr}")
                         return False
 
                     if _check_fringe_peaks(logdir):
-                        logger.info(f"PolConvert solution quality check passed using scan {scan.scanno}!")
-                        params = {'ref_idi': ref_idi, 'linear_antennas': lin_ants, 'ref_antenna': refant,
-                                  'exclude_antennas': exclude_ants, 'exclude_baselines': [], 'do_ifs': do_ifs,
-                                  'time_range': time_range, 'chan_avg': 16, 'time_avg': time_avg,
-                                  'solve_weight': solve_weight, 'logdir': logdir}
-                        _store_polconvert_params(exp, params)
+                        logger.info(f"PolConvert solution quality check passed using scan {scan.scanno}! "
+                                    f"Parameters stored in {template_file}.")
 
                         logger.info("Applying PolConvert solution to all IDI files...")
-                        try:
-                            polconvert_main(
-                                ref_idi=ref_idi, idi_files=idi_files, linear_antennas=lin_ants,
-                                ref_antenna=refant, exclude_antennas=exclude_ants, exclude_baselines=[],
-                                do_ifs=do_ifs, time_range=time_range, chan_avg=16, time_avg=time_avg,
-                                solve_weight=solve_weight, solve_amp=True,
-                                to_compute=False, to_apply=True, logdir=logdir)
-                        except Exception as e:
-                            logger.error(f"PolConvert apply failed: {e}")
-                            traceback.print_exc()
+                        result = subprocess.run(['polconvert.py', str(template_file), '--apply'],
+                                               capture_output=True, text=True)
+                        if result.returncode != 0:
+                            logger.error(f"PolConvert apply failed (rc={result.returncode}): {result.stderr}")
                             return False
 
                         exp.store()
