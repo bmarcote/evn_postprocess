@@ -8,7 +8,7 @@
 # FITS IDI file containing the fringe-finder scan used to compute the pol conversion.
 # It can contain wildcards if you do not know which exact FITS-IDI contains the specified time range
 # Then it will search for the given time.
-ref_idi = '{expname}_1_1.IDI*'
+ref_idi = '{ref_idi}*'
 
 # Either a list with all FITS-IDI files to be converted, or a string with wildcards covering all of them.
 idi_files = '{expname}_*_1.IDI*'
