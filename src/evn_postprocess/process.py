@@ -678,6 +678,8 @@ def tconvert(exp: experiment.Experiment) -> bool:
     Returns:
         True if all passes converted successfully.
     """
+    # tConvert_bin = 'tConvert'
+    tConvert_bin = '/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert'
     for a_pass in exp.correlator_passes:
         if len(glob.glob(f"{a_pass.fitsidifile}*")) > 0:
             continue
@@ -687,16 +689,16 @@ def tconvert(exp: experiment.Experiment) -> bool:
                                                   capture_output=True).stdout.decode().split()[0])
 
         if idi_size < 20*u.Gb:
-            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
+            utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
                                 stdout=None, stderr=subprocess.STDOUT)
         elif idi_size < 4*u.Tb:
-            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=8GB"],
+            utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o", "chunk_size=8GB"],
                                 stdout=None, stderr=subprocess.STDOUT)
         else:
             if utils.space_available(Path.cwd()) <= 1.1*idi_size:
                 raise IOError("Not enough disk space to create the FITS-IDI files.")
 
-            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o",
+            utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o",
                                 f"chunk_size={int(idi_size.to(u.Tb).value)}GB"],
                                 stdout=None, stderr=subprocess.STDOUT)
 
