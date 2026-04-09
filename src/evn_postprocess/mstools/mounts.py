@@ -102,8 +102,8 @@ def fix_hobart_mount(msfile: str, verbose: bool = True) -> bool:
         bool: True if the mount type was successfully updated, False otherwise.
     """
     ms = Ms(msfile, runstats=False)
-    honame = [n for n in ('HOBART', 'HO', 'HOB_DBBC') if n in ms.antennas.names]
+    honame = [n for n in ('HOBART', 'HO', 'Ho','HOB_DBBC') if n in ms.antennas.names]
     if len(honame) == 0:
-        raise ValueError('Ys antenna not found in the MS file.')
+        raise ValueError('Ho antenna not found in the MS file.')
 
     return all([modify_mounts(msfile, ho, 'X-YEW', verbose=verbose) for ho in honame])

@@ -1120,7 +1120,7 @@ def serve_dashboard(exp, plots_dir: Path) -> None:
     rprint(f"[green]  EVN Dashboard for {exp.expname} running at:[/green]")
     rprint(f"[bold green]  {url}[/bold green]")
     rprint("[bold green]Create a tunnel to open it in your browser with "
-           f"'ssh -L {port}:localhost:{port} <user>@<eee2>'[/bold green]")
+           f"'ssh -L {port}:localhost:{port} <user>@eee2'[/bold green]")
     rprint("[green]  Press Ctrl+C to stop the server.\n[/green]")
     rprint(f"[green]{'=' * 60}[/green]")
 

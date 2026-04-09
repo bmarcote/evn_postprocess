@@ -55,7 +55,7 @@ _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
                         "Processes the files to this experiment."),
                    Task('checklis', 'check_lisfiles', "Verifies that the .lis files seem to be fine, "
                         "and sets up the correlator passes to be processed from them."),
-                   Task('j2ms2', 'create_msfile', "Creates MS files from .lis files using j2ms2. "
+                   Task('ms', 'create_msfile', "Creates MS files from .lis files using j2ms2. "
                         "It also retrieves some stats from the visibilities, and creates the notes.md file."),
                    Task('standardplots', 'create_standardplots', "Creates the standard plots from the "
                         "required MS file."),
@@ -232,7 +232,13 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
 
         if not lisfiles.check_lisfiles(exp):
             # TODO: In case of e-EVN runs, it needs to do it!
-            logger.error("Issues found in .lis files. Please check the files.")
+            logger.error("Issues found in the .lis files (see details above).")
+            body = ("[yellow]Please check the .lis files manually and fix any problems.\n\n"
+                    "[bold]Once done, re-run with one of:[/bold]\n\n"
+                    "  [bold green]postprocess run[/bold green]     — if you fixed the .lis files and want to re-run from the start\n"
+                    "  [bold green]postprocess run ms[/bold green]  — if everything looks correct and you just want to proceed\n[/yellow]")
+            Console().print(Panel(body, title="[bold yellow]Action Required: .lis File Issues[/bold yellow]",
+                                  border_style="yellow", padding=(1, 2)))
             return False
 
         return True
@@ -683,12 +689,17 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
                    level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
                    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
                           "{module}:{function}:{line} | {message}" if debug else "{level: <8} | {message}")
-        logger.add(sys.stdout, colorize=True, level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
-                   format=lambda record: "{level}: {message}\n{exception}" if record["level"].no >= 40 else "{message}\n")
-        logger.add(sys.stderr, colorize=True, level="ERROR", backtrace=True, diagnose=True,
-                   format=lambda record: "{level}: {message}\n{exception}")
+        _con = Console(stderr=False, highlight=False)
+        _err_con = Console(stderr=True, highlight=False)
+        def _stdout_sink(message):
+            record = message.record
+            if record["level"].no >= 40:
+                _err_con.print(f"[bold red]{record['level'].name}[/bold red]: [red]{record['message']}[/red]")
+            else:
+                _con.print(record["message"])
+        logger.add(_stdout_sink, level="DEBUG" if debug else "INFO", colorize=False)
     except (OSError, PermissionError) as e:
-        rprint(f"[yellow]Warning: Could not create debug log file: {e}[/yellow]")
+        rprint(f"[bold yellow]Warning:[/bold yellow] [yellow]Could not create debug log file: {e}[/yellow]")
 
 
 def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool = False,
