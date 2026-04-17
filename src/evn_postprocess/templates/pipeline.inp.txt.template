@@ -30,8 +30,8 @@ bpass = {bpass}
 {dosolint}solint = {solint}
 
 # to generate PB correction SN file for phase centers
-doprimarybeam = {doprimarybeam}
-setup_station = {setup_station}
+{doprimarybeam}
+{setup_station}
 
 # -----------------------------------------------
 # optional parameters
