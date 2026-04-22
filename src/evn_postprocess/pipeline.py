@@ -5,21 +5,16 @@ verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 """
 import os
-import re
 import glob
 import shutil
 import subprocess
 import traceback
-import urllib.request
-import urllib.error
 from importlib import resources
 from loguru import logger
 from pathlib import Path
 from typing import Optional
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from rich import print as rprint
-from rich.panel import Panel
-from rich.console import Console
 from . import experiment
 from . import utils
 from . import comment_tasav
@@ -100,172 +95,31 @@ def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
     return True
 
 
-def _download_vlba_file(base_url: str, filename: str, dest_dir: Path) -> bool:
-    """Download a single file from the VLBA archive URL into dest_dir.
-
-    Args:
-        base_url (str): Base URL of the experiment directory on the VLBA archive.
-        filename (str): Name of the file to download (relative to base_url).
-        dest_dir (Path): Local directory where the file will be saved.
-
-    Returns:
-        bool: True if the download succeeded, False if the file was not found (404/error).
+def get_vlba_antab(exp) -> Optional[bool]:
+    """Retrieves the cal (antab) files from VLBA if needed, and copies the VLBA gains, into the archive temp folder
+    for the given experiment.
     """
-    url = f"{base_url}{filename}"
-    dest = dest_dir / filename
-    logger.info(f"> wget {url}")
-    try:
-        urllib.request.urlretrieve(url, dest)
+    rprint("[bold yellow]get_vlba_antab not implemented yet. You need to get the VLBA antab files manually.[/bold yellow]")
+    raise NotImplementedError
+    if exp.expname.lower()[0] != 'g':
         return True
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            logger.debug(f"File not found on VLBA archive: {url}")
-        else:
-            logger.warning(f"HTTP error {e.code} fetching {url}")
-        return False
-    except urllib.error.URLError as e:
-        logger.warning(f"URL error fetching {url}: {e.reason}")
-        return False
 
+    cd = f"cd /data/pipe/{exp.expname.lower()}/temp/"
 
-def _parse_cal_vlba(cal_file: Path, expname: str, dest_dir: Path) -> None:
-    """Parse a .cal.vlba file and write its three sections to separate output files.
-
-    The file has three consecutive sections:
-      1. Flag commands (everything before the first "Tsys" line) →
-             {expname}vlba.uvflgfs
-      2. ANTAB / Tsys data (from the first "Tsys" line until "weather data") →
-             {expname}vlba.antabfs
-      3. Weather data (from the "weather data" line to end of file) →
-             {expname}vlba.weather
-
-    Args:
-        cal_file (Path): Path to the downloaded .cal.vlba file.
-        expname (str): Lower-case experiment name used to name output files.
-        dest_dir (Path): Directory where output files will be written.
-    """
-    uvflgfs_path = dest_dir / f"{expname}vlba.uvflgfs"
-    antabfs_path = dest_dir / f"{expname}vlba.antabfs"
-    weather_path = dest_dir / f"{expname}vlba.weather"
-
-    # Sections: 0 = flags, 1 = tsys/antab, 2 = weather
-    section = 0
-    with open(cal_file, 'r') as fh, \
-         open(uvflgfs_path, 'w') as f_uvflg, \
-         open(antabfs_path, 'w') as f_antab, \
-         open(weather_path, 'w') as f_weather:
-        for line in fh:
-            if section == 0 and 'Tsys' in line:
-                section = 1
-            elif section == 1 and 'weather data' in line.lower():
-                section = 2
-
-            if section == 0:
-                f_uvflg.write(line)
-            elif section == 1:
-                f_antab.write(line)
-            else:
-                f_weather.write(line)
-
-    logger.info(f"Parsed {cal_file.name} → {uvflgfs_path.name}, {antabfs_path.name}, {weather_path.name}")
-
-
-def get_vlba_antab(exp) -> bool:
-    """Retrieves the VLBA calibration files for the experiment from the VLBA public archive,
-    parses the .cal.vlba file into uvflg / antab / weather output files, and optionally
-    appends the VLA (.cal.y) calibration data if the VLA participated.
-
-    Steps:
-      1. Build the VLBA archive URL from the observation month-year and experiment name.
-      2. Download {expname}.cal.vlba (mandatory) into exp.dirs.pipe_temp.
-      3. If the station 'Yy' (VLA) is in the antenna list, attempt to download
-         {expname}.*.cal.y; warn and request NRAO upload if absent.
-      4. Parse the .cal.vlba file into three files:
-           {expname}vlba.uvflgfs  — flag commands
-           {expname}vlba.antabfs  — Tsys / ANTAB data
-           {expname}vlba.weather  — weather data
-      5. If a .cal.y file was downloaded, append its contents to {expname}vlba.antabfs.
-
-    Args:
-        exp: Experiment object with .expname, .obsdate, .dirs.pipe_temp, and .antennas.
-
-    Returns:
-        bool: True if mandatory files were retrieved and parsed successfully.
-    """
-    expname = exp.expname.lower()
-    dest_dir = exp.dirs.pipe_temp
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build mmmYY string, e.g. "feb25"
-    mmm_yy = exp.obsdate.strftime('%b%y').lower()
-    base_url = f"https://www.vlba.nrao.edu/astro/VOBS/astronomy/{mmm_yy}/{expname}/"
-
-    # --- Step 1: download mandatory .cal.vlba (skip if already present) ---
-    cal_vlba_name = f"{expname}.cal.vlba"
-    cal_vlba_path = dest_dir / cal_vlba_name
-    antabfs_path = dest_dir / f"{expname}vlba.antabfs"
-
-    if antabfs_path.exists():
-        # Already parsed on a previous run; nothing to do for the VLBA cal.
-        logger.info(f"{antabfs_path.name} already exists. Skipping download and parse.")
-    else:
-        if not cal_vlba_path.exists():
-            if not _download_vlba_file(base_url, cal_vlba_name, dest_dir):
-                logger.error(f"Could not download {cal_vlba_name} from VLBA archive at {base_url}")
-                rprint(f"[bold red]ERROR:[/bold red] [red]Could not retrieve {cal_vlba_name} from the VLBA archive.\n"
-                       f"       Check manually: {base_url}[/red]")
-                return False
-        else:
-            logger.info(f"{cal_vlba_name} already present locally. Skipping download.")
-
-        # --- Step 2: parse .cal.vlba into the three output files ---
-        _parse_cal_vlba(cal_vlba_path, expname, dest_dir)
-
-    # --- Step 3: handle VLA (.cal.y) file if Yy participated ---
-    has_vla = 'Yy' in exp.antennas.names
-    vla_cal_downloaded = False
-    if has_vla:
-        # The VLA file name contains a wildcard character in its name (*), so we
-        # fetch the directory listing and look for a matching file.
-        try:
-            with urllib.request.urlopen(base_url) as response:
-                listing = response.read().decode('utf-8', errors='replace')
-        except urllib.error.URLError as e:
-            logger.warning(f"Could not read VLBA archive directory listing: {e.reason}")
-            listing = ''
-
-        # Parse href values from the Apache directory listing HTML
-        cal_y_candidates = [
-            href for href in re.findall(r'href="([^"]+)"', listing)
-            if href.endswith('.cal.y') and expname in href.lower()
-        ]
-
-        for candidate in cal_y_candidates:
-            if _download_vlba_file(base_url, candidate, dest_dir):
-                logger.info(f"Downloaded VLA calibration file: {candidate}")
-                # Append VLA antab content to the VLBA antabfs file
-                vla_file = dest_dir / candidate
-                antabfs_path = dest_dir / f"{expname}vlba.antabfs"
-                with open(vla_file, 'r') as fh_vla, open(antabfs_path, 'a') as fh_antab:
-                    fh_antab.write(f"\n! --- VLA calibration from {candidate} ---\n")
-                    fh_antab.write(fh_vla.read())
-                logger.info(f"Appended {candidate} to {antabfs_path.name}")
-                vla_cal_downloaded = True
-                break
-
-        if not vla_cal_downloaded:
-            logger.warning(f"VLA (.cal.y) file not found for {expname} on the VLBA archive.")
-            body = (f"[yellow]The VLA (Yy) participated in [bold]{expname.upper()}[/bold] but its "
-                    f"calibration file ([bold]{expname}.*.cal.y[/bold]) is not yet available on the "
-                    f"VLBA archive.\n\n"
-                    f"Please contact NRAO to request the upload:\n\n"
-                    f"  [bold]To:[/bold]      vlbiobs@nrao.edu\n"
-                    f"  [bold]Subject:[/bold] Please upload VLA cal file for {expname.upper()}\n"
-                    f"  [bold]URL:[/bold]     {base_url}[/yellow]")
-            Console().print(Panel(body, title="[bold yellow]VLA Calibration File Missing[/bold yellow]",
-                                  border_style="yellow", padding=(1, 2)))
-
+    utils.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@eee:/data0/tsys/vlba_gains.key ."]))
+    utils.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@ccs:/ccs/var/log2vex/logexp_date/" \
+                                                      f"{exp.expname.upper()}_{exp.obsdatetime.strftime('%Y%m%d')}" \
+                                                      f"/{exp.expname.lower()}cal.vlba ."]))
     return True
+
+    # TODO: grep here which antennas are in the cal (e.g. grep TSYS XX) and update the values.
+
+
+                # if ext == 'log':
+                #     exp.antennas[ant].logfsfile = True
+                # elif ext == 'antabfs':
+                #     exp.antennas[ant].antabfsfile = True
+                #
 
 
 
@@ -403,8 +257,8 @@ def create_input_file(exp) -> bool:
             '{phaseref}': ', '.join([apass.sources.calibrator_for_target(tgt) for tgt in apass.sources.target]) if apass.sources.calibrator else '',
             '{dosolint}': '#' if apass.sources.calibrator else '',
             '{solint}': '2',
-            '{doprimarybeam}': 'doprimarybeam = 1' if exp.multi_phase_center else '# doprimarybeam = -1',
-            '{setup_station}': ('setup_station = ' else '# setup_station =') + exp.refant[0],
+            '{doprimarybeam}': '1' if exp.multi_phase_center else '-1',
+            '{setup_station}': exp.refant[0],
             '{do_all_sources}': '' if exp.multi_phase_center else '#',
             '{all_sources}': ', '.join(set(apass.sources.target + apass.sources.fringefinder + apass.sources.calibrator)) if exp.multi_phase_center else '',
             }

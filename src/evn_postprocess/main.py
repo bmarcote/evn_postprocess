@@ -110,6 +110,9 @@ help_info = """[bold]Shows the info related to the given experiment
 (all what postprocess knows until the presentmoment).[/bold]
 
 It will also write this information down into a 'notes.md' file is this does not exist.
+
+With [bold green]--serve[/bold green] the information is shown in a web dashboard (served on a local port)
+instead of the terminal. Instructions on how to open it (SSH tunnel command) are printed.
 """
 
 help_last = "[bold]Returns the last step that run successfully from post-process " \
@@ -218,9 +221,13 @@ def main():
                         version='%(prog)s {}'.format(__version__))
     subparsers = parser.add_subparsers(help='[bold]If no command is provided, the full postprocessing will run ' \
                                        'from the last successful step.[/bold]', dest='subpar')
-    _ = subparsers.add_parser('info', help='Shows the metadata associated to the experiment',
-                              description=help_info,
-                              formatter_class=parser.formatter_class)
+    parser_info = subparsers.add_parser('info', help='Shows the metadata associated to the experiment',
+                                        description=help_info,
+                                        formatter_class=parser.formatter_class)
+    parser_info.add_argument('--serve', action='store_true', default=False,
+                             help='Open the web dashboard with the experiment info and plots '
+                                  'instead of printing to the terminal. Prints the SSH tunnel '
+                                  'command needed to open it from your local browser.')
     _ = subparsers.add_parser('list', help='Shows the different steps to be run and which ones have been run.',
                               description=help_last,
                               formatter_class=parser.formatter_class)
@@ -328,7 +335,11 @@ def main():
                     sys.exit(1)
             workflow.run_workflow(exp, args.no_archive, debug=args.debug, from_step=from_step, to_step=to_step)
         else:  # args.subpar == 'info'
-            exp.print_blessed(outputfile=None)
+            if args.serve:
+                from .plotting import serve_dashboard
+                serve_dashboard(exp, exp.dirs.plots)
+            else:
+                exp.print_blessed(outputfile=None)
     elif args.subpar == 'list' or args.subpar == 'last':
         try:
             workflow.list_tasks(expname, print_docs=True)

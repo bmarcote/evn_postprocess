@@ -670,6 +670,7 @@ def _build_experiment_summary(exp) -> dict:
         scans_overview.append(row)
     summary["scans"] = scans_overview
     summary["all_antennas"] = all_antennas
+    summary["lag_snr"] = exp.lag_snr if hasattr(exp, 'lag_snr') else {}
 
     return summary
 
@@ -719,6 +720,7 @@ def _build_dashboard_html() -> str:
   .scan-table th, .scan-table td { padding: 3px 6px; border: 1px solid var(--border); text-align: center; white-space: nowrap; }
   .scan-table th { background: var(--header-bg); position: sticky; top: 0; z-index: 1; }
   .scan-table .cell-obs { background: #1a4a2a; color: var(--green); font-weight: bold; }
+  .scan-table .cell-warn { background: #4a3a1a; color: #f0c040; font-weight: bold; }
   .scan-table .cell-miss { background: #4a1a1a; color: var(--red); font-weight: bold; }
   .scan-table .cell-na { color: var(--border); }
   .src-fringefinder { color: #48dbfb; font-weight: 600; }
@@ -838,7 +840,9 @@ function renderSummary(d) {
   // Scan overview table
   if (d.scans && d.scans.length && d.all_antennas) {
     h += '<div class="section"><h2>Scan Overview</h2>';
-    h += '<div style="font-size:0.8rem;margin-bottom:4px"><span class="tag tag-green">&#10003;</span> Observed '
+    h += '<div style="font-size:0.8rem;margin-bottom:4px"><span class="tag tag-green">&#10003;</span> Observed (SNR &gt; 7) '
+       + '<span class="tag" style="background:#3a3a1a;color:#f0c040">&#10003;</span> Weak (3 &lt; SNR &lt; 7) '
+       + '<span class="tag tag-red">&#10003;</span> No signal (SNR &lt; 3) '
        + '<span class="tag tag-red">&#10007;</span> Scheduled but missing '
        + '<span style="color:var(--dim)">—</span> Not scheduled</div>';
     h += '<div style="font-size:0.8rem;margin-bottom:4px">Source type: '
@@ -856,7 +860,16 @@ function renderSummary(d) {
       h += `<tr><td class="${cls}">${s.scanno}</td><td class="${cls}">${s.source}</td>`;
       d.all_antennas.forEach(a => {
         const st = s.antennas[a];
-        if (st === 'observed') h += '<td class="cell-obs">&#10003;</td>';
+        if (st === 'observed') {
+          const scanInt = s.scanno.replace('No','').replace(/^0+/,'') || '0';
+          const snrData = d.lag_snr && d.lag_snr[scanInt] && d.lag_snr[scanInt][a];
+          let maxSnr = -1;
+          if (snrData) { for (const v of Object.values(snrData)) { if (v > maxSnr) maxSnr = v; } }
+          if (maxSnr < 0) h += '<td class="cell-obs">&#10003;</td>';
+          else if (maxSnr >= 7) h += '<td class="cell-obs" title="SNR '+maxSnr.toFixed(1)+'">&#10003;</td>';
+          else if (maxSnr >= 3) h += '<td class="cell-warn" title="SNR '+maxSnr.toFixed(1)+'">&#10003;</td>';
+          else h += '<td class="cell-miss" title="SNR '+maxSnr.toFixed(1)+'">&#10003;</td>';
+        }
         else if (st === 'missing') h += '<td class="cell-miss">&#10007;</td>';
         else h += '<td class="cell-na">—</td>';
       });
@@ -1120,7 +1133,7 @@ def serve_dashboard(exp, plots_dir: Path) -> None:
     rprint(f"[green]  EVN Dashboard for {exp.expname} running at:[/green]")
     rprint(f"[bold green]  {url}[/bold green]")
     rprint("[bold green]Create a tunnel to open it in your browser with "
-           f"'ssh -L {port}:localhost:{port} <user>@eee2'[/bold green]")
+           f"'ssh -L {port}:localhost:{port} <user>@<eee2>'[/bold green]")
     rprint("[green]  Press Ctrl+C to stop the server.\n[/green]")
     rprint(f"[green]{'=' * 60}[/green]")
 
