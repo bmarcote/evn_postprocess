@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional, Union
 from rich import print as rprint
@@ -97,43 +98,72 @@ def ssh(computer: str, commands: str, shell: bool = False, stdout: Optional[int]
 def shell_command(command: str, parameters: Optional[Union[str, list]] = None, shell: bool = True,
                   bufsize: int = -1, stdout: Optional[int] = subprocess.PIPE,
                   stderr: Optional[int] = subprocess.PIPE) -> str:
-    """Runs the provided command in the shell with some arguments if necessary.
-    Parameters must be either a single string or a list, if provided.
+    """Runs the provided command in the shell and streams its output live.
+
+    Both stdout and stderr are captured and echoed to the terminal as the command runs:
+    stdout is printed plain, stderr is printed in red (ANSI). On non-zero exit code, a
+    concise ValueError is raised (the detailed error output has already been shown to the
+    user via the streaming above, so the exception message stays short).
 
     Args:
         command (str): Command to execute.
-        parameters (Optional[Union[str, list]]): Command parameters as string or list. Default None.
+        parameters (Optional[Union[str, list]]): Command parameters as string or list.
         shell (bool): Whether to use shell mode. Default True.
         bufsize (int): Buffer size for subprocess. Default -1.
-        stdout (Optional[int]): Standard output redirection. Default subprocess.PIPE.
-        stderr (Optional[int]): Standard error redirection. Default subprocess.PIPE.
+        stdout (Optional[int]): Kept for API compatibility; output is always streamed.
+        stderr (Optional[int]): Kept for API compatibility; errors are always streamed in red.
 
     Returns:
-        str: Output of the command in UTF-8 encoding.
+        str: Concatenated stdout from the command (UTF-8).
 
     Raises:
-        ValueError: If the command returns a non-zero exit code.
+        ValueError: If the command exits with a non-zero return code.
     """
+    del stdout, stderr  # API compat; new behavior always streams both
+
     if isinstance(parameters, list):
         full_shell_command = [command] + parameters
     else:
         full_shell_command = [command] if parameters is None else [command, parameters]
 
-    logger.info(f"[bold]> {' '.join(full_shell_command)}[/bold]")
-    process = subprocess.Popen(' '.join(full_shell_command), shell=shell,
-                               stdout=stdout, stderr=stderr, bufsize=bufsize)
-    output_lines = []
-    while process.poll() is None:
-        if process.stdout is not None:
-            out = process.stdout.readline().decode('utf-8')
-            output_lines.append(out)
-            sys.stdout.write(out)
-            sys.stdout.flush()
+    cmd_str = ' '.join(full_shell_command)
+    logger.info(f"[bold]> {cmd_str}[/bold]")
 
-    if (process.returncode != 0) and (process.returncode is not None):
-        raise ValueError(f"Error code {process.returncode} when running {' '.join(full_shell_command)}")
+    process = subprocess.Popen(cmd_str, shell=shell, bufsize=bufsize,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    return '\n'.join(output_lines)
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def _pump(stream, chunks, out_stream, red: bool):
+        """Read lines from stream, append to chunks, echo to out_stream (red if requested)."""
+        try:
+            for raw in iter(stream.readline, b''):
+                text = raw.decode('utf-8', errors='replace')
+                chunks.append(text)
+                if red:
+                    out_stream.write(f"\033[31m{text}\033[0m")
+                else:
+                    out_stream.write(text)
+                out_stream.flush()
+        finally:
+            stream.close()
+
+    t_out = threading.Thread(target=_pump, args=(process.stdout, stdout_chunks, sys.stdout, False))
+    t_err = threading.Thread(target=_pump, args=(process.stderr, stderr_chunks, sys.stderr, True))
+    t_out.start()
+    t_err.start()
+    process.wait()
+    t_out.join()
+    t_err.join()
+
+    if process.returncode != 0:
+        had_output = bool(stdout_chunks) or bool(stderr_chunks)
+        if had_output:
+            raise ValueError(f"'{command}' exited with code {process.returncode} (see output above).")
+        raise ValueError(f"'{cmd_str}' exited with code {process.returncode} (no output).")
+
+    return ''.join(stdout_chunks)
 
 
 def remote_file_exists(host: str, path: str) -> bool:

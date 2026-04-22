@@ -627,7 +627,8 @@ class Experiment:
                  steps: list | None = None, pi: list[PI] | None = None, credentials: Credentials | None = None,
                  sources: Sources | None = None, antennas: Antennas | None = None, scans: Scans | None = None,
                  refant: list[str] | None = None,
-                 correlator_passes: list[CorrelatorPass] | None = None):
+                 correlator_passes: list[CorrelatorPass] | None = None,
+                 lag_snr: dict | None = None):
         self.expname = expname
         self.obsdate = obsdate
         self.supsci = supsci
@@ -641,6 +642,7 @@ class Experiment:
         self.scans = scans if scans else Scans()
         self.refant = refant if refant else []
         self.correlator_passes = correlator_passes if correlator_passes else []
+        self.lag_snr: dict[str, dict[str, dict[str, float]]] = lag_snr if lag_snr else {}
         self._timerange: list[dt.datetime] | None = None
 
     @property
@@ -952,7 +954,8 @@ class Experiment:
                 'scans': self.scans.to_dict() if self.scans else [], 'refant': self.refant,
                 'spectral_line': self.spectral_line,
                 'correlator_passes': [cp.to_dict() for cp in self.correlator_passes] if self.correlator_passes else [],
-                '_timerange': [t.isoformat() for t in self._timerange] if self._timerange else None}
+                '_timerange': [t.isoformat() for t in self._timerange] if self._timerange else None,
+                'lag_snr': self.lag_snr}
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Experiment':
@@ -968,6 +971,7 @@ class Experiment:
                   correlator_passes=[CorrelatorPass.from_dict(cp) for cp in data['correlator_passes']] if data.get('correlator_passes') else None)
         if data.get('_timerange'):
             exp._timerange = [dt.datetime.fromisoformat(t) for t in data['_timerange']]
+        exp.lag_snr = data.get('lag_snr', {})
         return exp
 
     def store(self, path: Path | None = None):

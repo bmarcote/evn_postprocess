@@ -25,7 +25,6 @@ from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
 from concurrent.futures import ThreadPoolExecutor
-from itertools import product
 from . import experiment, utils, mstools
 from .plotting import convert_ps_to_png, serve_dashboard
 # polconvert_main kept for future use once version compatibility is resolved.
@@ -185,9 +184,25 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                 return False
 
         with ThreadPoolExecutor(max_workers=10) as pool:
-            results = pool.map(_j2ms2_correlator_pass, product([exp,], exp.correlator_passes))
+            ms_futures = [pool.submit(_j2ms2_correlator_pass, (exp, p)) for p in exp.correlator_passes]
 
-        return all(results)
+            # Create lag-space MS from first pass in parallel (for signal detection)
+            lag_ms = Path(f"{exp.expname.lower()}-lag.ms")
+            lag_future = None
+            if not lag_ms.exists() and exp.correlator_passes[0].lisfile.exists():
+                lag_future = pool.submit(utils.shell_command, "j2ms2",
+                    ["-v", "-d", "frequency", "-o", str(lag_ms), str(exp.correlator_passes[0].lisfile)],
+                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+
+            ms_results = [f.result() for f in ms_futures]
+            if lag_future is not None:
+                try:
+                    lag_future.result()
+                    logger.info(f"Created lag-space MS: {lag_ms}")
+                except Exception as e:
+                    logger.warning(f"Lag-space MS creation failed (non-fatal): {e}")
+
+        return all(ms_results)
     except Exception as e:
         logger.error(f"Unexpected error in j2ms2: {e}")
         traceback.print_exc()
@@ -341,6 +356,77 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
     if exp.refant:
         logger.info(f"Reference antenna: {exp.refant[0]}")
 
+    exp.store()
+    return True
+
+
+def compute_lag_snr(exp: experiment.Experiment) -> bool:
+    """Compute lag-space SNR per scan, antenna, and polarization from the lag MS.
+
+    Reads the lag-space MS created by ``j2ms2 -d frequency``, computes the SNR
+    of the fringe peak for each cross-correlation baseline, and stores the
+    maximum SNR per antenna (across baselines) for each scan and polarization
+    into ``exp.lag_snr``.
+
+    SNR is estimated as peak / (1.4826 × MAD) over the lag spectrum.
+
+    Args:
+        exp: Experiment object. Results stored in ``exp.lag_snr``.
+
+    Returns:
+        True if computation succeeded (including when lag MS is absent).
+    """
+    lag_ms = Path(f"{exp.expname.lower()}-lag.ms")
+    if not lag_ms.exists():
+        logger.warning(f"Lag MS {lag_ms} not found. Skipping lag SNR computation.")
+        return True
+
+    with mstools.misc.table(lag_ms) as ms:
+        with mstools.misc.table(ms.getkeyword('ANTENNA')) as t:
+            ant_names = list(t.getcol('NAME'))
+        with mstools.misc.table(ms.getkeyword('POLARIZATION')) as t:
+            pol_labels = [mstools.misc.Stokes(ct).name for ct in t.getcol('CORR_TYPE')[0]]
+
+        # best_snr[(scan_int, ant_idx)] = np.array of shape (n_pols,)
+        best_snr: dict[tuple[int, int], np.ndarray] = {}
+
+        for start, nrow in mstools.misc.chunkert(0, len(ms), 1000):
+            ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
+            ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
+            scans = ms.getcol('SCAN_NUMBER', startrow=start, nrow=nrow)
+            data = np.abs(ms.getcol('DATA', startrow=start, nrow=nrow))  # (nrow, nchan, npol)
+
+            cross = ants1 != ants2
+            if not np.any(cross):
+                continue
+
+            cross_data = data[cross]  # (n_cross, nchan, npol)
+            med = np.median(cross_data, axis=1, keepdims=True)
+            mad = np.median(np.abs(cross_data - med), axis=1)  # (n_cross, npol)
+            peak = np.max(cross_data, axis=1)  # (n_cross, npol)
+            noise = 1.4826 * mad
+            snr = np.where(noise > 0, peak / noise, 0.0)
+
+            cross_scans, cross_a1, cross_a2 = scans[cross], ants1[cross], ants2[cross]
+            for i in range(len(cross_scans)):
+                s = int(cross_scans[i])
+                for aidx in (int(cross_a1[i]), int(cross_a2[i])):
+                    key = (s, aidx)
+                    if key not in best_snr:
+                        best_snr[key] = snr[i].copy()
+                    else:
+                        np.maximum(best_snr[key], snr[i], out=best_snr[key])
+
+    # Convert to nested dict: {scan_str: {ant_name: {pol: snr}}}
+    lag_snr: dict[str, dict[str, dict[str, float]]] = {}
+    for (scan, aidx), snr_arr in best_snr.items():
+        scan_str = str(scan)
+        if scan_str not in lag_snr:
+            lag_snr[scan_str] = {}
+        lag_snr[scan_str][ant_names[aidx]] = {p: round(float(snr_arr[i]), 1) for i, p in enumerate(pol_labels)}
+
+    exp.lag_snr = lag_snr
+    logger.info(f"Lag SNR computed for {len(lag_snr)} scans from {lag_ms}")
     exp.store()
     return True
 
@@ -678,8 +764,6 @@ def tconvert(exp: experiment.Experiment) -> bool:
     Returns:
         True if all passes converted successfully.
     """
-    # tConvert_bin = 'tConvert'
-    tConvert_bin = '/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert'
     for a_pass in exp.correlator_passes:
         if len(glob.glob(f"{a_pass.fitsidifile}*")) > 0:
             continue
@@ -689,16 +773,16 @@ def tconvert(exp: experiment.Experiment) -> bool:
                                                   capture_output=True).stdout.decode().split()[0])
 
         if idi_size < 20*u.Gb:
-            utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
+            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
                                 stdout=None, stderr=subprocess.STDOUT)
         elif idi_size < 4*u.Tb:
-            utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o", "chunk_size=8GB"],
+            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o", "chunk_size=8GB"],
                                 stdout=None, stderr=subprocess.STDOUT)
         else:
             if utils.space_available(Path.cwd()) <= 1.1*idi_size:
                 raise IOError("Not enough disk space to create the FITS-IDI files.")
 
-            utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o",
+            utils.shell_command("tConvert", ["-v", a_pass.lisfile.name, "-o",
                                 f"chunk_size={int(idi_size.to(u.Tb).value)}GB"],
                                 stdout=None, stderr=subprocess.STDOUT)
 
@@ -1312,10 +1396,12 @@ def append_antab(exp: experiment.Experiment) -> bool:
 
 
 def create_piletter_auth(exp: experiment.Experiment) -> bool:
-    """Creates a copy of the PI letter with download credentials appended.
+    """Creates a copy of the PI letter with download credentials inserted.
 
-    Copies {expname}.piletter to {expname}.piletter_auth and appends the
-    archive download credentials. Does nothing if no credentials are set.
+    Copies {expname}.piletter to {expname}.piletter_auth and inserts the
+    archive download credentials as a new paragraph right after the line
+    ending the second paragraph ("...EVN Pipeline plots and products.").
+    Does nothing if no credentials are set.
 
     Args:
         exp: Experiment object.
@@ -1334,12 +1420,29 @@ def create_piletter_auth(exp: experiment.Experiment) -> bool:
         logger.error(f"{piletter} not found; cannot create {piletter_auth.name}.")
         return False
 
-    shutil.copy2(piletter, piletter_auth)
-    with open(piletter_auth, 'a') as f:
-        f.write(f"\nTo access the data, use the EVN Data Archive ({exp.archive_page})\n")
-        f.write("with the following credentials:\n")
-        f.write(f"  username: {exp.credentials.username}\n")
-        f.write(f"  password: {exp.credentials.password}\n")
+    marker = "EVN Pipeline plots and products."
+    credentials_block = (
+        "\nTo access the data, use the following credentials:\n"
+        f"  username: {exp.credentials.username}\n"
+        f"  password: {exp.credentials.password}\n"
+    )
+
+    with open(piletter, 'r') as f:
+        lines = f.readlines()
+
+    inserted = False
+    with open(piletter_auth, 'w') as f:
+        for line in lines:
+            f.write(line)
+            if not inserted and marker in line:
+                f.write(credentials_block)
+                inserted = True
+
+    if not inserted:
+        logger.warning(f"Marker '{marker}' not found in {piletter.name}; "
+                       f"appending credentials at the end of {piletter_auth.name}.")
+        with open(piletter_auth, 'a') as f:
+            f.write(credentials_block)
 
     logger.info(f"Created {piletter_auth.name} with download credentials.")
     return True
