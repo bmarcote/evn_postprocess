@@ -17,10 +17,27 @@ from rich import print as rprint
 from typing import List, Optional, Generator
 from loguru import logger
 import numpy as np
-from pyrap import tables as pt
-from jiveplot import jplotter, command
+from casacore import tables as pt
+
+try:
+    from jiveplot import jplotter, command  # noqa: F401  (re-exported for module callers)
+    _JIVEPLOT_AVAILABLE = True
+except ModuleNotFoundError as _jp_exc:
+    # jiveplot is only required for standardplots / web-dashboard rendering.
+    # Defer the failure so the rest of the package (and the tests) can import without it.
+    jplotter = None  # type: ignore[assignment]
+    command = None  # type: ignore[assignment]
+    _JIVEPLOT_IMPORT_ERROR = _jp_exc
+    _JIVEPLOT_AVAILABLE = False
 
 
+def _require_jiveplot():
+    """Raises a clear error if jiveplot is not available in this environment."""
+    if not _JIVEPLOT_AVAILABLE:
+        raise ModuleNotFoundError(
+            "jiveplot is required for plotting functionality but was not found. "
+            f"Original import error: {_JIVEPLOT_IMPORT_ERROR}"
+        )
 
 
 # program default(s)
@@ -52,7 +69,8 @@ def mkerrf(pfx):
         print("{0} {1}".format(pfx, msg))
         sys.exit(-1)
     return actualerrf
-jplotter.hvutil.mkerrf = mkerrf
+if _JIVEPLOT_AVAILABLE:
+    jplotter.hvutil.mkerrf = mkerrf
 
 # returns None if the argument wasn't present, tp(<value>) if it was
 # (such that it will give an exception if e.g. you expect int but

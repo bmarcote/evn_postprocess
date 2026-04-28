@@ -25,15 +25,15 @@ def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
     """
     def fetch_file(ext: str):
         try:
-            s_formatted = eval(f"f'{server.path}'", {'obsdate': exp.obsdate})
+            s_formatted = utils.format_remote_path(str(server.path), obsdate=exp.obsdate)
             utils.scp(f"{server.user}@{server.host}:{Path(s_formatted) / f'{exp.expname.lower()}*{ext}'}",
                       str(exp.dirs.pipe_temp) + "/", timeout=120)
         except subprocess.TimeoutExpired:
             rprint(f"[bold yellow]Could not retrieve the {ext} files from vlbeer.[/bold yellow]")
-            logger.warning("Could not retrieve {ext} files from vlbeer")
+            logger.warning(f"Could not retrieve {ext} files from vlbeer")
         except ValueError:
             rprint(f"[bold yellow]Could not find the {ext} files in vlbeer.[/bold yellow]")
-            logger.warning("Could not retrieve {ext} files from vlbeer")
+            logger.warning(f"Could not find {ext} files in vlbeer")
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = [executor.submit(fetch_file, a_file) for a_file in ('antabfs', 'log', 'flag')]
@@ -123,8 +123,12 @@ def get_vlba_antab(exp) -> Optional[bool]:
 
 
 
-def run_antab_editor(exp) -> Optional[bool]:
+def run_antab_editor(exp) -> bool:
     """Opens antab_editor.py for the given experiment.
+
+    Returns:
+        bool: True once the editor exits successfully (the editor itself runs
+        interactively; this function only manages the working directory).
     """
     original_cwd = os.getcwd()
     os.chdir(exp.dirs.pipe_temp)
@@ -144,10 +148,10 @@ def run_antab_editor(exp) -> Optional[bool]:
         rprint(f"[red]Note that you are missing ANTAB files from: {', '.join(missing_antabs)}[/red]")
 
     os.chdir(original_cwd)
-    return None
+    return True
 
 
-def create_uvflg(exp) -> Optional[bool]:
+def create_uvflg(exp) -> bool:
     """Produces the combined uvflg file containing the full flagging from all telescopes.
     """
     if len(glob.glob(str(exp.dirs.pipe_temp / "*.uvflg"))) > 0:
@@ -220,28 +224,35 @@ def create_input_file(exp) -> bool:
     original_cwd = os.getcwd()
     os.chdir(exp.dirs.pipe_in)
     if len(pipepasses := [apass.pipeline for apass in exp.correlator_passes if apass.pipeline]) > 1:
+        # Only fan out from the unnumbered .antab/.uvflg into per-pass copies if the
+        # unnumbered file actually exists. Previously the .uvflg copy was unguarded,
+        # so a perfectly valid setup with already-numbered files (e.g. testexp_1.uvflg
+        # and testexp_2.uvflg already present) crashed with FileNotFoundError.
         if Path(f"{exp.expname.lower()}.antab").exists():
             for p in range(1, len(pipepasses) + 1):
                 shutil.copy(f"{exp.expname.lower()}.antab", f"{exp.expname.lower()}_{p}.antab")
 
-        for p in range(1, len(pipepasses) + 1):
-            shutil.copy(f"{exp.expname.lower()}.uvflg", f"{exp.expname.lower()}_{p}.uvflg")
+        if Path(f"{exp.expname.lower()}.uvflg").exists():
+            for p in range(1, len(pipepasses) + 1):
+                shutil.copy(f"{exp.expname.lower()}.uvflg", f"{exp.expname.lower()}_{p}.uvflg")
 
-    # Copy and modify the pipeline input template
+    # Copy and modify the pipeline input template. We read the template once and
+    # then format it per pass to avoid re-opening the same file (and to make the
+    # function trivially mockable in tests via importlib.resources.read_text).
     template_path = resources.files("evn_postprocess.templates").joinpath("pipeline.inp.txt.template")
+    template_text = template_path.read_text()
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
-    
+
     for i, apass in enumerate(pipepasses, 1):
         if len(pipepasses) > 1:
             inp_filename = Path(f"{exp.expname.lower()}_{i}.inp.txt")
         else:
             inp_filename = Path(f"{exp.expname.lower()}.inp.txt")
-        
+
         if inp_filename.exists():
             continue
-            
-        with open(template_path, 'r') as f:
-            template_content = f.read()
+
+        template_content = template_text
         
         replacements = {
             '{expname}': exp.expname.lower() if len(pipepasses) == 1 else f"{exp.expname.lower()}_{i}",
@@ -279,9 +290,9 @@ def create_input_file(exp) -> bool:
 def run_pipeline(exp) -> bool:
     """Runs the EVN Pipeline
     """
+    original_cwd = os.getcwd()
     try:
-        logger.debug('# Running the pipeline...', True)
-        original_cwd = os.getcwd()
+        logger.debug('# Running the pipeline...')
         
         if not exp.dirs.pipe_in.exists():
             logger.error(f"Pipeline input directory does not exist: {exp.dirs.pipe_in}")
@@ -368,8 +379,8 @@ def comment_tasav_files(exp) -> bool:
 def pipeline_feedback(exp) -> bool:
     """Runs the feedback.pl script after the EVN Pipeline has run.
     """
+    original_cwd = os.getcwd()
     try:
-        original_cwd = os.getcwd()
         os.chdir(exp.dirs.pipe_out)
         pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
         sources_str = f"'{' '.join([s.name for s in exp.sources])}'"
@@ -390,8 +401,8 @@ def pipeline_feedback(exp) -> bool:
 def archive(exp) -> bool:
     """Archives the EVN Pipeline results.
     """
+    original_cwd = os.getcwd()
     try:
-        original_cwd = os.getcwd()
         for folder in (exp.dirs.pipe_in, exp.dirs.pipe_out):
             os.chdir(folder)
             utils.shell_command("archive.pl", ["-pipe", "-e", f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}"], stdout=None)
@@ -408,8 +419,10 @@ def ampcal(exp) -> bool:
     """Runs the ampcal.sh script to incorporate the gain corrections into the Grafana database.
     """
     original_cwd = os.getcwd()
-    os.chdir(exp.dirs.pipe_out)
-    utils.shell_command("ampcal.sh")
-    os.chdir(original_cwd)
+    try:
+        os.chdir(exp.dirs.pipe_out)
+        utils.shell_command("ampcal.sh")
+    finally:
+        os.chdir(original_cwd)
     return True
 

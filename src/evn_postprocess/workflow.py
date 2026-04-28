@@ -3,6 +3,7 @@
 These functions are called by the Snakemake workflow and wrap the functionality
 from process.py, pipeline.py, and pre.py modules.
 """
+import re
 import sys
 import json
 import glob
@@ -16,6 +17,7 @@ from loguru import logger
 from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
+
 from astropy import units as u
 from astropy import coordinates as coord
 from . import experiment
@@ -25,6 +27,99 @@ from . import pipeline
 from . import lisfiles
 from . import dialog
 from . import utils
+
+_RICH_TAG_RE = re.compile(r'\[/?[\w\s#.,;:!?=-]+\]')
+_stdout_console = Console(highlight=False)
+_stderr_console = Console(stderr=True, highlight=False)
+
+# Module-level batch-mode flag. When True the runner refuses to call interactive
+# dialogs and signals "needs_review" by writing a marker file instead of
+# printing a Rich panel and waiting for the operator. Set via :func:`set_batch_mode`
+# from the CLI entry point.
+_BATCH_MODE = False
+REVIEW_FLAG_FILENAME = "REVIEW_REQUIRED"
+
+
+def set_batch_mode(enabled: bool) -> None:
+    """Toggles the package-wide batch-mode flag.
+
+    See module docstring for the contract. Kept as a function (rather than a
+    ``Policy.batch`` lookup) because some helpers (notably :func:`msops`) are
+    invoked through ``run_isolated_task`` without a Policy attached.
+    """
+    global _BATCH_MODE
+    _BATCH_MODE = bool(enabled)
+
+
+def is_batch_mode() -> bool:
+    """Returns the current batch-mode flag."""
+    return _BATCH_MODE
+
+
+def _review_flag_path(exp: experiment.Experiment) -> Path:
+    """Returns the path of the ``REVIEW_REQUIRED`` marker for *exp*.
+
+    The marker lives at the root of the experiment work directory so an
+    operator can spot it without descending into ``logs/`` or ``pipeline/``.
+    """
+    return Path(REVIEW_FLAG_FILENAME)
+
+
+def _write_review_flag(exp: experiment.Experiment, step: str, reason: str) -> None:
+    """Writes the ``REVIEW_REQUIRED`` marker file with a human-readable reason.
+
+    Called from places that previously printed a Rich panel to stdout and
+    blocked on ``input``: now we leave a small text file on disk so a queue
+    system can detect the pause condition without parsing log output.
+
+    Args:
+        exp: Experiment object, used purely for logging context.
+        step: The step name that triggered the pause / review.
+        reason: Free-form explanation written into the marker for the operator.
+    """
+    flag = _review_flag_path(exp)
+    try:
+        flag.write_text(
+            f"step: {step}\nexperiment: {exp.expname}\nreason: {reason}\n",
+            encoding="utf-8",
+        )
+    except OSError as e:
+        logger.warning(f"Could not write {flag}: {e}")
+    logger.info(f"Wrote review marker {flag} for step '{step}'.")
+
+
+def _clear_review_flag(exp: experiment.Experiment) -> None:
+    """Removes the ``REVIEW_REQUIRED`` marker if present (idempotent)."""
+    _review_flag_path(exp).unlink(missing_ok=True)
+
+
+def _signal_pause(exp: experiment.Experiment, step: str) -> None:
+    """Signals a "stop and review" condition after a successful step.
+
+    In interactive mode this prints the historical Rich panel and the desktop
+    notification. In batch mode it writes a marker file (so the scheduler can
+    detect the pause without parsing logs) and stays silent.
+    """
+    piletter = f"{exp.expname.lower()}.piletter"
+    if _BATCH_MODE:
+        _write_review_flag(
+            exp, step,
+            f"Step '{step}' finished successfully. Review {piletter} and the pipeline "
+            f"output, then run `postprocess run` or `postprocess review ok` to continue."
+        )
+        return
+
+    body = (f"[bold]Please do the following before continuing:[/bold]\n\n"
+            f"  1. Check the pipeline output plots and logs.\n"
+            f"  2. Review the PI letter ([bold cyan]{piletter}[/bold cyan]).\n"
+            f"     Non-observing antennas and PolConvert remarks have been\n"
+            f"     filled in automatically \u2014 verify and edit if needed.\n\n"
+            f"[bold]When ready, run one of:[/bold]\n\n"
+            f"  [bold green]postprocess run[/bold green]           \u2014 finalize and archive everything\n"
+            f"  [bold green]postprocess run {step}[/bold green]  \u2014 re-run this step's diagnostics\n")
+    Console().print(Panel(body, title=f"[bold yellow]Paused after '{step}' \u2014 review needed[/bold yellow]",
+                          border_style="yellow", padding=(1, 2)))
+    utils.notify(f"{exp.expname} post-processing", f"Paused after '{step}' \u2014 review pipeline results")
 
 
 @dataclass
@@ -120,7 +215,7 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
     try:
         obsdate, eEVNname = io.parse_masterprojects(expname, servers['master_projects'])
     except ValueError:
-        logger.error("[bold red]The assumed eperiment code {args.expname} "
+        logger.error(f"[bold red]The assumed experiment code {expname} "
                      "is not recognized.[/bold red]")
         rprint("[red]Run the program from the experiment folder in /data/exp or use --expname[/red]")
         rprint("[red]Or at least it was not found in MASTER_PROJECTS.LIS[/red]")
@@ -296,9 +391,20 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
     Returns:
         bool: True if standardplots were created successfully.
     """
-    if len(glob.glob("*.ps")) > 0:
-        logger.debug("Standardplots already run. Skipping.")
-        return True
+    ps_files = glob.glob("*.ps")
+    if ps_files:
+        pipelinable_ms = [p.msfile for p in exp.correlator_passes if p.pipeline and p.msfile.exists()]
+        if pipelinable_ms:
+            oldest_plot = min(Path(f).stat().st_mtime for f in ps_files)
+            newest_ms = max((m / 'table.dat').stat().st_mtime if (m / 'table.dat').exists()
+                            else m.stat().st_mtime for m in pipelinable_ms)
+            if oldest_plot > newest_ms:
+                logger.info("Standardplots are up-to-date (MS not modified since last plot generation). Skipping.")
+                return True
+            logger.info("MS modified since last plot generation. Regenerating standardplots.")
+        else:
+            logger.debug("Standardplots already run. Skipping.")
+            return True
 
     if not exp.refant:
         logger.error("No reference antenna set for standardplots.")
@@ -335,14 +441,30 @@ def msops(exp: experiment.Experiment) -> bool:
         logger.debug("FITS IDI files already exist. Skipping creation.")
         return True
 
-    process.open_standardplot_files(exp)
-    gui = dialog.Terminal()
-    if not gui.askMSoperations(exp):
+    # In batch mode the standardplot dashboard would block forever waiting for
+    # the operator to close it, so we skip it. The plots are still on disk and
+    # can be reviewed asynchronously via `postprocess info --serve`.
+    if not _BATCH_MODE:
+        process.open_standardplot_files(exp)
+
+    gui = dialog.make_dialog(batch=_BATCH_MODE)
+    try:
+        if not gui.askMSoperations(exp):
+            return False
+    except dialog.BatchInteractionError as exc:
+        logger.error(f"Cannot run msops in batch mode: {exc}")
+        _write_review_flag(exp, "msops", str(exc))
         return False
-    
+
     exp.store()
-    return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) \
-        & process.print_exp(exp, False) & process.tconvert(exp)
+    # Use boolean `and` so we short-circuit and don't keep running heavy MS
+    # operations after one of them has already reported failure. The previous
+    # code used bitwise `&` which always evaluates every operand.
+    for op in (process.flag_weights, process.ysfocus, process.polswap, process.onebit,
+               lambda e: process.print_exp(e, False), process.tconvert):
+        if not op(exp):
+            return False
+    return True
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
@@ -424,7 +546,10 @@ def antfiles(exp: experiment.Experiment) -> bool:
     else:
         eEVNpath = Path(str(experiment.retrieve_servers()['eee'].path).format(expname=exp.eEVNname)) \
                     / "pipeline" / "in"
-        if not (antabfiles := eEVNpath.glob("*.antab")):
+        # Path.glob() returns a generator, which is always truthy. Materialise to a
+        # list so the emptiness check actually works.
+        antabfiles = list(eEVNpath.glob("*.antab"))
+        if not antabfiles:
             logger.error(f"Create the antab/uvflg files from {exp.eEVNname} before continue here.")
             return False
 
@@ -443,7 +568,9 @@ def run_pipeline(exp: experiment.Experiment) -> bool:
     Args:
         expobj_file: Path to experiment JSON file
     """
-    return pipeline.create_input_file(exp) & pipeline.run_pipeline(exp)
+    if not pipeline.create_input_file(exp):
+        return False
+    return pipeline.run_pipeline(exp)
 
 
 def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
@@ -458,10 +585,11 @@ def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
     Args:
         exp: Experiment object.
     """
-    result = pipeline.comment_tasav_files(exp) & pipeline.pipeline_feedback(exp)
-    if result:
-        result &= process.update_piletter(exp)
-    return result 
+    if not pipeline.comment_tasav_files(exp):
+        return False
+    if not pipeline.pipeline_feedback(exp):
+        return False
+    return process.update_piletter(exp)
 
 
 def pre_archive(exp: experiment.Experiment) -> bool:
@@ -479,8 +607,17 @@ def archive(exp: experiment.Experiment) -> bool:
     Args:
         expobj_file: Path to experiment JSON file
     """
-    return process.set_credentials(exp) & process.protect_experiment_files(exp) & process.print_exp(exp, display_in_terminal=False) & \
-           process.archive(exp) & pipeline.archive(exp) & process.send_letters(exp) & process.antenna_feedback(exp) & process.nme_report(exp)
+    for op in (process.set_credentials,
+               process.protect_experiment_files,
+               lambda e: process.print_exp(e, display_in_terminal=False),
+               process.archive,
+               pipeline.archive,
+               process.send_letters,
+               process.antenna_feedback,
+               process.nme_report):
+        if not op(exp):
+            return False
+    return True
 
 
 @dataclass
@@ -676,25 +813,63 @@ def validate_steps(from_step: str, to_step: str | None = None) -> tuple[bool, st
     return True, ""
 
 
+def _rich_terminal_sink(message):
+    """Loguru sink that renders Rich markup via rich.Console.print().
+
+    Errors (level >= 40) go to stderr with a level prefix; everything else
+    goes to stdout as-is so that Rich tags like ``[bold]`` render correctly.
+    """
+    text = message.record["message"]
+    if message.record["level"].no >= 40:
+        _stderr_console.print(f"{message.record['level'].name}: {text}")
+    else:
+        _stdout_console.print(text)
+
+
+def _file_format(record):
+    """Loguru format function that strips Rich markup for clean log files.
+
+    Stores the stripped message in ``record["extra"]["clean_msg"]`` and returns
+    the format string used by loguru.
+    """
+    record["extra"]["clean_msg"] = _RICH_TAG_RE.sub('', record["message"])
+    return "{level: <8} | {extra[clean_msg]}\n{exception}"
+
+
+def _file_format_debug(record):
+    """Same as ``_file_format`` but with timestamps and code location for debug builds."""
+    record["extra"]["clean_msg"] = _RICH_TAG_RE.sub('', record["message"])
+    return "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {module}:{function}:{line} | {extra[clean_msg]}\n{exception}"
+
+
 def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
-    """Configure loguru file sink for the debug log (post_process.log).
+    """Configure loguru sinks: Rich-aware terminal and markup-stripped file.
+
+    Each sink is added in its own try/except so that failure to attach the file
+    sink (e.g. the experiment dir lives on a read-only mount) does not also
+    prevent the terminal sink from being registered. The previous one-try
+    version silently disabled all logging on file-permission errors.
 
     Args:
         exp: Experiment object (provides dirs.logs).
         debug: If True, log DEBUG level with full context; otherwise INFO only.
     """
+    level = "DEBUG" if debug else "INFO"
+    logger.remove()  # Remove default stderr handler to avoid duplicate messages.
+
+    log_path = exp.dirs.logs / "post_processing.log" if exp.dirs and exp.dirs.logs \
+        else Path("post_processing.log")
     try:
-        logger.remove()  # Remove default stderr handler to avoid duplicate messages
-        logger.add(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log", colorize=False,
-                   level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
-                   format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
-                          "{module}:{function}:{line} | {message}" if debug else "{level: <8} | {message}")
-        logger.add(sys.stdout, colorize=True, level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
-                   format=lambda record: "{level}: {message}\n{exception}" if record["level"].no >= 40 else "{message}\n")
-        logger.add(sys.stderr, colorize=True, level="ERROR", backtrace=True, diagnose=True,
-                   format=lambda record: "{level}: {message}\n{exception}")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.add(log_path, colorize=False, level=level, backtrace=True, diagnose=True,
+                   format=_file_format_debug if debug else _file_format)
     except (OSError, PermissionError) as e:
-        rprint(f"[yellow]Warning: Could not create debug log file: {e}[/yellow]")
+        rprint(f"[yellow]Warning: Could not create log file at {log_path}: {e}[/yellow]")
+
+    try:
+        logger.add(_rich_terminal_sink, level=level, colorize=False, backtrace=True, diagnose=True)
+    except Exception as e:  # noqa: BLE001 - terminal sink failures must not crash the pipeline
+        rprint(f"[yellow]Warning: Could not add terminal log sink: {e}[/yellow]")
 
 
 def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool = False,
@@ -715,10 +890,16 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
     Returns:
         bool: True if workflow completed successfully (or paused at postpipe), False otherwise.
     """
-    if not (f := Path(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log")).exists():
-        exp.write_log_file(f)
+    log_file = (exp.dirs.logs / "post_processing.log") if exp.dirs and exp.dirs.logs \
+        else Path("post_processing.log")
+    if not log_file.exists():
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        exp.write_log_file(log_file)
 
     _setup_loguru(exp, debug)
+    # Clear any stale review marker from a previous run; the workflow may write
+    # a fresh one later if it pauses again.
+    _clear_review_flag(exp)
     if not archive:
         logger.debug("The data will not be stored in the EVN archive.")
 
@@ -778,22 +959,14 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
             utils.notify(f"{exp.expname} post-processing", f"Crashed at step {step.name}: {e}")
             return False
 
-        # After postpipe, pause and ask the user to review before archiving
-        if step.name == 'postpipe':
+        # After every step in the policy's pause_after list, pause for human review.
+        # Default behaviour preserves the historical pause after postpipe.
+        pause_after = (exp.policy.pause_after if getattr(exp, 'policy', None) is not None
+                       else ['postpipe'])
+        if step.name in pause_after:
             remaining = steps_to_run[steps_to_run.index(step) + 1:]
             if remaining:
-                piletter = f"{exp.expname.lower()}.piletter"
-                body = (f"[bold]Please do the following before continuing:[/bold]\n\n"
-                        f"  1. Check the pipeline output plots and logs.\n"
-                        f"  2. Review the PI letter ([bold cyan]{piletter}[/bold cyan]).\n"
-                        f"     Non-observing antennas and PolConvert remarks have been\n"
-                        f"     filled in automatically — verify and edit if needed.\n\n"
-                        f"[bold]When ready, run one of:[/bold]\n\n"
-                        f"  [bold green]postprocess run[/bold green]           — finalize and archive everything\n"
-                        f"  [bold green]postprocess run postpipe[/bold green]  — re-run diagnostics\n")
-                Console().print(Panel(body, title="[bold yellow]Pipeline Results Ready for Review[/bold yellow]",
-                                      border_style="yellow", padding=(1, 2)))
-                utils.notify(f"{exp.expname} post-processing", "Paused — review pipeline results before continuing")
+                _signal_pause(exp, step.name)
                 return True
 
     logger.info(f"The processing of {exp.expname} seems to have finalized properly.")

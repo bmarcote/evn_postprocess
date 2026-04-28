@@ -217,6 +217,15 @@ def main():
     parser.add_argument('--refant', type=str, nargs='+', default=None,
                         help='Reference antenna(s) to use (space-separated two-letter codes).\n'
                         'Overrides the auto-selected reference antenna after loading the experiment.')
+    parser.add_argument('--policy', type=str, default=None, metavar='FILE',
+                        help='Path to a policy.toml file with the unattended decisions '
+                             '(weight threshold, polswap/polconvert/onebit antennas, refant, '
+                             'pause_after, skip_archive). See evn_postprocess.policy for the schema.')
+    parser.add_argument('--batch', action='store_true', default=False,
+                        help='Run unattended: never invoke interactive dialogs or open the '
+                             'standardplots dashboard. The runner stops with exit code 0 and '
+                             'writes a REVIEW_REQUIRED marker file when human input is needed. '
+                             'Implies --policy if any decision is required.')
     parser.add_argument('-v', '--version', action='version',
                         version='%(prog)s {}'.format(__version__))
     subparsers = parser.add_subparsers(help='[bold]If no command is provided, the full postprocessing will run ' \
@@ -320,6 +329,27 @@ def main():
         if args.refant:
             _apply_refant(exp, args.refant)
             exp.store()
+
+        # --policy / --batch wiring. We attach the policy onto the experiment so
+        # downstream helpers (e.g. dialog.PolicyDriven, workflow._signal_pause)
+        # can read it without threading the value through every call.
+        if args.policy:
+            from .policy import Policy
+            try:
+                exp.policy = Policy.load(args.policy)
+            except FileNotFoundError:
+                rprint(f"[red]Policy file not found: {args.policy}[/red]")
+                sys.exit(1)
+            except Exception as e:  # tomllib.TOMLDecodeError, etc.
+                rprint(f"[red]Could not parse policy file {args.policy}: {e}[/red]")
+                sys.exit(1)
+            exp.store()
+        if args.batch:
+            workflow.set_batch_mode(True)
+            # Make sure exp.policy at least exists so PolicyDriven can read fields.
+            if exp.policy is None:
+                from .policy import Policy
+                exp.policy = Policy(batch=True)
 
         if not args.subpar or args.subpar == 'run':
             from_step, to_step = None, None

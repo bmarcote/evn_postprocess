@@ -34,16 +34,16 @@ def get_lis_files(exp: experiment.Experiment) -> bool:
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
     server = experiment.retrieve_servers()['ccs']
     cmds = []
-    if len(glob.glob(f"{eEVNname.lower()}*.lis")) == 0:
+    if len(sorted(glob.glob(f"{eEVNname.lower()}*.lis"))) == 0:
         utils.scp(f"{server.user}@{server.host}:" + \
                         str(Path(str(server.path).format(expname=eEVNname)) / f"{eEVNname.lower()}*.lis"), '.')
 
-    for a_lis in glob.glob("*.lis"):
+    for a_lis in sorted(glob.glob("*.lis")):
         split_lis_cont_line(exp, a_lis)
 
     # In the case of e-EVN runs, a renaming of the lis files may be required:
     if eEVNname != exp.expname:
-        for a_lis in glob.glob("*.lis"):
+        for a_lis in sorted(glob.glob("*.lis")):
             # Modify the references for eEVNname to expname inside the lis files
             # if it has not been done yet
             if exp.expname.lower() not in a_lis:
@@ -201,7 +201,11 @@ def get_passes_from_lisfiles(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if passes were successfully extracted and stored.
     """
-    lisfiles = glob.glob(f"{exp.expname.lower()}*.lis")
+    # Sort the .lis files alphabetically so that downstream pass numbering is
+    # deterministic across machines and reruns. The previous unsorted glob.glob()
+    # call could produce a different order from the file-system, which silently
+    # broke pass-to-IDI assignments for spectral-line experiments.
+    lisfiles = sorted(glob.glob(f"{exp.expname.lower()}*.lis"))
     thereis_line = True if '_line' in ''.join(lisfiles) else False
     
     # Prepare arguments for parallel processing

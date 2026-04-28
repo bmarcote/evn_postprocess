@@ -9,6 +9,16 @@ from . import utils
 
 _console = Console()
 
+
+class BatchInteractionError(RuntimeError):
+    """Raised when an interactive dialog is invoked while running in batch mode.
+
+    The runner is expected to catch this, mark the current step as
+    ``needs_review``, write a marker file, and return cleanly so the human
+    operator can fill in the missing values via ``policy.toml`` and resume.
+    """
+
+
 class Dialog(object, metaclass=abc.ABCMeta):
     """Abstract class that implements the basic functionality for any
     User Interface required for the post-processing.
@@ -253,8 +263,86 @@ class Terminal(Dialog):
         return True
 
 
+class PolicyDriven(Dialog):
+    """Non-interactive dialog backend that takes its answers from ``exp.policy``.
+
+    Used both in unattended batch mode and as a "headless" mode for tests.
+    Every method writes the chosen values straight onto ``exp`` (matching what
+    :class:`Terminal.askMSoperations` does at the end of an interactive prompt)
+    and returns True. If a required field is missing on the policy, the call
+    raises :class:`BatchInteractionError` so the runner can stop cleanly and
+    surface the gap to the operator.
+    """
+
+    def askMSoperations(self, exp):
+        """Applies ``exp.policy`` to the MS-operation antenna lists and threshold.
+
+        Args:
+            exp: Experiment with a populated ``policy`` attribute.
+
+        Returns:
+            True after copying every policy field onto the experiment.
+
+        Raises:
+            BatchInteractionError: If the policy lacks the weight threshold,
+                which is the one value that has no defensible default.
+        """
+        from . import experiment as _experiment  # local import to avoid the cycle
+        policy = getattr(exp, "policy", None)
+        if policy is None:
+            raise BatchInteractionError(
+                "Batch mode requires a non-None exp.policy with the MS-ops decisions. "
+                "Provide a policy.toml on the CLI."
+            )
+        if policy.weight_threshold is None:
+            raise BatchInteractionError(
+                "Batch mode requires policy.weight_threshold to be set "
+                "(a float between 0.0 and 1.0)."
+            )
+
+        for i in range(len(exp.correlator_passes)):
+            existing = exp.correlator_passes[i].flagged_weights
+            if existing and existing.threshold == policy.weight_threshold and existing.percentage >= 0:
+                logger.info(
+                    f"flag_weights threshold unchanged ({policy.weight_threshold}) for "
+                    f"{exp.correlator_passes[i].msfile.name}, keeping previous result."
+                )
+            else:
+                exp.correlator_passes[i].flagged_weights = _experiment.FlagWeight(
+                    policy.weight_threshold, -1
+                )
+
+        for antenna in policy.polswap:
+            if antenna in exp.antennas.names:
+                exp.antennas[antenna].polswap = True
+        for antenna in policy.polconvert:
+            if antenna in exp.antennas.names:
+                exp.antennas[antenna].polconvert = True
+        for antenna in policy.onebit:
+            if antenna in exp.antennas.names:
+                exp.antennas[antenna].onebit = True
+
+        if policy.refant and not exp.refant:
+            exp.refant = list(policy.refant)
+        return True
+
+    def show_scan_overview(self, exp) -> bool:
+        """Headless no-op: the scan overview is purely informational.
+
+        Always returns True so the runner doesn't get stuck waiting for a key
+        press in batch mode.
+        """
+        return True
 
 
+def make_dialog(batch: bool) -> Dialog:
+    """Returns the dialog backend matching the requested mode.
+
+    Args:
+        batch: True for unattended runs (uses :class:`PolicyDriven`), False for
+            interactive runs (uses :class:`Terminal`).
+    """
+    return PolicyDriven() if batch else Terminal()
 
 
 

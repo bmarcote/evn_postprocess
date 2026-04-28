@@ -2,7 +2,7 @@ import datetime
 from enum import IntEnum
 from pathlib import Path
 from contextlib import contextmanager
-from pyrap import tables as pt
+from casacore import tables as pt
 
 
 class Stokes(IntEnum):
