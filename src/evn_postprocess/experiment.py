@@ -7,7 +7,6 @@ resumed, or restarted.
 """
 import os
 import copy
-import glob
 import json
 import subprocess
 import datetime as dt
@@ -15,15 +14,11 @@ from pathlib import Path
 from importlib.metadata import version as pkg_version
 import tomllib
 from dataclasses import dataclass, asdict
-from collections import defaultdict
-import numpy as np
-from pyrap import tables as pt
 from enum import Enum
 from loguru import logger
 from astropy import units as u
 from astropy import coordinates as coord
 from rich import print as rprint
-from rich import progress
 import blessed
 from . import vex
 from . import mstools
@@ -620,6 +615,32 @@ class CorrelatorPass:
                    freqsetup=Subbands.from_dict(data['freqsetup']) if data.get('freqsetup') else None)
 
 
+def _migrate_experiment_dict(data: dict) -> dict:
+    """Migrates an Experiment-shaped dict from an older schema to the current one.
+
+    Returns the (possibly mutated) dict. The function is intentionally permissive:
+    unknown keys are kept as-is so future readers can see what was stored, and
+    missing keys are filled with safe defaults so an older JSON keeps loading.
+
+    Schema history:
+      - v1 (implicit): no ``_schema_version`` key. Same shape as v2 except the
+        ``policy`` and ``_schema_version`` keys are absent.
+      - v2: introduces ``_schema_version`` and an optional ``policy`` block.
+    """
+    version = int(data.get('_schema_version', 1))
+    if version > Experiment.SCHEMA_VERSION:
+        logger.warning(
+            f"Experiment JSON has _schema_version={version} but this code only knows "
+            f"up to {Experiment.SCHEMA_VERSION}. Loading optimistically; some fields "
+            "may be ignored."
+        )
+    if version < 2:
+        # v1 -> v2: add the policy slot (always None on the way up).
+        data.setdefault('policy', None)
+        data['_schema_version'] = 2
+    return data
+
+
 class Experiment:
     """Defines and EVN experiment with all relevant metadata.
     """
@@ -628,7 +649,8 @@ class Experiment:
                  sources: Sources | None = None, antennas: Antennas | None = None, scans: Scans | None = None,
                  refant: list[str] | None = None,
                  correlator_passes: list[CorrelatorPass] | None = None,
-                 lag_snr: dict | None = None):
+                 lag_snr: dict | None = None,
+                 policy=None):
         self.expname = expname
         self.obsdate = obsdate
         self.supsci = supsci
@@ -644,6 +666,10 @@ class Experiment:
         self.correlator_passes = correlator_passes if correlator_passes else []
         self.lag_snr: dict[str, dict[str, dict[str, float]]] = lag_snr if lag_snr else {}
         self._timerange: list[dt.datetime] | None = None
+        # Policy is set lazily (None means "interactive defaults"). The full Policy
+        # dataclass lives in evn_postprocess.policy and is loaded on demand to avoid
+        # a circular import at module-load time.
+        self.policy = policy
 
     @property
     def spectral_line(self) -> bool:
@@ -786,93 +812,10 @@ class Experiment:
             raise RuntimeError(f"Error processing VEX data: {e}")
 
 
-    def get_setup_from_ms(self):
-        """Obtains the time range, antennas, sources, and frequencies of the observation
-        from all existing passes with MS files and incorporate them into the current object.
-        """
-        for i,a_pass in enumerate(self.correlator_passes):
-            if (i > 0) and ('_line' not in ''.join(glob.glob(f"{self.expname.lower()}*.lis"))):
-                # then this is just a multiphase center with all setups identical. Do not loop
-                # through all MSs.
-                a_pass.antennas = self.correlator_passes[0].antennas
-                a_pass.sources = self.correlator_passes[0].sources
-                a_pass.freqsetup = self.correlator_passes[0].freqsetup
-                continue
-
-            a_pass.antennas = Antennas()
-            try:
-                with pt.table(a_pass.msfile.name, readonly=True, ack=False) as ms:
-                    with pt.table(ms.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ant:
-                        antenna_col = ms_ant.getcol('NAME')
-                        for ant_name in antenna_col:
-                            ant = Antenna(name=ant_name, observed=True)
-                            a_pass.antennas.add(ant)
-
-                            if ant_name.capitalize() in self.antennas.names:
-                                self.antennas[ant_name.capitalize()].observed = True
-                            else:
-                                ant = Antenna(name=ant_name, observed=True)
-                                self.antennas.add(ant)
-
-                    with pt.table(ms.getkeyword('DATA_DESCRIPTION'),
-                                  readonly=True, ack=False) as ms_spws:
-                        spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
-
-                    ant_subband = defaultdict(set)
-                    print('\nReading the MS to find the antennas that actually observed...')
-                    with progress.Progress() as progress_bar:
-                        task = progress_bar.add_task("[yellow]Reading MS...", total=len(ms))
-                        for (start, nrow) in mstools.misc.chunkert(0, len(ms), 100):
-                            ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
-                            ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
-                            spws = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
-                            msdata = ms.getcol('DATA', startrow=start, nrow=nrow)
-
-                            for ant_i,antenna_name in enumerate(antenna_col):
-                                for spw in spw_names:
-                                    cond = np.where((ants1 == ant_i) & (ants2 == ant_i) \
-                                                    & (spws == spw))
-                                    if not (abs(msdata[cond]) < 1e-5).all():
-                                        ant_subband[antenna_name].add(spw)
-
-                            progress_bar.update(task, advance=nrow)
-
-                    for antenna_name in self.antennas.names:
-                        if antenna_name in a_pass.antennas:
-                            a_pass.antennas[antenna_name].subbands = \
-                                      tuple(ant_subband[antenna_name])
-                            a_pass.antennas[antenna_name].observed = \
-                                      len(a_pass.antennas[antenna_name].subbands) > 0
-
-                    # Takes the predefined "best" antennas as reference
-                    if len(self.refant) == 0:
-                        for ant in ('Ef', 'O8', 'Ys', 'Mc', 'Gb', 'At', 'Pt'):
-                            if (ant in a_pass.antennas) and (a_pass.antennas[ant].observed):
-                                self.refant = [ant, ]
-                                break
-
-                    with pt.table(ms.getkeyword('FIELD'), readonly=True, ack=False) as ms_field:
-                        a_pass.sources = ms_field.getcol('NAME')
-
-                    with pt.table(ms.getkeyword('OBSERVATION'), readonly=True, ack=False) as ms_obs:
-                        self.timerange = dt.datetime(1858, 11, 17, 0, 0, 2) + \
-                             ms_obs.getcol('TIME_RANGE')[0]*dt.timedelta(seconds=1)
-                    with pt.table(ms.getkeyword('SPECTRAL_WINDOW'),
-                                  readonly=True, ack=False) as ms_spw:
-                        a_pass.freqsetup = Subbands(ms_spw.getcol('NUM_CHAN')[0],
-                                                    ms_spw.getcol('CHAN_FREQ'),
-                                                    ms_spw.getcol('TOTAL_BANDWIDTH')[0])
-                        logger.debug(f"Loaded MS metadata, freqsetup {a_pass.freqsetup} for {a_pass.msfile}")
-            except RuntimeError:
-                print(f"WARNING: {a_pass.msfile} not found.")
-
-        for antenna_name in self.antennas.names:
-            try:
-                self.antennas[antenna_name].observed = any([cp.antennas[antenna_name].observed \
-                                                            for cp in self.correlator_passes])
-            except ValueError:
-                print(f"Antenna {antenna_name} in list not present in the MS.")
-
+    # NOTE: A previous Experiment.get_setup_from_ms() implementation was removed because
+    # (a) it was dead code: it called a non-existent Antennas.add() method and would have
+    # raised AttributeError at runtime, and (b) the canonical metadata loader is
+    # process.get_metadata_from_ms() which is what the workflow actually uses.
 
     @property
     def _local_copy(self) -> Path:
@@ -942,24 +885,33 @@ class Experiment:
         return Path(f"{expname.lower() if expname is not None else Path.cwd().name.lower()}.json").exists()
 
 
+    # JSON schema version. Bump every time to_dict / from_dict change shape in
+    # an incompatible way. Always store it under the "_schema_version" key. The
+    # loader migrates older files in-place.
+    SCHEMA_VERSION = 2
+
     def to_dict(self) -> dict:
         """Converts the Experiment to a plain dictionary for JSON serialization."""
-        return {'expname': self.expname, 'obsdate': self.obsdate.isoformat() if self.obsdate else None,
+        return {'_schema_version': Experiment.SCHEMA_VERSION,
+                'expname': self.expname, 'obsdate': self.obsdate.isoformat() if self.obsdate else None,
                 'supsci': self.supsci, 'dirs': self.dirs.to_dict() if self.dirs else None,
-                'eEVNname': self.eEVNname, 'steps': [s.to_dict() if hasattr(s, 'to_dict') else s for s in self.steps] if self.steps else [],
+                'eEVNname': self.eEVNname,
+                'steps': [s.to_dict() if hasattr(s, 'to_dict') else s for s in self.steps] if self.steps else [],
                 'pi': [p.to_dict() for p in self.pi] if self.pi else [],
                 'credentials': self.credentials.to_dict() if self.credentials else None,
                 'sources': self.sources.to_dict() if self.sources else [],
                 'antennas': self.antennas.to_dict() if self.antennas else [],
                 'scans': self.scans.to_dict() if self.scans else [], 'refant': self.refant,
                 'spectral_line': self.spectral_line,
+                'policy': self.policy.to_dict() if getattr(self, 'policy', None) is not None else None,
                 'correlator_passes': [cp.to_dict() for cp in self.correlator_passes] if self.correlator_passes else [],
                 '_timerange': [t.isoformat() for t in self._timerange] if self._timerange else None,
                 'lag_snr': self.lag_snr}
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Experiment':
-        """Creates an Experiment from a plain dictionary."""
+        """Creates an Experiment from a plain dictionary, migrating older schemas if needed."""
+        data = _migrate_experiment_dict(data)
         exp = cls(expname=data['expname'], obsdate=dt.date.fromisoformat(data['obsdate']), supsci=data['supsci'],
                   dirs=Dirs.from_dict(data['dirs']), eEVNname=data.get('eEVNname'), steps=data.get('steps'),
                   pi=[PI.from_dict(p) for p in data['pi']] if data.get('pi') else None,
@@ -967,19 +919,36 @@ class Experiment:
                   sources=Sources.from_dict(data['sources']) if data.get('sources') else None,
                   antennas=Antennas.from_dict(data['antennas']) if data.get('antennas') else None,
                   scans=Scans.from_dict(data['scans']) if data.get('scans') else None, refant=data.get('refant'),
-                #   spectral_line=data.get('spectral_line', False),
-                  correlator_passes=[CorrelatorPass.from_dict(cp) for cp in data['correlator_passes']] if data.get('correlator_passes') else None)
+                  correlator_passes=[CorrelatorPass.from_dict(cp) for cp in data['correlator_passes']]
+                                     if data.get('correlator_passes') else None)
         if data.get('_timerange'):
             exp._timerange = [dt.datetime.fromisoformat(t) for t in data['_timerange']]
         exp.lag_snr = data.get('lag_snr', {})
+        # Policy is attached lazily because the Policy dataclass lives in a sibling module
+        # imported only when the policy feature is actually used.
+        if data.get('policy') is not None:
+            from .policy import Policy  # local import avoids circular dependency
+            exp.policy = Policy.from_dict(data['policy'])
         return exp
 
     def store(self, path: Path | None = None):
-        """Stores the current Experiment into a JSON file in the indicated path. If not provided,
-        it will be '{expname.lower()}.json' where exp is the name of the experiment.
+        """Atomically stores the experiment as JSON.
+
+        Writes to ``<path>.tmp`` then renames into place so an interrupted save
+        cannot leave a half-written file that subsequent loads would crash on.
         """
-        with open(path if path is not None else self._local_copy, 'w') as f:
+        target = Path(path) if path is not None else self._local_copy
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        with open(tmp, 'w') as f:
             json.dump(self.to_dict(), f, indent=2)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                # fsync isn't supported on every fs (e.g. some network mounts);
+                # ignore and rely on os.replace's atomicity guarantee.
+                pass
+        os.replace(tmp, target)
 
     @staticmethod
     def load(expname: str | None = None, path: Path | None = None):
