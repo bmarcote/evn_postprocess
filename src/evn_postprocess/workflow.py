@@ -678,30 +678,143 @@ def validate_steps(from_step: str, to_step: str | None = None) -> tuple[bool, st
 
 
 def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None:
-    """Check that critical output files exist for steps marked done.
+    """Check that expected output files exist and are up-to-date for steps marked done.
 
-    If an output is missing, reset that step and all subsequent steps so the
-    workflow re-runs them.  Currently validates:
-      - j2ms2: MS files from correlator_passes must exist on disk.
+    For each step marked done, verifies:
+      1. The expected output files exist on disk.
+      2. The output files are newer than the input files they depend on.
+
+    If either check fails, resets that step and all subsequent steps so the
+    workflow re-runs them.  Stale output files (older than inputs) are removed.
+
+    Validated steps (input -> output):
+      - lisfiles:       (none) -> *.lis
+      - j2ms2:          *.lis  -> *.ms
+      - standardplots:  *.ms   -> *.ps
+      - msops:          *.ms   -> *IDI*
+      - polconvert:     *IDI*  -> *IDI*.PCONVERT  (only if polconvert antennas exist)
+      - antab:          (none) -> pipeline/in/*.antab
+      - pipeline:       pipeline/in/* + *IDI* -> pipeline/out/*
     """
     step_names = [s.name for s in all_steps]
-    if 'j2ms2' not in step_names:
-        return
 
-    j2ms2_step = all_steps[step_names.index('j2ms2')]
-    if not j2ms2_step.done:
-        return
-
-    # Check MS file existence
-    if exp.correlator_passes and not all(p.msfile.exists() for p in exp.correlator_passes):
-        j2ms2_idx = step_names.index('j2ms2')
+    def _reset_from(step_name: str, reason: str) -> None:
+        """Reset step_name and all subsequent steps, log the reason."""
+        idx = step_names.index(step_name)
         reset_names = []
-        for s in all_steps[j2ms2_idx:]:
+        for s in all_steps[idx:]:
             if s.done:
                 s.done = False
                 reset_names.append(s.name)
         if reset_names:
-            logger.info(f"MS file(s) missing on disk — resetting steps: {', '.join(reset_names)}")
+            logger.info(f"{reason} — resetting steps: {', '.join(reset_names)}")
+
+    def _newest_mtime(paths: list[Path]) -> float:
+        """Return the newest modification time among existing paths (0.0 if none exist)."""
+        mtimes = [p.stat().st_mtime for p in paths if p.exists()]
+        return max(mtimes) if mtimes else 0.0
+
+    def _oldest_mtime(paths: list[Path]) -> float:
+        """Return the oldest modification time among existing paths (inf if none exist)."""
+        mtimes = [p.stat().st_mtime for p in paths if p.exists()]
+        return min(mtimes) if mtimes else float('inf')
+
+    def _remove_stale(paths: list[Path]) -> None:
+        """Remove files/directories that are stale (will be recreated)."""
+        for p in paths:
+            if p.exists():
+                if p.is_dir():
+                    shutil.rmtree(p)
+                else:
+                    p.unlink()
+
+    # --- lisfiles: outputs are *.lis ---
+    if 'lisfiles' in step_names and all_steps[step_names.index('lisfiles')].done:
+        lis_files = list(Path('.').glob(f"{exp.expname.lower()}*.lis"))
+        if not lis_files:
+            _reset_from('lisfiles', "lis file(s) missing on disk")
+            return  # everything downstream depends on this
+
+    # --- j2ms2: inputs=*.lis, outputs=*.ms ---
+    if 'j2ms2' in step_names and all_steps[step_names.index('j2ms2')].done:
+        if not exp.correlator_passes:
+            _reset_from('j2ms2', "No correlator passes defined")
+            return
+
+        ms_files = [p.msfile for p in exp.correlator_passes]
+        lis_files = [p.lisfile for p in exp.correlator_passes]
+        existing_ms = [f for f in ms_files if f.exists()]
+
+        if len(existing_ms) < len(ms_files):
+            _reset_from('j2ms2', "MS file(s) missing on disk")
+            return
+
+        # Timestamp check: MS must be newer than lis files
+        if _oldest_mtime(ms_files) < _newest_mtime(lis_files):
+            _remove_stale(ms_files)
+            _reset_from('j2ms2', "MS file(s) older than lis input(s)")
+            return
+
+    # --- standardplots: inputs=*.ms, outputs=*.ps ---
+    if 'standardplots' in step_names and all_steps[step_names.index('standardplots')].done:
+        ps_files = list(Path('.').glob("*.ps"))
+        ms_files = [p.msfile for p in exp.correlator_passes] if exp.correlator_passes else []
+
+        if not ps_files:
+            _reset_from('standardplots', "Standard plot file(s) missing on disk")
+        elif ms_files and _oldest_mtime(ps_files) < _newest_mtime(ms_files):
+            _remove_stale(ps_files)
+            _reset_from('standardplots', "Standard plot(s) older than MS file(s)")
+
+    # --- msops: inputs=*.ms, outputs=*IDI* ---
+    if 'msops' in step_names and all_steps[step_names.index('msops')].done:
+        idi_files = []
+        for p in (exp.correlator_passes or []):
+            idi_files.extend(Path('.').glob(f"{p.fitsidifile}*"))
+        ms_files = [p.msfile for p in exp.correlator_passes] if exp.correlator_passes else []
+
+        if not idi_files:
+            _reset_from('msops', "FITS-IDI file(s) missing on disk")
+        elif ms_files and _oldest_mtime(idi_files) < _newest_mtime(ms_files):
+            _remove_stale(idi_files)
+            _reset_from('msops', "FITS-IDI file(s) older than MS file(s)")
+
+    # --- polconvert: inputs=*IDI*, outputs=*IDI*.PCONVERT (only if needed) ---
+    if 'polconvert' in step_names and all_steps[step_names.index('polconvert')].done:
+        if exp.antennas.polconvert:
+            pconv_files = list(Path('.').glob("*IDI*.PCONVERT"))
+            idi_files = []
+            for p in (exp.correlator_passes or []):
+                idi_files.extend(Path('.').glob(f"{p.fitsidifile}*"))
+            idi_inputs = [f for f in idi_files if '.PCONVERT' not in f.name]
+
+            if not pconv_files:
+                _reset_from('polconvert', "PolConvert output file(s) missing on disk")
+            elif idi_inputs and _oldest_mtime(pconv_files) < _newest_mtime(idi_inputs):
+                _remove_stale(pconv_files)
+                _reset_from('polconvert', "PolConvert output(s) older than IDI input(s)")
+
+    # --- standardplots2: inputs=*.ms (post-ops), outputs=*.ps (re-created) ---
+    # Note: standardplots2 re-runs plots; its outputs overlap with standardplots.
+    # We skip timestamp validation here since msops_post just calls create_standardplots
+    # which already has internal existence checks.
+
+    # --- antab: outputs=pipeline/in/*.antab ---
+    if 'antab' in step_names and all_steps[step_names.index('antab')].done:
+        antab_files = list(exp.dirs.pipe_in.glob("*.antab")) if exp.dirs.pipe_in.exists() else []
+        if not antab_files:
+            _reset_from('antab', "ANTAB file(s) missing in pipeline/in")
+
+    # --- pipeline: inputs=pipeline/in/*, outputs=pipeline/out/* ---
+    if 'pipeline' in step_names and all_steps[step_names.index('pipeline')].done:
+        pipe_out = list(exp.dirs.pipe_out.glob("*")) if exp.dirs.pipe_out.exists() else []
+        pipe_in = list(exp.dirs.pipe_in.glob("*")) if exp.dirs.pipe_in.exists() else []
+
+        if not pipe_out:
+            _reset_from('pipeline', "Pipeline output file(s) missing")
+        elif pipe_in and _oldest_mtime(pipe_out) < _newest_mtime(pipe_in):
+            _remove_stale(pipe_out)
+            _reset_from('pipeline', "Pipeline output(s) older than input(s)")
 
 
 def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
