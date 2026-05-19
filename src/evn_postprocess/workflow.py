@@ -252,8 +252,9 @@ def create_msfile(exp: experiment.Experiment) -> bool:
         bool: True if MS files were created successfully.
     """
     try:
-        # Skip if metadata already loaded (check before replacing correlator_passes)
-        if exp.correlator_passes and exp.correlator_passes[0].freqsetup is not None:
+        # Skip if metadata already loaded AND MS files exist on disk
+        if exp.correlator_passes and exp.correlator_passes[0].freqsetup is not None \
+                and all(p.msfile.exists() for p in exp.correlator_passes):
             logger.debug("MS metadata already loaded. Skipping MS creation and extraction.")
             return True
 
@@ -676,6 +677,33 @@ def validate_steps(from_step: str, to_step: str | None = None) -> tuple[bool, st
     return True, ""
 
 
+def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None:
+    """Check that critical output files exist for steps marked done.
+
+    If an output is missing, reset that step and all subsequent steps so the
+    workflow re-runs them.  Currently validates:
+      - j2ms2: MS files from correlator_passes must exist on disk.
+    """
+    step_names = [s.name for s in all_steps]
+    if 'j2ms2' not in step_names:
+        return
+
+    j2ms2_step = all_steps[step_names.index('j2ms2')]
+    if not j2ms2_step.done:
+        return
+
+    # Check MS file existence
+    if exp.correlator_passes and not all(p.msfile.exists() for p in exp.correlator_passes):
+        j2ms2_idx = step_names.index('j2ms2')
+        reset_names = []
+        for s in all_steps[j2ms2_idx:]:
+            if s.done:
+                s.done = False
+                reset_names.append(s.name)
+        if reset_names:
+            logger.info(f"MS file(s) missing on disk — resetting steps: {', '.join(reset_names)}")
+
+
 def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
     """Configure loguru file sink for the debug log (post_process.log).
 
@@ -745,6 +773,7 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
             stored_done = {s.name: s.done for s in stored_steps}
             for s in all_steps:
                 s.done = stored_done.get(s.name, False)
+        _validate_outputs(exp, all_steps)
         exp.steps = all_steps
         exp.store()
         steps_to_run = [s for s in all_steps if not s.done]
