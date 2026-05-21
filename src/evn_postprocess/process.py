@@ -29,7 +29,7 @@ from . import experiment, utils, mstools
 from .plotting import convert_ps_to_png, serve_dashboard
 # polconvert_main kept for future use once version compatibility is resolved.
 # from .scripts.polconvert import main as polconvert_main
-from evn_support import find_idi_with_time as find_idi_mod
+from .scripts import find_idi_with_time as find_idi_mod
 
 
 def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
@@ -668,6 +668,11 @@ def update_piletter(exp: experiment.Experiment) -> bool:
 
                     destfile.write(tmp_line)
                     if ('Further remarks:' in tmp_line) and (not polconvert_written):
+                        # The polconvert paragraph, the bandwidth-limitation paragraph, and
+                        # the opacity paragraph are independent: each may apply on its own.
+                        # Previously the bandwidth and opacity blocks were nested inside
+                        # `if len(polconvert) > 0`, which silently suppressed them whenever
+                        # no antenna required PolConvert.
                         if len(exp.antennas.polconvert) > 0:
                             destfile.write("\n")
                             if len(exp.antennas.polconvert) > 1:
@@ -737,19 +742,77 @@ def update_piletter(exp: experiment.Experiment) -> bool:
                             s += "due to their local bandwidth limitations.\n"
                             destfile.write(s)
 
-                        s = "- Note that the data from the antenna"
-                        s_end = " have been corrected for opacity in the Tsys/Gain Curve " \
-                                "measurements."
-                        if len(exp.antennas.opacity) > 1:
-                            s += f"s {', '.join(exp.antennas.opacity[:-1])} and " \
-                                 f"{exp.antennas.opacity[-1]}"
-                            destfile.write(s + s_end)
-                        elif len(exp.antennas.opacity) == 1:
-                            s += f" {exp.antennas.opacity[0]}"
+                        if len(exp.antennas.opacity) >= 1:
+                            s = "- Note that the data from the antenna"
+                            s_end = (" have been corrected for opacity in the Tsys/Gain Curve "
+                                     "measurements.\n")
+                            if len(exp.antennas.opacity) > 1:
+                                s += f"s {', '.join(exp.antennas.opacity[:-1])} and " \
+                                     f"{exp.antennas.opacity[-1]}"
+                            else:
+                                s += f" {exp.antennas.opacity[0]}"
                             destfile.write(s + s_end)
 
     os.rename(f"{exp.expname.lower()}.piletter~", f"{exp.expname.lower()}.piletter")
     return True
+
+
+_DEFAULT_TCONVERT_BIN = "tConvert"
+
+
+def _resolve_tconvert_binary() -> str:
+    """Returns the tConvert binary path.
+
+    Resolution order:
+      1. ``EVN_TCONVERT`` environment variable (full path or executable name on $PATH).
+      2. The ``tconvert`` entry in computers.toml (under the ``executables`` table or as
+         a top-level key whose value is the path), if available.
+      3. Plain ``tConvert`` (relies on $PATH).
+
+    This replaces a previously hardcoded developer build path that broke the step on
+    every machine other than the original developer's workstation.
+    """
+    env_path = os.environ.get("EVN_TCONVERT")
+    if env_path:
+        return env_path
+    try:
+        servers = experiment.retrieve_servers()
+        if "tconvert" in servers.names():
+            return str(servers["tconvert"].path)
+    except (FileNotFoundError, KeyError):
+        pass
+    return _DEFAULT_TCONVERT_BIN
+
+
+def _du_kbytes(path: Path | str) -> int:
+    """Returns the disk usage of *path* in kilobytes via ``du -s``.
+
+    The previous implementation called ``subprocess.run("du -s ...", shell=True)``,
+    decoded the stdout, and indexed straight into ``split()[0]`` with no error
+    handling. A flaky shell or an empty/unicode-error stdout would crash the step
+    with an opaque ``IndexError``/``ValueError``. This helper returns 0 (and logs
+    a warning) on failure so the surrounding logic can pick a sane default chunk
+    size instead of aborting tconversion.
+    """
+    try:
+        result = subprocess.run(["du", "-s", str(path)], capture_output=True, text=True, timeout=120)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning(f"`du -s {path}` failed: {e}; defaulting size estimate to 0 kB.")
+        return 0
+    if result.returncode != 0:
+        logger.warning(f"`du -s {path}` exited with {result.returncode}; "
+                       f"stderr={result.stderr.strip()!r}; defaulting size estimate to 0 kB.")
+        return 0
+    parts = result.stdout.split()
+    if not parts:
+        logger.warning(f"`du -s {path}` produced no output; defaulting size estimate to 0 kB.")
+        return 0
+    try:
+        return int(parts[0])
+    except ValueError:
+        logger.warning(f"Could not parse `du -s {path}` output {result.stdout!r}; "
+                       "defaulting size estimate to 0 kB.")
+        return 0
 
 
 def tconvert(exp: experiment.Experiment) -> bool:
@@ -764,15 +827,13 @@ def tconvert(exp: experiment.Experiment) -> bool:
     Returns:
         True if all passes converted successfully.
     """
-    # TODO: change to production tConvert once it is done
-    tConvert_bin = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert"
+    tConvert_bin = _resolve_tconvert_binary()
     for a_pass in exp.correlator_passes:
         if len(glob.glob(f"{a_pass.fitsidifile}*")) > 0:
             continue
 
         # The size difference between internal MS and FITS-IDI is around 1.55
-        idi_size = 1.55*u.kbit*int(subprocess.run(f"du -s {str(a_pass.msfile)}", shell=True,
-                                                  capture_output=True).stdout.decode().split()[0])
+        idi_size = 1.55 * u.kbit * _du_kbytes(a_pass.msfile)
 
         if idi_size < 20*u.Gb:
             utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
