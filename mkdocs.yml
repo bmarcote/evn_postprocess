@@ -1,0 +1,98 @@
+site_name: EVN Post-Processing
+site_url: https://evn-postprocess.readthedocs.io/
+site_description: Semi-automatic post-processing pipeline for EVN (European VLBI Network) observations
+site_author: Benito Marcote
+copyright: "&copy; 2024-2026 JIVE"
+repo_name: bmarcote/evn_postprocess
+repo_url: https://github.com/bmarcote/evn_postprocess
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Configuration: getting-started/configuration.md
+  - User Guide:
+    - Workflow Overview: guide/workflow.md
+    - Running the Pipeline: guide/running.md
+    - Batch Mode: guide/batch-mode.md
+    - Communications: guide/comms.md
+    - Dashboard: guide/dashboard.md
+    - Editing Metadata: guide/editing.md
+    - External Tools: guide/tools.md
+  - Reference:
+    - CLI: reference/cli.md
+    - Workflow Steps: reference/steps.md
+    - Policy File: reference/policy.md
+    - Comms Config: reference/comms-config.md
+    - Environment Variables: reference/env-vars.md
+  - API:
+    - experiment: api/experiment.md
+    - workflow: api/workflow.md
+    - comms: api/comms.md
+    - dialog: api/dialog.md
+    - plotting: api/plotting.md
+    - process: api/process.md
+    - pipeline: api/pipeline.md
+    - policy: api/policy.md
+    - tools: api/tools.md
+    - io: api/io.md
+    - utils: api/utils.md
+    - mstools: api/mstools.md
+  - Development:
+    - Contributing: development/contributing.md
+    - Architecture: development/architecture.md
+    - Changelog: development/changelog.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            inherited_members: true
+            show_source: false
+            show_root_heading: true
+            show_symbol_type_heading: true
+            members_order: source
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - tables
+  - admonition
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details

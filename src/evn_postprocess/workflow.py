@@ -27,6 +27,7 @@ from . import pipeline
 from . import lisfiles
 from . import dialog
 from . import utils
+from . import comms as _comms
 
 _RICH_TAG_RE = re.compile(r'\[/?[\w\s#.,;:!?=-]+\]')
 _stdout_console = Console(highlight=False)
@@ -38,6 +39,10 @@ _stderr_console = Console(stderr=True, highlight=False)
 # from the CLI entry point.
 _BATCH_MODE = False
 REVIEW_FLAG_FILENAME = "REVIEW_REQUIRED"
+
+# Module-level notifier for sending messages at key interaction points.
+# Set via :func:`set_notifier` from the CLI entry point.
+_NOTIFIER: _comms.Notifier | None = None
 
 
 def set_batch_mode(enabled: bool) -> None:
@@ -54,6 +59,21 @@ def set_batch_mode(enabled: bool) -> None:
 def is_batch_mode() -> bool:
     """Returns the current batch-mode flag."""
     return _BATCH_MODE
+
+
+def set_notifier(notifier: _comms.Notifier) -> None:
+    """Set the module-level notifier for comms notifications.
+
+    Args:
+        notifier: A concrete Notifier instance (NoneNotifier, EmailNotifier, or MattermostNotifier).
+    """
+    global _NOTIFIER
+    _NOTIFIER = notifier
+
+
+def get_notifier() -> _comms.Notifier | None:
+    """Returns the current module-level notifier, or None."""
+    return _NOTIFIER
 
 
 def _review_flag_path(exp: experiment.Experiment) -> Path:
@@ -101,13 +121,18 @@ def _signal_pause(exp: experiment.Experiment, step: str) -> None:
     detect the pause without parsing logs) and stays silent.
     """
     piletter = f"{exp.expname.lower()}.piletter"
+    pause_reason = (f"Step '{step}' finished successfully. Review {piletter} and the pipeline "
+                     f"output, then run `postprocess run` or `postprocess review ok` to continue.")
+
     if _BATCH_MODE:
-        _write_review_flag(
-            exp, step,
-            f"Step '{step}' finished successfully. Review {piletter} and the pipeline "
-            f"output, then run `postprocess run` or `postprocess review ok` to continue."
-        )
+        _write_review_flag(exp, step, pause_reason)
+        if _NOTIFIER is not None:
+            _comms.notify_step_pause(exp, step, pause_reason, _NOTIFIER)
         return
+
+    # Send comms notification (email / mattermost) if configured
+    if _NOTIFIER is not None:
+        _comms.notify_step_pause(exp, step, pause_reason, _NOTIFIER)
 
     body = (f"[bold]Please do the following before continuing:[/bold]\n\n"
             f"  1. Check the pipeline output plots and logs.\n"
@@ -447,14 +472,23 @@ def msops(exp: experiment.Experiment) -> bool:
     if not _BATCH_MODE:
         process.open_standardplot_files(exp)
 
-    gui = dialog.make_dialog(batch=_BATCH_MODE)
-    try:
-        if not gui.askMSoperations(exp):
+    # --- Comms: send dashboard notification and optionally get interactive feedback ---
+    msops_feedback: dict | None = None
+    if _NOTIFIER is not None:
+        msops_feedback = _comms.notify_dashboard_review(exp, _NOTIFIER)
+
+    if msops_feedback is not None:
+        # Interactive Mattermost feedback received — apply directly, skip dialog
+        _comms.apply_msops_feedback(exp, msops_feedback)
+    else:
+        gui = dialog.make_dialog(batch=_BATCH_MODE)
+        try:
+            if not gui.askMSoperations(exp):
+                return False
+        except dialog.BatchInteractionError as exc:
+            logger.error(f"Cannot run msops in batch mode: {exc}")
+            _write_review_flag(exp, "msops", str(exc))
             return False
-    except dialog.BatchInteractionError as exc:
-        logger.error(f"Cannot run msops in batch mode: {exc}")
-        _write_review_flag(exp, "msops", str(exc))
-        return False
 
     exp.store()
     # Use boolean `and` so we short-circuit and don't keep running heavy MS
