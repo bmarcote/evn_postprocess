@@ -1,0 +1,33 @@
+# EVN Post-Processing Communications Configuration
+#
+# Copy this file to one of the following locations:
+#   ./comms.toml                        (per-experiment, highest priority)
+#   $XDG_CONFIG_HOME/evn/comms.toml     (user-level)
+#   ~/.config/evn/comms.toml            (user-level fallback)
+#   ~jops/.config/evn/comms.toml        (shared jops account)
+#
+# Or point to it explicitly:  postprocess --comms /path/to/comms.toml run
+
+# Communication mode: "none", "email", or "mattermost"
+mode = "none"
+
+# Target username: email address (for email mode) or Mattermost username (for mattermost mode)
+username = ""
+
+# ---------- Email settings (mode = "email") ----------
+[email]
+smtp_host = "smtp.example.com"
+smtp_port = 587
+from_address = ""   # Sender address; defaults to 'username' if empty
+# Password can also be set via the POSTPROCESS_SMTP_PASSWORD environment variable
+password = ""
+
+# ---------- Mattermost settings (mode = "mattermost") ----------
+[mattermost]
+server_url = "https://mattermost.example.com"
+# Personal access token for the bot/user account.
+# Can also be set via the POSTPROCESS_MM_TOKEN environment variable.
+token = ""
+# Optional: fixed channel ID for notifications.
+# If empty, a direct-message channel with 'username' is created automatically.
+channel_id = ""

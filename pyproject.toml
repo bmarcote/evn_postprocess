@@ -24,6 +24,12 @@ test = [
     "pytest>=7.0.0",
     "pytest-mock>=3.10.0",
 ]
+docs = [
+    "zensical",
+    "mkdocs-material",
+    "mkdocstrings-python",
+    "pymdown-extensions>=10.21",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

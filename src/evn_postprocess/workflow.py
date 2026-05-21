@@ -25,7 +25,128 @@ from . import pipeline
 from . import lisfiles
 from . import dialog
 from . import utils
+from . import comms as _comms
 
+<<<<<<< HEAD
+=======
+_RICH_TAG_RE = re.compile(r'\[/?[\w\s#.,;:!?=-]+\]')
+_stdout_console = Console(highlight=False)
+_stderr_console = Console(stderr=True, highlight=False)
+
+# Module-level batch-mode flag. When True the runner refuses to call interactive
+# dialogs and signals "needs_review" by writing a marker file instead of
+# printing a Rich panel and waiting for the operator. Set via :func:`set_batch_mode`
+# from the CLI entry point.
+_BATCH_MODE = False
+REVIEW_FLAG_FILENAME = "REVIEW_REQUIRED"
+
+# Module-level notifier for sending messages at key interaction points.
+# Set via :func:`set_notifier` from the CLI entry point.
+_NOTIFIER: _comms.Notifier | None = None
+
+
+def set_batch_mode(enabled: bool) -> None:
+    """Toggles the package-wide batch-mode flag.
+
+    See module docstring for the contract. Kept as a function (rather than a
+    ``Policy.batch`` lookup) because some helpers (notably :func:`msops`) are
+    invoked through ``run_isolated_task`` without a Policy attached.
+    """
+    global _BATCH_MODE
+    _BATCH_MODE = bool(enabled)
+
+
+def is_batch_mode() -> bool:
+    """Returns the current batch-mode flag."""
+    return _BATCH_MODE
+
+
+def set_notifier(notifier: _comms.Notifier) -> None:
+    """Set the module-level notifier for comms notifications.
+
+    Args:
+        notifier: A concrete Notifier instance (NoneNotifier, EmailNotifier, or MattermostNotifier).
+    """
+    global _NOTIFIER
+    _NOTIFIER = notifier
+
+
+def get_notifier() -> _comms.Notifier | None:
+    """Returns the current module-level notifier, or None."""
+    return _NOTIFIER
+
+
+def _review_flag_path(exp: experiment.Experiment) -> Path:
+    """Returns the path of the ``REVIEW_REQUIRED`` marker for *exp*.
+
+    The marker lives at the root of the experiment work directory so an
+    operator can spot it without descending into ``logs/`` or ``pipeline/``.
+    """
+    return Path(REVIEW_FLAG_FILENAME)
+
+
+def _write_review_flag(exp: experiment.Experiment, step: str, reason: str) -> None:
+    """Writes the ``REVIEW_REQUIRED`` marker file with a human-readable reason.
+
+    Called from places that previously printed a Rich panel to stdout and
+    blocked on ``input``: now we leave a small text file on disk so a queue
+    system can detect the pause condition without parsing log output.
+
+    Args:
+        exp: Experiment object, used purely for logging context.
+        step: The step name that triggered the pause / review.
+        reason: Free-form explanation written into the marker for the operator.
+    """
+    flag = _review_flag_path(exp)
+    try:
+        flag.write_text(
+            f"step: {step}\nexperiment: {exp.expname}\nreason: {reason}\n",
+            encoding="utf-8",
+        )
+    except OSError as e:
+        logger.warning(f"Could not write {flag}: {e}")
+    logger.info(f"Wrote review marker {flag} for step '{step}'.")
+
+
+def _clear_review_flag(exp: experiment.Experiment) -> None:
+    """Removes the ``REVIEW_REQUIRED`` marker if present (idempotent)."""
+    _review_flag_path(exp).unlink(missing_ok=True)
+
+
+def _signal_pause(exp: experiment.Experiment, step: str) -> None:
+    """Signals a "stop and review" condition after a successful step.
+
+    In interactive mode this prints the historical Rich panel and the desktop
+    notification. In batch mode it writes a marker file (so the scheduler can
+    detect the pause without parsing logs) and stays silent.
+    """
+    piletter = f"{exp.expname.lower()}.piletter"
+    pause_reason = (f"Step '{step}' finished successfully. Review {piletter} and the pipeline "
+                     f"output, then run `postprocess run` or `postprocess review ok` to continue.")
+
+    if _BATCH_MODE:
+        _write_review_flag(exp, step, pause_reason)
+        if _NOTIFIER is not None:
+            _comms.notify_step_pause(exp, step, pause_reason, _NOTIFIER)
+        return
+
+    # Send comms notification (email / mattermost) if configured
+    if _NOTIFIER is not None:
+        _comms.notify_step_pause(exp, step, pause_reason, _NOTIFIER)
+
+    body = (f"[bold]Please do the following before continuing:[/bold]\n\n"
+            f"  1. Check the pipeline output plots and logs.\n"
+            f"  2. Review the PI letter ([bold cyan]{piletter}[/bold cyan]).\n"
+            f"     Non-observing antennas and PolConvert remarks have been\n"
+            f"     filled in automatically \u2014 verify and edit if needed.\n\n"
+            f"[bold]When ready, run one of:[/bold]\n\n"
+            f"  [bold green]postprocess run[/bold green]           \u2014 finalize and archive everything\n"
+            f"  [bold green]postprocess run {step}[/bold green]  \u2014 re-run this step's diagnostics\n")
+    Console().print(Panel(body, title=f"[bold yellow]Paused after '{step}' \u2014 review needed[/bold yellow]",
+                          border_style="yellow", padding=(1, 2)))
+    utils.notify(f"{exp.expname} post-processing", f"Paused after '{step}' \u2014 review pipeline results")
+
+>>>>>>> 7c26d5c629212102360e34c643238bcf71cc4a82
 
 @dataclass
 class Task(object):
@@ -336,11 +457,38 @@ def msops(exp: experiment.Experiment) -> bool:
         logger.debug("FITS IDI files already exist. Skipping creation.")
         return True
 
+<<<<<<< HEAD
     process.open_standardplot_files(exp)
     gui = dialog.Terminal()
     if not gui.askMSoperations(exp):
         return False
     
+=======
+    # In batch mode the standardplot dashboard would block forever waiting for
+    # the operator to close it, so we skip it. The plots are still on disk and
+    # can be reviewed asynchronously via `postprocess info --serve`.
+    if not _BATCH_MODE:
+        process.open_standardplot_files(exp)
+
+    # --- Comms: send dashboard notification and optionally get interactive feedback ---
+    msops_feedback: dict | None = None
+    if _NOTIFIER is not None:
+        msops_feedback = _comms.notify_dashboard_review(exp, _NOTIFIER)
+
+    if msops_feedback is not None:
+        # Interactive Mattermost feedback received — apply directly, skip dialog
+        _comms.apply_msops_feedback(exp, msops_feedback)
+    else:
+        gui = dialog.make_dialog(batch=_BATCH_MODE)
+        try:
+            if not gui.askMSoperations(exp):
+                return False
+        except dialog.BatchInteractionError as exc:
+            logger.error(f"Cannot run msops in batch mode: {exc}")
+            _write_review_flag(exp, "msops", str(exc))
+            return False
+
+>>>>>>> 7c26d5c629212102360e34c643238bcf71cc4a82
     exp.store()
     return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) \
         & process.print_exp(exp, False) & process.tconvert(exp)
