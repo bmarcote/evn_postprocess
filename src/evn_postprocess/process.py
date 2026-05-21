@@ -191,7 +191,7 @@ def j2ms2(exp: experiment.Experiment) -> bool:
             lag_future = None
             if not lag_ms.exists() and exp.correlator_passes[0].lisfile.exists():
                 lag_future = pool.submit(utils.shell_command, "j2ms2",
-                    ["-v", "-d", "frequency", "-o", str(lag_ms), str(exp.correlator_passes[0].lisfile)],
+                    ["-d", "frequency", "-o", str(lag_ms), "-v", str(exp.correlator_passes[0].lisfile)],
                     shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
 
             ms_results = [f.result() for f in ms_futures]
