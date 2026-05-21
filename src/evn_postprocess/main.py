@@ -226,6 +226,10 @@ def main():
                              'standardplots dashboard. The runner stops with exit code 0 and '
                              'writes a REVIEW_REQUIRED marker file when human input is needed. '
                              'Implies --policy if any decision is required.')
+    parser.add_argument('--comms', type=str, default=None, metavar='FILE',
+                        help='Path to a comms.toml file with the communication settings '
+                             '(mode, username, email/mattermost config). If not provided, '
+                             'auto-searches ./comms.toml and ~/.config/evn/comms.toml.')
     parser.add_argument('-v', '--version', action='version',
                         version='%(prog)s {}'.format(__version__))
     subparsers = parser.add_subparsers(help='[bold]If no command is provided, the full postprocessing will run ' \
@@ -350,6 +354,12 @@ def main():
             if exp.policy is None:
                 from .policy import Policy
                 exp.policy = Policy(batch=True)
+
+        # --- Comms wiring: load config and set the workflow notifier ---
+        from . import comms as _comms
+        _comms_config = _comms.CommsConfig.load(args.comms)
+        if _comms_config.mode != "none":
+            workflow.set_notifier(_comms.make_notifier(_comms_config))
 
         if not args.subpar or args.subpar == 'run':
             from_step, to_step = None, None
