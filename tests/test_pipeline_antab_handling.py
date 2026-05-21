@@ -30,9 +30,12 @@ class TestPipelineAntabFileHandling:
         self.pipe_temp_dir.mkdir(exist_ok=True)
         self.pipe_in_dir.mkdir(exist_ok=True)
         
-        # Create a mock experiment
+        # Create a mock experiment. Mock(spec=Experiment) only auto-allows class-level
+        # attributes; supsci is set in __init__, so we have to attach it explicitly
+        # otherwise pipeline.create_input_file blows up evaluating exp.supsci.lower().
         self.mock_exp = Mock(spec=experiment.Experiment)
         self.mock_exp.expname = "testexp"
+        self.mock_exp.supsci = "testjss"
         self.mock_exp.refant = ["Ef"]
         self.mock_exp.multi_phase_center = False
         
@@ -327,9 +330,11 @@ class TestPipelineAntabFileEdgeCases:
         self.pipe_temp_dir.mkdir(exist_ok=True)
         self.pipe_in_dir.mkdir(exist_ok=True)
         
-        # Create a mock experiment
+        # Create a mock experiment (see TestPipelineAntabFileHandling.setup_method for
+        # the rationale on why we set supsci explicitly).
         self.mock_exp = Mock(spec=experiment.Experiment)
         self.mock_exp.expname = "testexp"
+        self.mock_exp.supsci = "testjss"
         self.mock_exp.refant = ["Ef"]
         self.mock_exp.multi_phase_center = False
         

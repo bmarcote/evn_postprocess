@@ -17,7 +17,7 @@ from pathlib import Path
 from concurrent import futures
 import numpy as np
 from astropy.io import fits
-from evn_support import find_idi_with_time as find_idi
+from . import find_idi_with_time as find_idi
 import tomllib
 
 

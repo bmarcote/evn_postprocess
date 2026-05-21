@@ -10,12 +10,11 @@ requires-python = ">=3.13"
 dependencies = [
     "astropy",
     "blessed",
-    # "evn_support",
     "loguru",
     "multidict",
     "numpy",
     "ply",
-    "pyrap",
+    "python-casacore",
     "rich",
     "rich-argparse",
 ]
@@ -24,6 +23,12 @@ dependencies = [
 test = [
     "pytest>=7.0.0",
     "pytest-mock>=3.10.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
 ]
 
 [project.scripts]

@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from rich import print as rprint
 from . import utils
-from .experiment import Experiment, Server, Servers
+from .experiment import Experiment, Server, Servers, parse_masterprojects  # noqa: F401  (re-exported below)
 
 
 def get_init_files(exp: Experiment, servers: Servers) -> bool:
@@ -100,7 +100,7 @@ def get_vlbeer_sched_files(expname: str, obsdate: dt.date, server: Server) -> bo
             return
 
         try:
-            s_formatted = eval(f"f'{server.path}'", {'obsdate': obsdate})
+            s_formatted = utils.format_remote_path(str(server.path), obsdate=obsdate)
             utils.scp(f"{server.user}@{server.host}:{Path(s_formatted) / a_file}",
                             ".", timeout=120)
             logger.debug(f"Retrieved {a_file.name} from vlbeer")
@@ -108,11 +108,11 @@ def get_vlbeer_sched_files(expname: str, obsdate: dt.date, server: Server) -> bo
             rprint(f"[bold yellow]Could not retrieve {a_file.name} from vlbeer.[/bold yellow]")
             # Because a zero-sized file will be there
             a_file.unlink(missing_ok=True)
-            logger.warning("Could not retrieve {a_file.name} from vlbeer")
+            logger.warning(f"Could not retrieve {a_file.name} from vlbeer (timeout)")
         except ValueError:
             rprint(f"[bold yellow]Could not find {a_file.name} in vlbeer.[/bold yellow]")
             a_file.unlink(missing_ok=True)
-            logger.warning("Could not retrieve {a_file.name} from vlbeer")
+            logger.warning(f"Could not find {a_file.name} in vlbeer")
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(fetch_file, a_file) for a_file in files]
@@ -122,61 +122,8 @@ def get_vlbeer_sched_files(expname: str, obsdate: dt.date, server: Server) -> bo
     return all([p.exists() for p in files])
 
 
-def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]:
-        """Obtains the observing epoch from the file in the server (traditionally MASTER_PROJECTS.LIS).
-        In case of being an e-EVN experiment, it will add that information.
-
-        The expected file should be a text file with one line per experiment, with expname (capital case) in the first
-        column, followed by the observing epoch (YYMMDD format) in the second column.
-        If the entry refers to an e-EVN observation (with multiple experiments in the same run), then it will have
-        extra columns indicating all experiments within the run.
-
-        Each of the extra columns will have the experiment name in the first column in a different line,
-        followed again by the observing epoch.
-
-        Args:
-            expname (str): Experiment name to search for.
-            server (Server): Server object with MASTER_PROJECTS.LIS location.
-
-        Returns:
-            tuple[str, str | None]:
-                - The observing epoch of the experiment (YYMMDD format).
-                - The e-EVN name if it is an e-EVN experiment, None otherwise.
-        """
-        process = subprocess.Popen(["ssh", f"{server.user}@{server.host}", f"grep {expname} {server.path}"],
-                                   shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        output = process.communicate()[0].decode('utf-8')
-        if process.returncode != 0:
-            raise ValueError(f"Errorcode {process.returncode} when reading MASTER_PROJECTS.LIS."
-                             + f"\n{expname} is probably not in the EVN database.")
-
-        if output.count('\n') == 2:
-            # It is an e-EVN experiment!
-            # One line will have EXP EPOCH.
-            # The other one eEXP EPOCH EXP1 EXP2..
-            inputs = [i.split() for i in output[:-1].split('\n')]
-            obsdate = ''
-            for an_input in inputs:
-                if an_input[0] == expname:
-                    obsdate = an_input[1]
-                else:
-                    # The first element is the expname of the e-EVN run
-                    eEVNname = an_input[0]
-
-            obsdate = obsdate[2:]
-        elif output.count('\n') == 1:
-            expline = output[:-1].split()
-            if len(expline) > 2:
-                # This is an e-EVN, this experiment was the first one (so e-EVN is called the same)
-                eEVNname = expline[0].strip()
-            else:
-                eEVNname = None
-
-            obsdate = expline[1].strip()[2:]
-        else:
-            raise ValueError(f"{expname} not found in (ccs) MASTER_PROJECTS.LIS or server not reachable.")
-
-        return obsdate, eEVNname
+# parse_masterprojects is re-exported from experiment at the top of this module
+# (kept for backwards compatibility with historical io.parse_masterprojects call sites).
 
 
 def get_jexp_info(expname: str, server: Server) -> dict[str, str | None]:
