@@ -3,6 +3,7 @@
 These functions are called by the Snakemake workflow and wrap the functionality
 from process.py, pipeline.py, and pre.py modules.
 """
+import re
 import sys
 import json
 import glob
@@ -27,8 +28,6 @@ from . import dialog
 from . import utils
 from . import comms as _comms
 
-<<<<<<< HEAD
-=======
 _RICH_TAG_RE = re.compile(r'\[/?[\w\s#.,;:!?=-]+\]')
 _stdout_console = Console(highlight=False)
 _stderr_console = Console(stderr=True, highlight=False)
@@ -146,7 +145,6 @@ def _signal_pause(exp: experiment.Experiment, step: str) -> None:
                           border_style="yellow", padding=(1, 2)))
     utils.notify(f"{exp.expname} post-processing", f"Paused after '{step}' \u2014 review pipeline results")
 
->>>>>>> 7c26d5c629212102360e34c643238bcf71cc4a82
 
 @dataclass
 class Task(object):
@@ -457,13 +455,6 @@ def msops(exp: experiment.Experiment) -> bool:
         logger.debug("FITS IDI files already exist. Skipping creation.")
         return True
 
-<<<<<<< HEAD
-    process.open_standardplot_files(exp)
-    gui = dialog.Terminal()
-    if not gui.askMSoperations(exp):
-        return False
-    
-=======
     # In batch mode the standardplot dashboard would block forever waiting for
     # the operator to close it, so we skip it. The plots are still on disk and
     # can be reviewed asynchronously via `postprocess info --serve`.
@@ -488,7 +479,6 @@ def msops(exp: experiment.Experiment) -> bool:
             _write_review_flag(exp, "msops", str(exc))
             return False
 
->>>>>>> 7c26d5c629212102360e34c643238bcf71cc4a82
     exp.store()
     return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) \
         & process.print_exp(exp, False) & process.tconvert(exp)
