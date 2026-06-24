@@ -210,6 +210,10 @@ def main():
                         help='Directory to run the post-processing. By default in /data/exp/<expname>.')
     parser.add_argument('-a', '--no-archive', action='store_false', default=True,
                         help='Skip the archive part of the files to the EVN archive.')
+    parser.add_argument('--no-lag', action='store_true', default=False,
+                        help='Do not create the auxiliary lag-space MS nor compute the per-scan '
+                             'antenna signal-to-noise from it. The scan overview then only reports '
+                             'whether each antenna has data in a scan, without the SNR comparison.')
     parser.add_argument('--debug', action='store_true', default=False,
                         help='Debug mode: shows a more verbose output')
     # parser.add_argument('--j2ms2par', type=str, default=None,
@@ -221,6 +225,11 @@ def main():
                         help='Path to a policy.toml file with the unattended decisions '
                              '(weight threshold, polswap/polconvert/onebit antennas, refant, '
                              'pause_after, skip_archive). See evn_postprocess.policy for the schema.')
+    parser.add_argument('--tConvert-in-eee', action=argparse.BooleanOptionalAction, default=True,
+                        help='Temporary workaround for the broken local tConvert: run the tConvert '
+                             'step on eee instead (copy the MS files to jops@eee:/data0/temp/, run '
+                             'tConvert there, copy the FITS-IDI files back, and clean up the remote '
+                             'files). Enabled by default; use --no-tConvert-in-eee to run locally.')
     parser.add_argument('--batch', action='store_true', default=False,
                         help='Run unattended: never invoke interactive dialogs or open the '
                              'standardplots dashboard. The runner stops with exit code 0 and '
@@ -305,8 +314,9 @@ def main():
                 exp = experiment.Experiment.load(expname)
                 # Just to avoid that the user deleted some folders
                 workflow.create_folder_structure()
-                # User may have changed the lis files...
-                if len(exp.correlator_passes) != len(glob.glob(f"{expname.lower()}*.lis")):
+                # User may have changed the lis files... (exclude the auxiliary
+                # {expname}-lag.lis, which is not a correlator pass).
+                if len(exp.correlator_passes) != len(lisfiles._pass_lisfiles(f"{expname.lower()}*.lis")):
                     rprint("[bold yellow]Reloading .lis files information...[/bold yellow]")
                     if not lisfiles.get_passes_from_lisfiles(exp):
                         rprint("[red]Error: Failed to reload .lis files[/red]")
@@ -334,6 +344,12 @@ def main():
             _apply_refant(exp, args.refant)
             exp.store()
 
+        # Apply --no-lag if requested. This is sticky: once opted out, it stays opted out
+        # across re-runs (not passing the flag again does not silently re-enable the lag MS).
+        if args.no_lag and not exp.no_lag:
+            exp.no_lag = True
+            exp.store()
+
         # --policy / --batch wiring. We attach the policy onto the experiment so
         # downstream helpers (e.g. dialog.PolicyDriven, workflow._signal_pause)
         # can read it without threading the value through every call.
@@ -348,6 +364,9 @@ def main():
                 rprint(f"[red]Could not parse policy file {args.policy}: {e}[/red]")
                 sys.exit(1)
             exp.store()
+        # tConvert workaround: run the step on eee unless explicitly disabled.
+        exp.tconvert_in_eee = args.tConvert_in_eee
+
         if args.batch:
             workflow.set_batch_mode(True)
             # Make sure exp.policy at least exists so PolicyDriven can read fields.
@@ -419,7 +438,9 @@ def main():
             sys.exit(1)
 
         try:
-            workflow.run_isolated_task(args.task_name, expname)
+            # tConvert workaround: run the step on eee unless explicitly disabled.
+            workflow.run_isolated_task(args.task_name, expname,
+                                       tconvert_in_eee=args.tConvert_in_eee)
         except (FileNotFoundError, KeyError, AttributeError) as e:
             rprint(f"[red]Error running task '{args.task_name}': {e}[/red]")
             sys.exit(1)

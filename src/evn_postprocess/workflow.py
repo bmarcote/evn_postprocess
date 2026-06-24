@@ -245,7 +245,11 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
         rprint("[red]Or at least it was not found in MASTER_PROJECTS.LIS[/red]")
         sys.exit(1)
 
-    exp = experiment.Experiment(expname, dt.strptime(obsdate, "%y%m%d").date(), supsci,
+    # MASTER_PROJECTS.LIS entries are not always consistent: most use YYMMDD, but some
+    # carry a 4-digit year (YYYYMMDD). Accept both rather than failing to parse.
+    obsdate = obsdate.strip()
+    obsdate_fmt = "%Y%m%d" if len(obsdate) == 8 else "%y%m%d"
+    exp = experiment.Experiment(expname, dt.strptime(obsdate, obsdate_fmt).date(), supsci,
                                 create_folder_structure(), eEVNname)
     try:
         io.get_init_files(exp, servers)
@@ -306,7 +310,7 @@ def retrieve_lisfiles(exp: experiment.Experiment) -> bool:
         bool: True if lis files were retrieved and processed successfully.
     """
     try:
-        if len(glob.glob(f"{exp.expname.lower()}*.lis")) > 0:
+        if len(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")) > 0:
             logger.debug(".lis files already exist. Skipping retrieval.")
             return True
 
@@ -395,7 +399,8 @@ def create_msfile(exp: experiment.Experiment) -> bool:
         if not process.get_metadata_from_ms(exp):
             return False
 
-        process.compute_lag_snr(exp)
+        if not exp.no_lag:
+            process.compute_lag_snr(exp)
         return True
     except Exception as e:
         logger.error(f"Unexpected error creating MS files: {e}")
@@ -455,33 +460,107 @@ def msops(exp: experiment.Experiment) -> bool:
         logger.debug("FITS IDI files already exist. Skipping creation.")
         return True
 
-    # In batch mode the standardplot dashboard would block forever waiting for
-    # the operator to close it, so we skip it. The plots are still on disk and
-    # can be reviewed asynchronously via `postprocess info --serve`.
-    if not _BATCH_MODE:
-        process.open_standardplot_files(exp)
-
-    # --- Comms: send dashboard notification and optionally get interactive feedback ---
-    msops_feedback: dict | None = None
-    if _NOTIFIER is not None:
-        msops_feedback = _comms.notify_dashboard_review(exp, _NOTIFIER)
-
-    if msops_feedback is not None:
-        # Interactive Mattermost feedback received — apply directly, skip dialog
-        _comms.apply_msops_feedback(exp, msops_feedback)
+    if _auto_msops_available(exp):
+        # The lag-MS polarization diagnostics gave a confident answer, so apply the MS
+        # operations automatically (no dashboard/dialog needed). See _apply_auto_msops.
+        _apply_auto_msops(exp)
     else:
-        gui = dialog.make_dialog(batch=_BATCH_MODE)
-        try:
-            if not gui.askMSoperations(exp):
+        # Warn about unexpectedly low weights *before* opening the dashboard / sending the
+        # review notification, so the operator knows to check the weight plots while reviewing.
+        low_weight_antennas = exp.antennas.low_weights
+        if low_weight_antennas:
+            logger.warning(f"[yellow]Antennas with unexpectedly low weights: "
+                           f"{', '.join(low_weight_antennas)}. Check the weight plots in the dashboard.[/yellow]")
+
+        # In batch mode the standardplot dashboard would block forever waiting for
+        # the operator to close it, so we skip it. The plots are still on disk and
+        # can be reviewed asynchronously via `postprocess info --serve`.
+        if not _BATCH_MODE:
+            process.open_standardplot_files(exp)
+
+        # --- Comms: send dashboard notification and optionally get interactive feedback ---
+        msops_feedback: dict | None = None
+        if _NOTIFIER is not None:
+            msops_feedback = _comms.notify_dashboard_review(exp, _NOTIFIER)
+
+        if msops_feedback is not None:
+            # Interactive Mattermost feedback received — apply directly, skip dialog
+            _comms.apply_msops_feedback(exp, msops_feedback)
+        else:
+            gui = dialog.make_dialog(batch=_BATCH_MODE)
+            try:
+                if not gui.askMSoperations(exp):
+                    return False
+            except dialog.BatchInteractionError as exc:
+                logger.error(f"Cannot run msops in batch mode: {exc}")
+                _write_review_flag(exp, "msops", str(exc))
                 return False
-        except dialog.BatchInteractionError as exc:
-            logger.error(f"Cannot run msops in batch mode: {exc}")
-            _write_review_flag(exp, "msops", str(exc))
-            return False
 
     exp.store()
     return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) \
         & process.print_exp(exp, False) & process.tconvert(exp)
+
+
+def _auto_msops_available(exp: experiment.Experiment) -> bool:
+    """Whether the MS operations can be decided automatically from the lag-MS diagnostics.
+
+    Requires that the lag-MS polarization analysis ran and classified at least one antenna
+    with a detected fringe. It is disabled when the vex shows 1-bit data, because the
+    affected stations cannot be inferred from the lag analysis and must be entered manually
+    (otherwise process.onebit would fail).
+    """
+    pd = getattr(exp, 'pol_diagnostics', None) or {}
+    if not pd.get('analyzed'):
+        return False
+    determined = any(a.get('decision') in ('normal', 'polswap', 'polconvert')
+                     for a in pd.get('antennas', {}).values())
+    if not determined:
+        return False
+    if utils.station_1bit_in_vix(exp.vixfile):
+        logger.info("1-bit data present in the vex: msops needs manual review to set the "
+                    "1-bit stations; skipping automatic MS operations.")
+        return False
+    return True
+
+
+def _auto_weight_threshold(exp: experiment.Experiment) -> float:
+    """Pick the weight-flag threshold automatically (matching the dialog's default of 0.9).
+
+    Logs a warning listing antennas whose weights look unexpectedly low (>5% outside the
+    first/last histogram bin, or nothing in the last bin) so the operator can double-check.
+    """
+    low_weight_antennas = exp.antennas.low_weights
+    if low_weight_antennas:
+        logger.warning(f"Antennas with unexpectedly low weights: {', '.join(low_weight_antennas)}. "
+                       "Using the default flag threshold 0.9; review the weight plots if needed.")
+    return 0.9
+
+
+def _apply_auto_msops(exp: experiment.Experiment) -> None:
+    """Apply the automatically-derived MS operations onto the experiment.
+
+    Sets the weight-flag threshold on every correlator pass and toggles the polswap /
+    polconvert antenna flags found by the lag-MS diagnostics (see process.compute_lag_snr).
+    Mirrors what Terminal.askMSoperations / comms.apply_msops_feedback do, but without
+    any user interaction.
+    """
+    pd = exp.pol_diagnostics
+    threshold = _auto_weight_threshold(exp)
+    for a_pass in exp.correlator_passes:
+        existing = a_pass.flagged_weights
+        if existing and existing.threshold == threshold and existing.percentage >= 0:
+            continue
+        a_pass.flagged_weights = experiment.FlagWeight(threshold, -1)
+
+    for ant in pd.get('polswap', []):
+        if ant in exp.antennas:
+            exp.antennas[ant].polswap = True
+    for ant in pd.get('polconvert', []):
+        if ant in exp.antennas:
+            exp.antennas[ant].polconvert = True
+
+    logger.info(f"Automatic MS operations applied: weight threshold={threshold}, "
+                f"polswap={pd.get('polswap') or 'none'}, polconvert={pd.get('polconvert') or 'none'}.")
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
@@ -600,7 +679,15 @@ def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
     result = pipeline.comment_tasav_files(exp) & pipeline.pipeline_feedback(exp)
     if result:
         result &= process.update_piletter(exp)
-    return result 
+
+    # After feedback, re-open the web dashboard so the user can review the pipeline
+    # feedback page (shown as a new "Pipeline" tab, on top of the standard plots) in
+    # their browser via the SSH tunnel the server prints. In batch mode the dashboard
+    # would block forever, so we skip it (the page is on disk for async review).
+    if result and not _BATCH_MODE:
+        process.open_pipeline_dashboard(exp)
+
+    return result
 
 
 def pre_archive(exp: experiment.Experiment) -> bool:
@@ -684,8 +771,8 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
         'antab':         ExecCommand(pipeline.run_antab_editor,
                                      "Prepare .antab and run antab_editor.py."),
         'uvflg':         ExecCommand(pipeline.create_uvflg, "Create .uvflg from all log files."),
-        'vlbeer':        ExecCommand(lambda exp: pipeline.get_files_from_vlbeer(
-                                         exp, experiment.retrieve_servers()['vlbeer']),
+        'vlbeer':        ExecCommand(lambda exp: pipeline.get_files_from_vlbeer(exp,
+                                                                                experiment.retrieve_servers()['vlbeer']),
                                      "Retrieve the antabfs, log, and flag files from vlbeer."),
         'pyinput':       ExecCommand(pipeline.create_input_file,
                                      "Create the input file for the EVN pipeline."),
@@ -742,7 +829,8 @@ def list_exec_commands():
         rprint(f"  [bold green]{name:<18}[/bold green] {cmd.doc}")
 
 
-def run_isolated_task(task_name: str, expname: str | None = None):
+def run_isolated_task(task_name: str, expname: str | None = None,
+                      tconvert_in_eee: bool = True):
     """Run a single exec command independently.
 
     The experiment must have been initialized previously so that the stored
@@ -751,9 +839,12 @@ def run_isolated_task(task_name: str, expname: str | None = None):
     Args:
         task_name: Name of the exec command to run.
         expname: Experiment name (case-insensitive).
+        tconvert_in_eee: Whether the tconvert step runs on eee (workaround for the
+            broken local tConvert). Forwarded to the loaded experiment.
     """
     try:
         exp = experiment.Experiment.load(expname)
+        exp.tconvert_in_eee = tconvert_in_eee
     except FileNotFoundError:
         rprint(f"[bold red]Could not find the stored information for "
                f"{expname if expname is not None else Path().name}"
@@ -868,7 +959,7 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
 
     # --- lisfiles: outputs are *.lis ---
     if 'lisfiles' in step_names and all_steps[step_names.index('lisfiles')].done:
-        lis_files = list(Path('.').glob(f"{exp.expname.lower()}*.lis"))
+        lis_files = lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")
         if not lis_files:
             _reset_from('lisfiles', "lis file(s) missing on disk")
             return  # everything downstream depends on this
@@ -962,16 +1053,50 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
         exp: Experiment object (provides dirs.logs).
         debug: If True, log DEBUG level with full context; otherwise INFO only.
     """
+    level = "DEBUG" if debug else "INFO"
+
+    def _file_format(record):
+        """Plain-text file format: strip the Rich markup tags from the message.
+
+        When ``format`` is a callable, loguru does not auto-append the line ending or the
+        exception, so the returned template must include ``\\n{exception}`` explicitly.
+        """
+        record["extra"]["clean"] = _RICH_TAG_RE.sub("", record["message"])
+        if debug:
+            return ("{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
+                    "{module}:{function}:{line} | {extra[clean]}\n{exception}")
+        return "{level: <8} | {extra[clean]}\n{exception}"
+
+    def _console_sink(message):
+        """Render each record through Rich so the Rich-style markup in the message
+        (e.g. ``[bold]> command[/bold]``) shows up as bold/colour in the terminal.
+
+        loguru's own markup uses ``<bold>`` tags, so its ``colorize`` never rendered
+        the ``[bold]`` markup the rest of the codebase emits; it leaked through as
+        plain text. Routing through a Rich ``Console`` fixes that.
+        """
+        record = message.record
+        is_error = record["level"].no >= 40
+        console = _stderr_console if is_error else _stdout_console
+        text = record["message"]
+        if is_error:
+            text = f"[bold red]{record['level'].name}:[/bold red] {text}"
+        try:
+            console.print(text)
+        except Exception:
+            # A stray '[' in interpolated data must never abort logging: fall back to plain.
+            console.print(text, markup=False)
+        if record["exception"] is not None:
+            from rich.traceback import Traceback
+            exc = record["exception"]
+            console.print(Traceback.from_exception(exc.type, exc.value, exc.traceback))
+
     try:
         logger.remove()  # Remove default stderr handler to avoid duplicate messages
-        logger.add(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log", colorize=False,
-                   level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
-                   format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
-                          "{module}:{function}:{line} | {message}" if debug else "{level: <8} | {message}")
-        logger.add(sys.stdout, colorize=True, level="DEBUG" if debug else "INFO", backtrace=True, diagnose=True,
-                   format=lambda record: "{level}: {message}\n{exception}" if record["level"].no >= 40 else "{message}\n")
-        logger.add(sys.stderr, colorize=True, level="ERROR", backtrace=True, diagnose=True,
-                   format=lambda record: "{level}: {message}\n{exception}")
+        logger.add(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log",
+                   colorize=False, level=level, backtrace=True, diagnose=True, format=_file_format)
+        logger.add(_console_sink, colorize=False, level=level, backtrace=True, diagnose=True,
+                   format="{message}")
     except (OSError, PermissionError) as e:
         rprint(f"[yellow]Warning: Could not create debug log file: {e}[/yellow]")
 
