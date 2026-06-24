@@ -6,12 +6,14 @@ import datetime as _dt
 import subprocess
 import threading
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, TextIO, Union
 from loguru import logger
 import astropy.units as u
 
-# Used by format_remote_path to recognise ``{obsdate.strftime('FMT')}`` patterns.
-_OBSDATE_STRFTIME_RE = re.compile(r"\{obsdate\.strftime\(([\"'])(.+?)\1\)\}")
+# Used by format_remote_path to recognise ``{obsdate.strftime('FMT')}`` patterns,
+# with an optional trailing ``.lower()`` / ``.upper()`` method call (used e.g. by the
+# vlbeer path ``{obsdate.strftime('%b%y').lower()}`` to get a lowercase month name).
+_OBSDATE_STRFTIME_RE = re.compile(r"\{obsdate\.strftime\(([\"'])(.+?)\1\)(?:\.(lower|upper)\(\))?\}")
 
 
 def format_remote_path(template: str, *, obsdate: Optional[_dt.date] = None,
@@ -25,7 +27,9 @@ def format_remote_path(template: str, *, obsdate: Optional[_dt.date] = None,
     actually used by ``computers.toml``:
 
       * ``{expname}`` \u2014 verbatim substitution of the experiment code.
-      * ``{obsdate.strftime('FMT')}`` \u2014 strftime applied to the observation date.
+      * ``{obsdate.strftime('FMT')}`` \u2014 strftime applied to the observation date,
+        with an optional trailing ``.lower()`` / ``.upper()`` (e.g. vlbeer's
+        ``{obsdate.strftime('%b%y').lower()}`` to produce a lowercase month name).
 
     Anything else is left untouched, which means any typo in the TOML surfaces as a
     later clean error from the SCP/SSH call instead of a low-level eval crash.
@@ -43,7 +47,13 @@ def format_remote_path(template: str, *, obsdate: Optional[_dt.date] = None,
         out = out.replace("{expname}", expname)
     if obsdate is not None:
         def _sub(match: re.Match) -> str:
-            return obsdate.strftime(match.group(2))
+            formatted = obsdate.strftime(match.group(2))
+            method = match.group(3)
+            if method == "lower":
+                return formatted.lower()
+            if method == "upper":
+                return formatted.upper()
+            return formatted
         out = _OBSDATE_STRFTIME_RE.sub(_sub, out)
     return out
 
@@ -148,6 +158,57 @@ def scp(originpath: str, destpath: str, timeout: Optional[Union[float, int]] = N
     raise last_exc
 
 
+def rsync(originpaths: Union[str, list[str]], destpath: str,
+          timeout: Optional[Union[float, int]] = None,
+          retries: int = DEFAULT_SSH_RETRIES, **kwargs) -> bool:
+    """Runs ``rsync`` over SSH with the same unattended defaults as :func:`scp`.
+
+    Preferred over :func:`scp` for the MS files: they are directory trees of many
+    files (``-a`` recurses and preserves them) and very large, so ``--partial``
+    lets an interrupted transfer resume instead of starting over.
+
+    Args:
+        originpaths: Source path or list of source paths (a ``user@host:`` prefix
+            is allowed for a remote source). Remote globs are expanded by rsync.
+        destpath: Destination path (``user@host:`` prefix allowed).
+        timeout: Wall-clock timeout for the whole transfer. Defaults to
+            ``DEFAULT_SCP_TIMEOUT_S``.
+        retries: Retries on non-zero exit / timeout (the first attempt counts as one).
+
+    Returns:
+        True on success.
+
+    Raises:
+        ValueError: If every attempt fails with a non-zero exit code.
+        subprocess.TimeoutExpired: If every attempt times out.
+    """
+    if timeout is None:
+        timeout = DEFAULT_SCP_TIMEOUT_S
+    sources = [originpaths] if isinstance(originpaths, str) else list(originpaths)
+    cmd = ["rsync", "-a", "--partial", "-e", "ssh " + " ".join(_SSH_BASE_OPTS), *sources, destpath]
+    logger.info(f"[bold]> {' '.join(cmd)}[/bold]")
+
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, retries + 2):
+        try:
+            process = subprocess.run(cmd, timeout=timeout, **kwargs)
+            if process.returncode == 0:
+                return True
+            last_exc = ValueError(
+                f"ERROR: rsync of {sources} to {destpath} failed "
+                f"(exit {process.returncode}, attempt {attempt}/{retries + 1})"
+            )
+        except subprocess.TimeoutExpired as exc:
+            last_exc = exc
+            logger.warning(f"rsync timed out after {timeout}s (attempt {attempt}/{retries + 1})")
+
+        if attempt <= retries:
+            time.sleep(DEFAULT_SSH_BACKOFF_S * attempt)
+
+    assert last_exc is not None  # control-flow guarantee
+    raise last_exc
+
+
 def ssh(computer: str, commands: str, shell: bool = False,
         stdout: Optional[int] = subprocess.PIPE,
         stderr: Optional[int] = subprocess.PIPE,
@@ -204,9 +265,41 @@ def ssh(computer: str, commands: str, shell: bool = False,
     return None
 
 
+def open_unique_log(logfile: Union[str, Path]) -> tuple[TextIO, Path]:
+    """Atomically opens a new log file for writing, never overwriting an existing one.
+
+    The first run uses ``logfile`` verbatim (e.g. ``logs/tconvert.log``); if that
+    name already exists a numbered sibling is used instead
+    (``logs/tconvert-2.log``, ``logs/tconvert-3.log``, ...). The file is created
+    with ``O_CREAT | O_EXCL`` so concurrent callers — e.g. the parallel correlator
+    passes run by :func:`process.j2ms2` and :func:`process.tconvert` — each get
+    their own distinct file with no race.
+
+    Args:
+        logfile: Desired log path. The parent directory is created if missing.
+
+    Returns:
+        A ``(file_object, path)`` tuple. The caller owns the file object and must
+        close it.
+    """
+    logfile = Path(logfile)
+    logfile.parent.mkdir(parents=True, exist_ok=True)
+    candidate = logfile
+    counter = 2
+    while True:
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            return os.fdopen(fd, "w", encoding="utf-8"), candidate
+        except FileExistsError:
+            candidate = logfile.with_name(f"{logfile.stem}-{counter}{logfile.suffix}")
+            counter += 1
+
+
 def shell_command(command: str, parameters: Optional[Union[str, list]] = None, shell: bool = True,
                   bufsize: int = -1, stdout: Optional[int] = subprocess.PIPE,
-                  stderr: Optional[int] = subprocess.PIPE) -> str:
+                  stderr: Optional[int] = subprocess.PIPE,
+                  stderr_warn_re: Optional[re.Pattern] = None,
+                  logfile: Optional[Union[str, Path]] = None) -> str:
     """Runs the provided command in the shell and streams its output live.
 
     Both stdout and stderr are captured and echoed to the terminal as the command runs:
@@ -221,6 +314,15 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
         bufsize (int): Buffer size for subprocess. Default -1.
         stdout (Optional[int]): Kept for API compatibility; output is always streamed.
         stderr (Optional[int]): Kept for API compatibility; errors are always streamed in red.
+        stderr_warn_re (Optional[re.Pattern]): If given, stderr lines matching this pattern
+            are printed in yellow (treated as warnings) instead of red. Non-matching stderr
+            lines remain red. Use only when warnings can be reliably told apart from errors;
+            when None (default) all stderr is red, as before.
+        logfile (Optional[Union[str, Path]]): If given, the combined stdout/stderr of the
+            command is also written (plain, without the terminal colour codes) to this file.
+            An existing file is never overwritten: a numbered sibling is used instead (see
+            :func:`open_unique_log`), so each run gets its own file. Failure to open the log
+            is non-fatal — a warning is emitted and the command still runs.
 
     Returns:
         str: Concatenated stdout from the command (UTF-8).
@@ -238,20 +340,48 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
     cmd_str = ' '.join(full_shell_command)
     logger.info(f"[bold]> {cmd_str}[/bold]")
 
+    # Optionally tee the combined stdout/stderr to a log file. Both pump threads
+    # write to the same handle, so a lock keeps their lines from interleaving
+    # mid-line. Opening the log must never break the actual command, hence the
+    # best-effort try/except.
+    log_fh: Optional[TextIO] = None
+    log_lock = threading.Lock()
+    if logfile is not None:
+        try:
+            log_fh, log_path = open_unique_log(logfile)
+            log_fh.write(f"# command: {cmd_str}\n")
+            log_fh.write(f"# started: {_dt.datetime.now():%Y-%m-%d %H:%M:%S}\n\n")
+            log_fh.flush()
+            logger.info(f"Logging output of '{command}' to {log_path}")
+        except OSError as e:
+            logger.warning(f"Could not open log file {logfile}: {e}; continuing without it.")
+            log_fh = None
+
     process = subprocess.Popen(cmd_str, shell=shell, bufsize=bufsize,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
 
-    def _pump(stream, chunks, out_stream, red: bool):
-        """Read lines from stream, append to chunks, echo to out_stream (red if requested)."""
+    def _pump(stream, chunks, out_stream, red: bool, warn_re: Optional[re.Pattern] = None):
+        """Read lines from stream, append to chunks, echo to out_stream.
+
+        stdout is echoed plain. stderr is echoed red, except lines matching *warn_re*
+        (when provided), which are echoed yellow (warnings). The plain text (no colour
+        codes) is also appended to the log file when one is open.
+        """
         try:
             for raw in iter(stream.readline, b''):
                 text = raw.decode('utf-8', errors='replace')
                 chunks.append(text)
-                if red:
-                    out_stream.write(f"\033[31m{text}\033[0m")
+                if log_fh is not None:
+                    with log_lock:
+                        log_fh.write(text)
+                        log_fh.flush()
+                if red and warn_re is not None and warn_re.search(text):
+                    out_stream.write(f"\033[33m{text}\033[0m")  # yellow: recognised warning
+                elif red:
+                    out_stream.write(f"\033[31m{text}\033[0m")  # red: error / unclassified
                 else:
                     out_stream.write(text)
                 out_stream.flush()
@@ -259,12 +389,21 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
             stream.close()
 
     t_out = threading.Thread(target=_pump, args=(process.stdout, stdout_chunks, sys.stdout, False))
-    t_err = threading.Thread(target=_pump, args=(process.stderr, stderr_chunks, sys.stderr, True))
+    t_err = threading.Thread(target=_pump, args=(process.stderr, stderr_chunks, sys.stderr, True, stderr_warn_re))
     t_out.start()
     t_err.start()
-    process.wait()
-    t_out.join()
-    t_err.join()
+    try:
+        process.wait()
+        t_out.join()
+        t_err.join()
+    finally:
+        if log_fh is not None:
+            try:
+                log_fh.write(f"\n# finished: {_dt.datetime.now():%Y-%m-%d %H:%M:%S} "
+                             f"(exit code {process.returncode})\n")
+            except (OSError, ValueError):
+                pass  # disk full / already closed: the captured output above is what matters
+            log_fh.close()
 
     if process.returncode != 0:
         had_output = bool(stdout_chunks) or bool(stderr_chunks)

@@ -98,7 +98,8 @@ def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]
         In case of being an e-EVN experiment, it will add that information.
 
         The expected file should be a text file with one line per experiment, with expname (capital case) in the first
-        column, followed by the observing epoch (YYMMDD format) in the second column.
+        column, followed by the observing epoch (YYMMDD format, or the 4-digit-year YYYYMMDD variant) in the second
+        column.
         If the entry refers to an e-EVN observation (with multiple experiments in the same run), then it will have
         extra columns indicating all experiments within the run.
 
@@ -111,7 +112,7 @@ def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]
 
         Returns:
             tuple[str, str | None]:
-                - The observing epoch of the experiment (YYMMDD format).
+                - The observing epoch of the experiment (YYMMDD format, or the 4-digit-year YYYYMMDD variant).
                 - The e-EVN name if it is an e-EVN experiment, None otherwise.
         """
         logger.debug(f"Trying to read the experiment {expname} from {server.user}@{server.host}:{server.path}")
@@ -469,6 +470,18 @@ class Antennas(list[Antenna]):
     def opacity(self) -> list[str]:
         return [a.name for a in self if a.opacity]
 
+    @property
+    def low_weights(self) -> list[str]:
+        """Antennas whose weights look unexpectedly low: less than 95% of the data sits in
+        the first/last weight-histogram bin (weights <0.001 or >0.9), or nothing in the last
+        bin. These are worth double-checking on the weight plots before flagging."""
+        low = []
+        for a in self:
+            if len(a.weights) >= 7 and (total := sum(a.weights)) > 0:
+                if ((a.weights[0] + a.weights[6]) / total) < 0.95 or (a.weights[6] == 0):
+                    low.append(a.name)
+        return low
+
     def __getitem__(self, key: str | int) -> Antenna:
         return super().__getitem__(self.names.index(key) if isinstance(key, str) else key)
 
@@ -649,7 +662,10 @@ class Experiment:
                  sources: Sources | None = None, antennas: Antennas | None = None, scans: Scans | None = None,
                  refant: list[str] | None = None,
                  correlator_passes: list[CorrelatorPass] | None = None,
+                 lag_pass: CorrelatorPass | None = None,
                  lag_snr: dict | None = None,
+                 pol_diagnostics: dict | None = None,
+                 no_lag: bool = False,
                  policy=None):
         self.expname = expname
         self.obsdate = obsdate
@@ -664,7 +680,27 @@ class Experiment:
         self.scans = scans if scans else Scans()
         self.refant = refant if refant else []
         self.correlator_passes = correlator_passes if correlator_passes else []
+        # The lag-space pass ({expname}-lag.lis / {expname}-lag.ms) is an auxiliary product
+        # used ONLY to compute per-scan antenna SNR (see process.compute_lag_snr). It is kept
+        # apart from `correlator_passes` on purpose: it is not a real correlator pass and must
+        # never be counted as one (e.g. by `multi_phase_center`, pipeline input generation,
+        # msops, tConvert, ...). Anything that processes correlator passes iterates over
+        # `correlator_passes`; only the SNR computation touches `lag_pass`.
+        self.lag_pass: CorrelatorPass | None = lag_pass
         self.lag_snr: dict[str, dict[str, dict[str, float]]] = lag_snr if lag_snr else {}
+        # Automatic polarization diagnostics derived from the lag MS (process.compute_lag_snr):
+        # per-antenna parallel/cross-hand amplitudes for the fringe-finder scans, and the
+        # resulting polswap / polconvert findings. Empty until the lag analysis runs. See
+        # process.compute_lag_snr / workflow.msops for how it is produced and consumed.
+        self.pol_diagnostics: dict = pol_diagnostics if pol_diagnostics else {}
+        # When True, the auxiliary lag-space MS is not created and no lag SNR is computed
+        # (set via the --no-lag CLI option). The per-scan antenna data check then only reports
+        # whether an antenna has data in each scan, without the lag signal-to-noise comparison.
+        self.no_lag: bool = no_lag
+        # Temporary workaround for the broken local tConvert (set via --tConvert-in-eee /
+        # --no-tConvert-in-eee). When True the tconvert step runs on eee instead of locally
+        # (see process.tconvert). Runtime-only: decided from the CLI on each run, not persisted.
+        self.tconvert_in_eee: bool = True
         self._timerange: list[dt.datetime] | None = None
         # Policy is set lazily (None means "interactive defaults"). The full Policy
         # dataclass lives in evn_postprocess.policy and is loaded on demand to avoid
@@ -905,8 +941,11 @@ class Experiment:
                 'spectral_line': self.spectral_line,
                 'policy': self.policy.to_dict() if getattr(self, 'policy', None) is not None else None,
                 'correlator_passes': [cp.to_dict() for cp in self.correlator_passes] if self.correlator_passes else [],
+                'lag_pass': self.lag_pass.to_dict() if self.lag_pass else None,
+                'no_lag': self.no_lag,
                 '_timerange': [t.isoformat() for t in self._timerange] if self._timerange else None,
-                'lag_snr': self.lag_snr}
+                'lag_snr': self.lag_snr,
+                'pol_diagnostics': self.pol_diagnostics}
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Experiment':
@@ -921,6 +960,10 @@ class Experiment:
                   scans=Scans.from_dict(data['scans']) if data.get('scans') else None, refant=data.get('refant'),
                   correlator_passes=[CorrelatorPass.from_dict(cp) for cp in data['correlator_passes']]
                                      if data.get('correlator_passes') else None)
+        if data.get('lag_pass'):
+            exp.lag_pass = CorrelatorPass.from_dict(data['lag_pass'])
+        exp.no_lag = data.get('no_lag', False)
+        exp.pol_diagnostics = data.get('pol_diagnostics', {})
         if data.get('_timerange'):
             exp._timerange = [dt.datetime.fromisoformat(t) for t in data['_timerange']]
         exp.lag_snr = data.get('lag_snr', {})
@@ -1123,9 +1166,12 @@ class Experiment:
                     s += term.bold(f"Correlator pass #{i+1}\n")
                     s_file += [f"Correlator pass #{i+1}"]
 
-                # If MSs are now created, it will get the info.
+                # If MSs are now created, it will get the info. The canonical metadata
+                # loader is process.get_metadata_from_ms() (get_setup_from_ms was removed);
+                # it populates every pass, so one call is enough.
                 if a_pass.freqsetup is None:
-                    self.get_setup_from_ms()
+                    from . import process
+                    process.get_metadata_from_ms(self)
                     self.store()
 
                 if a_pass.freqsetup is not None:
@@ -1196,6 +1242,20 @@ class Experiment:
                 s += term.bright_black('Onebit antennas: ') + f"{', '.join(self.antennas.onebit)}\n"
                 s_file += [f"Onebit antennas: {', '.join(self.antennas.onebit)}"]
 
+            # Flagged weights: threshold used and percentage of data flagged, per pass.
+            for i, a_pass in enumerate(self.correlator_passes):
+                fw = a_pass.flagged_weights
+                if fw is None:
+                    continue
+                pass_lbl = f" (pass #{i+1})" if len(self.correlator_passes) > 1 else ""
+                if fw.percentage is not None and fw.percentage >= 0:
+                    fw_txt = (f"Flagged weights{pass_lbl}: threshold {fw.threshold}, "
+                              f"{fw.percentage:.2f}% of data flagged")
+                else:
+                    fw_txt = f"Flagged weights{pass_lbl}: threshold {fw.threshold} (not yet applied)"
+                s += term.bright_black(fw_txt) + "\n"
+                s_file += [fw_txt]
+
             missing_logs = [a.name for a in self.antennas if (not a.logfsfile) and a.observed]
             s += term.bright_black('Missing log files: ') + \
                  f"{', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}\n"
@@ -1257,7 +1317,7 @@ class Experiment:
 
             if (outputfile is not None) and (not Path(outputfile).exists()):
                 with open(outputfile, 'w') as ofile:
-                    print('writing file', s_file)
+                    logger.debug(f"Writing notes file {outputfile}")
                     ofile.write('\n'.join(s_file))
 
             if display_in_terminal:

@@ -32,6 +32,36 @@ from .plotting import convert_ps_to_png, serve_dashboard
 from .scripts import find_idi_with_time as find_idi_mod
 
 
+# --- Automatic polarization diagnostics (from the lag MS) -------------------------------
+# Only these antennas are checked for the "linear polarization -> PolConvert" case (they are
+# the ones known to potentially record linear polarization). Polswap is checked for all.
+_POLCONVERT_CANDIDATES: tuple[str, ...] = ('Ef', 'T6', 'Ur', 'Gm', 'Gt', 'At', 'Yy', 'Me')
+# An antenna's fringe must reach at least this lag SNR (max over polarizations, on a
+# fringe-finder scan) before we trust its parallel/cross-hand amplitude ratio.
+_POL_MIN_SNR: float = 7.0
+# cross-hand / parallel-hand amplitude ratio decision thresholds:
+#   ratio >= _POLSWAP_RATIO          -> RL,LR dominate -> R/L swapped (polswap)
+#   _LINEAR_RATIO_LOW <= ratio < _POLSWAP_RATIO and antenna is a candidate
+#                                    -> all four products comparable -> linear pol (polconvert)
+#   ratio < _LINEAR_RATIO_LOW        -> normal circular feeds, no action
+_POLSWAP_RATIO: float = 2.5
+_LINEAR_RATIO_LOW: float = 0.5
+_PARALLEL_POLS: frozenset[str] = frozenset({'RR', 'LL', 'XX', 'YY'})
+_CROSS_POLS: frozenset[str] = frozenset({'RL', 'LR', 'XY', 'YX'})
+
+# --- tConvert configuration ------------------------------------------------------------
+# _TCONVERT_BIN = "tConvert"  # This will be the one to use once we certify the following one works
+_TCONVERT_BIN = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert"
+
+# Temporary workaround (see _tconvert_in_eee): the system tConvert is currently broken, so by
+# default the tconvert step runs on eee instead. Where the MS / FITS-IDI files are staged there:
+_EEE_TCONVERT_TEMP = Path("/data0/temp")
+# A few very large MS files move over the network here, so the usual 10-minute transfer/run
+# bounds are far too tight; give them generous (env-overridable) ceilings.
+_EEE_RSYNC_TIMEOUT_S = int(os.environ.get("EVN_EEE_RSYNC_TIMEOUT_S", str(6 * 3600)))
+_EEE_TCONVERT_TIMEOUT_S = int(os.environ.get("EVN_EEE_TCONVERT_TIMEOUT_S", str(8 * 3600)))
+
+
 def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
     """Updates the attribute of the CorrelatorPasses from exp to define
     if the specific pass should run in the pipeline or not.
@@ -101,8 +131,15 @@ def getdata(exp: experiment.Experiment) -> bool:
                     
                 cmd_args = ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
                             "-lis", a_pass.lisfile.name]
+                # getdata.pl (and the scp calls it makes) write warnings to stderr that are not
+                # errors, most notably ssh's "Warning: Permanently added '<host>' ... known hosts"
+                # and getdata's own "**** Warning: ...". Those are explicitly labelled "warning",
+                # so colour them yellow; genuine errors (perl die messages, scp failures) are not
+                # labelled that way and stay red.
                 utils.shell_command("getdata.pl", cmd_args, shell=True,
-                                    stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+                                    stdout=None, stderr=subprocess.STDOUT, bufsize=0,
+                                    stderr_warn_re=re.compile(r"warning", re.IGNORECASE),
+                                    logfile=exp.dirs.logs / "getdata.log")
                 return True
             except Exception as e:
                 logger.error(f"Error fetching data for {a_pass.lisfile.name}: {e}")
@@ -176,7 +213,8 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                 if not exp.eEVNname:
                     j2ms2_args.append("fo:nosquash_source_table")
                     
-                utils.shell_command("j2ms2", j2ms2_args, shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+                utils.shell_command("j2ms2", j2ms2_args, shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0,
+                                    logfile=exp.dirs.logs / "j2ms2.log")
                 return True
             except Exception as e:
                 logger.error(f"Error running j2ms2 for {a_pass.lisfile.name}: {e}")
@@ -186,13 +224,32 @@ def j2ms2(exp: experiment.Experiment) -> bool:
         with ThreadPoolExecutor(max_workers=10) as pool:
             ms_futures = [pool.submit(_j2ms2_correlator_pass, (exp, p)) for p in exp.correlator_passes]
 
-            # Create lag-space MS from first pass in parallel (for signal detection)
+            # Create lag-space MS from first pass in parallel (for signal detection).
+            # j2ms2 ignores '-o' when given an input .lis via '-v', so we build a dedicated
+            # '{expname}-lag.lis' that already names the lag MS, and restrict it to the
+            # calibrator sources via the 'fo:filter/source=...' directive.
             lag_ms = Path(f"{exp.expname.lower()}-lag.ms")
             lag_future = None
-            if not lag_ms.exists() and exp.correlator_passes[0].lisfile.exists():
-                lag_future = pool.submit(utils.shell_command, "j2ms2",
-                    ["-d", "frequency", "-o", str(lag_ms), "-v", str(exp.correlator_passes[0].lisfile)],
-                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0)
+            if exp.no_lag:
+                logger.info("--no-lag set: skipping creation of the lag-space MS.")
+            elif not lag_ms.exists() and exp.correlator_passes[0].lisfile.exists():
+                from . import lisfiles
+                lag_lisfile = lisfiles.create_lag_lisfile(exp, exp.correlator_passes[0])
+                # Register the lag pass as a dedicated, separate product (NOT a correlator
+                # pass). It is kept out of exp.correlator_passes on purpose so it is never
+                # counted as a real pass (multi_phase_center, pipeline input, msops, ...);
+                # it exists solely for the per-scan antenna SNR computation (compute_lag_snr).
+                exp.lag_pass = experiment.CorrelatorPass(
+                    lisfile=lag_lisfile, msfile=lag_ms, fitsidifile="", pipeline=False)
+                cal_sources = exp.sources.fringefinder + exp.sources.calibrator
+                lag_args = ["-v", str(lag_lisfile), "-d", "frequency"]
+                if cal_sources:
+                    lag_args.append(f"fo:filter/source={','.join(cal_sources)}")
+                if not exp.eEVNname:
+                    lag_args.append("fo:nosquash_source_table")
+                lag_future = pool.submit(utils.shell_command, "j2ms2", lag_args,
+                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0,
+                    logfile=exp.dirs.logs / "j2ms2-lag.log")
 
             ms_results = [f.result() for f in ms_futures]
             if lag_future is not None:
@@ -360,62 +417,178 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
     return True
 
 
+def _derive_pol_diagnostics(ff_amp_sum: dict[int, np.ndarray], ff_amp_cnt: dict[int, int],
+                            ff_best_snr: dict[int, float], ant_names: list[str],
+                            pol_labels: list[str]) -> dict:
+    """Turn the accumulated fringe-finder per-antenna polarization amplitudes into findings.
+
+    For each antenna with a detected fringe (lag SNR >= _POL_MIN_SNR) we compare the mean
+    parallel-hand (RR/LL) amplitude against the mean cross-hand (RL/LR) amplitude over the
+    fringe-finder scans:
+
+      * cross >> parallel               -> the R/L feeds are swapped (polswap),
+      * all four products comparable     -> linear polarization, needs PolConvert
+                                            (only for the _POLCONVERT_CANDIDATES antennas),
+      * parallel dominates               -> normal circular feeds, no action.
+
+    Returns a dict with the per-antenna measurements and the polswap/polconvert antenna lists.
+    """
+    parallel_idx = [i for i, l in enumerate(pol_labels) if l in _PARALLEL_POLS]
+    cross_idx = [i for i, l in enumerate(pol_labels) if l in _CROSS_POLS]
+    candidates = {c.upper() for c in _POLCONVERT_CANDIDATES}
+
+    diag: dict = {'analyzed': False, 'polswap': [], 'polconvert': [], 'antennas': {}}
+    # Need full polarization (both parallel- and cross-hand products) and at least one
+    # measured antenna; otherwise the comparison is impossible (e.g. dual-pol-only data).
+    if not (parallel_idx and cross_idx and ff_amp_cnt):
+        return diag
+
+    diag['analyzed'] = True
+    for aidx, amp_sum in sorted(ff_amp_sum.items()):
+        cnt = ff_amp_cnt.get(aidx, 0)
+        if cnt == 0:
+            continue
+        name = ant_names[aidx]
+        mean_amp = amp_sum / cnt
+        par = float(np.mean(mean_amp[parallel_idx]))
+        crs = float(np.mean(mean_amp[cross_idx]))
+        snr = round(float(ff_best_snr.get(aidx, 0.0)), 1)
+        ratio = (crs / par) if par > 0 else None
+        decision = 'undetermined'
+        if snr >= _POL_MIN_SNR and ratio is not None:
+            if ratio >= _POLSWAP_RATIO:
+                decision = 'polswap'
+                diag['polswap'].append(name)
+            elif ratio >= _LINEAR_RATIO_LOW and name.upper() in candidates:
+                decision = 'polconvert'
+                diag['polconvert'].append(name)
+            else:
+                decision = 'normal'
+        diag['antennas'][name] = {'parallel': round(par, 4), 'cross': round(crs, 4),
+                                  'ratio': round(ratio, 3) if ratio is not None else None,
+                                  'snr': snr, 'decision': decision}
+    return diag
+
+
 def compute_lag_snr(exp: experiment.Experiment) -> bool:
-    """Compute lag-space SNR per scan, antenna, and polarization from the lag MS.
+    """Compute lag-space SNR and polarization diagnostics per antenna from the lag MS.
 
-    Reads the lag-space MS created by ``j2ms2 -d frequency``, computes the SNR
-    of the fringe peak for each cross-correlation baseline, and stores the
-    maximum SNR per antenna (across baselines) for each scan and polarization
-    into ``exp.lag_snr``.
+    The lag MS (``j2ms2 -d frequency``) stores the complex cross-power spectrum
+    per integration/subband. For each cross-correlation baseline this Fourier
+    transforms the spectrum over the frequency (channel) axis into delay (lag)
+    space, where a fringe is a sharp peak, and incoherently averages the |lag|
+    spectra of all that baseline's rows. The per-pol SNR of the averaged spectrum
+    (fringe peak / robust noise) is then taken; the maximum SNR per antenna (over
+    its baselines) is stored per scan and polarization into ``exp.lag_snr``.
 
-    SNR is estimated as peak / (1.4826 × MAD) over the lag spectrum.
+    In the same pass, for the fringe-finder scans it accumulates the per-antenna
+    fringe-peak amplitude of each polarization product and derives automatic
+    polarization findings (polswap / polconvert), stored in ``exp.pol_diagnostics``
+    (see :func:`_derive_pol_diagnostics`).
+
+    SNR is estimated as peak / (1.4826 × MAD) over the averaged delay spectrum.
+    The FFT-before-magnitude and per-baseline incoherent averaging are both
+    essential: taking |DATA| first, or a per-row maximum, makes pure noise read
+    as a detection (every antenna SNR > 7).
 
     Args:
-        exp: Experiment object. Results stored in ``exp.lag_snr``.
+        exp: Experiment object. Results stored in ``exp.lag_snr`` and ``exp.pol_diagnostics``.
 
     Returns:
         True if computation succeeded (including when lag MS is absent).
     """
-    lag_ms = Path(f"{exp.expname.lower()}-lag.ms")
+    # Use the dedicated lag pass if registered (see j2ms2); fall back to the conventional
+    # name so the step still works on experiments processed before lag_pass was tracked.
+    lag_ms = exp.lag_pass.msfile if exp.lag_pass is not None else Path(f"{exp.expname.lower()}-lag.ms")
     if not lag_ms.exists():
         logger.warning(f"Lag MS {lag_ms} not found. Skipping lag SNR computation.")
         return True
+
+    ff_names = set(exp.sources.fringefinder)
 
     with mstools.misc.table(lag_ms) as ms:
         with mstools.misc.table(ms.getkeyword('ANTENNA')) as t:
             ant_names = list(t.getcol('NAME'))
         with mstools.misc.table(ms.getkeyword('POLARIZATION')) as t:
             pol_labels = [mstools.misc.Stokes(ct).name for ct in t.getcol('CORR_TYPE')[0]]
+        with mstools.misc.table(ms.getkeyword('FIELD')) as t:
+            field_names = list(t.getcol('NAME'))
+        # FIELD_IDs that correspond to fringe-finder sources (used for the pol diagnostics).
+        ff_field_ids = {fid for fid, name in enumerate(field_names) if name in ff_names}
 
-        # best_snr[(scan_int, ant_idx)] = np.array of shape (n_pols,)
-        best_snr: dict[tuple[int, int], np.ndarray] = {}
+        # Per-baseline accumulators. The lag MS holds the *complex* cross-power spectrum per
+        # integration/subband; a fringe is a sharp peak in DELAY (lag) space, i.e. the Fourier
+        # transform of that spectrum over the frequency (channel) axis. The fringe delay lives
+        # in the spectral *phase*, so we must FFT each spectrum over the channel axis BEFORE
+        # taking the magnitude — taking |DATA| first (as the old code did) only leaves a smooth
+        # bandpass with no delay peak, and its scale-invariant peak/MAD cannot tell a strong
+        # fringe from pure noise. We then incoherently average the |lag| spectra of all rows
+        # (subbands/integrations) of each baseline so the noise floor settles to a stable, low
+        # level; a per-row maximum would instead let the largest of thousands of noise samples
+        # cross the detection threshold (the bug that made every antenna read SNR > 7).
+        # acc_sum[(scan, a1, a2)] = running sum of |FFT_freq(DATA)|, shape (nchan, npol).
+        acc_sum: dict[tuple[int, int, int], np.ndarray] = {}
+        acc_cnt: dict[tuple[int, int, int], int] = {}
+        acc_ff: dict[tuple[int, int, int], bool] = {}
 
         for start, nrow in mstools.misc.chunkert(0, len(ms), 1000):
             ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
             ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
             scans = ms.getcol('SCAN_NUMBER', startrow=start, nrow=nrow)
-            data = np.abs(ms.getcol('DATA', startrow=start, nrow=nrow))  # (nrow, nchan, npol)
+            fields = ms.getcol('FIELD_ID', startrow=start, nrow=nrow)
 
             cross = ants1 != ants2
             if not np.any(cross):
                 continue
 
-            cross_data = data[cross]  # (n_cross, nchan, npol)
-            med = np.median(cross_data, axis=1, keepdims=True)
-            mad = np.median(np.abs(cross_data - med), axis=1)  # (n_cross, npol)
-            peak = np.max(cross_data, axis=1)  # (n_cross, npol)
-            noise = 1.4826 * mad
-            snr = np.where(noise > 0, peak / noise, 0.0)
+            # FFT over the frequency (channel) axis -> delay/lag space, then magnitude.
+            data = ms.getcol('DATA', startrow=start, nrow=nrow)  # complex (nrow, nchan, npol)
+            lag = np.abs(np.fft.fft(data[cross], axis=1)).astype(np.float32)  # (n_cross, nchan, npol)
 
             cross_scans, cross_a1, cross_a2 = scans[cross], ants1[cross], ants2[cross]
+            cross_fields = fields[cross]
             for i in range(len(cross_scans)):
-                s = int(cross_scans[i])
-                for aidx in (int(cross_a1[i]), int(cross_a2[i])):
-                    key = (s, aidx)
-                    if key not in best_snr:
-                        best_snr[key] = snr[i].copy()
-                    else:
-                        np.maximum(best_snr[key], snr[i], out=best_snr[key])
+                key = (int(cross_scans[i]), int(cross_a1[i]), int(cross_a2[i]))
+                if key not in acc_sum:
+                    acc_sum[key] = lag[i].copy()
+                    acc_cnt[key] = 1
+                    acc_ff[key] = int(cross_fields[i]) in ff_field_ids
+                else:
+                    acc_sum[key] += lag[i]
+                    acc_cnt[key] += 1
+
+    # Reduce each baseline's mean |lag| spectrum to a per-pol SNR (fringe peak / robust noise)
+    # and a per-pol fringe-peak amplitude, then keep, for each (scan, antenna), the strongest
+    # baseline. Max-over-baselines is safe here because every baseline's noise floor is now a
+    # stable ~few-sigma value after the incoherent average, so a dead antenna stays well below
+    # the threshold while a detection on any baseline lifts the antenna above it.
+    best_snr: dict[tuple[int, int], np.ndarray] = {}
+    ff_amp_sum: dict[int, np.ndarray] = {}
+    ff_amp_cnt: dict[int, int] = {}
+    ff_best_snr: dict[int, float] = {}
+    for (scan, a1i, a2i), spec_sum in acc_sum.items():
+        spec = spec_sum / acc_cnt[(scan, a1i, a2i)]      # mean |lag| spectrum (nchan, npol)
+        peak = np.max(spec, axis=0)                       # (npol,) fringe-peak amplitude per pol
+        med = np.median(spec, axis=0)
+        noise = 1.4826 * np.median(np.abs(spec - med), axis=0)
+        snr = np.divide(peak, noise, out=np.zeros_like(peak, dtype=float), where=noise > 0)
+        is_ff = acc_ff[(scan, a1i, a2i)]
+        snr_max = float(np.max(snr)) if is_ff else 0.0
+        for aidx in (a1i, a2i):
+            key = (scan, aidx)
+            if key not in best_snr:
+                best_snr[key] = snr.copy()
+            else:
+                np.maximum(best_snr[key], snr, out=best_snr[key])
+            if is_ff:
+                if aidx not in ff_amp_sum:
+                    ff_amp_sum[aidx] = np.zeros(spec.shape[1])
+                    ff_amp_cnt[aidx] = 0
+                    ff_best_snr[aidx] = 0.0
+                ff_amp_sum[aidx] += peak
+                ff_amp_cnt[aidx] += 1
+                if snr_max > ff_best_snr[aidx]:
+                    ff_best_snr[aidx] = snr_max
 
     # Convert to nested dict: {scan_str: {ant_name: {pol: snr}}}
     lag_snr: dict[str, dict[str, dict[str, float]]] = {}
@@ -426,7 +599,14 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
         lag_snr[scan_str][ant_names[aidx]] = {p: round(float(snr_arr[i]), 1) for i, p in enumerate(pol_labels)}
 
     exp.lag_snr = lag_snr
+    exp.pol_diagnostics = _derive_pol_diagnostics(ff_amp_sum, ff_amp_cnt, ff_best_snr,
+                                                  ant_names, pol_labels)
     logger.info(f"Lag SNR computed for {len(lag_snr)} scans from {lag_ms}")
+    if exp.pol_diagnostics.get('analyzed'):
+        pd = exp.pol_diagnostics
+        logger.info(f"Polarization diagnostics: polswap={pd['polswap'] or 'none'}, "
+                    f"polconvert={pd['polconvert'] or 'none'} "
+                    f"(from {len(pd['antennas'])} antennas on fringe-finder scans).")
     exp.store()
     return True
 
@@ -519,6 +699,24 @@ def open_standardplot_files(exp) -> bool:
     # rprint(f"[yellow]{'\n- '.join([aplot for aplot in standardplots])}"
     #        "\nOpening the dashboard in your browser...[/yellow]")
     serve_dashboard(exp, exp.dirs.plots)
+    return True
+
+
+def open_pipeline_dashboard(exp) -> bool:
+    """Launches the web dashboard after the pipeline has run, with the pipeline feedback
+    page shown as a new "Pipeline" tab on top of the standard plots.
+
+    Reuses the same dashboard served before msops (see :func:`open_standardplot_files`),
+    so the user only needs the SSH tunnel printed by the server to review both the
+    standard plots and the pipeline feedback page in their browser.
+
+    Args:
+        exp: experiment.Experiment object.
+
+    Returns:
+        bool: True after the dashboard server is stopped by the user.
+    """
+    serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out)
     return True
 
 
@@ -757,33 +955,6 @@ def update_piletter(exp: experiment.Experiment) -> bool:
     return True
 
 
-_DEFAULT_TCONVERT_BIN = "tConvert"
-
-
-def _resolve_tconvert_binary() -> str:
-    """Returns the tConvert binary path.
-
-    Resolution order:
-      1. ``EVN_TCONVERT`` environment variable (full path or executable name on $PATH).
-      2. The ``tconvert`` entry in computers.toml (under the ``executables`` table or as
-         a top-level key whose value is the path), if available.
-      3. Plain ``tConvert`` (relies on $PATH).
-
-    This replaces a previously hardcoded developer build path that broke the step on
-    every machine other than the original developer's workstation.
-    """
-    env_path = os.environ.get("EVN_TCONVERT")
-    if env_path:
-        return env_path
-    try:
-        servers = experiment.retrieve_servers()
-        if "tconvert" in servers.names():
-            return str(servers["tconvert"].path)
-    except (FileNotFoundError, KeyError):
-        pass
-    return _DEFAULT_TCONVERT_BIN
-
-
 def _du_kbytes(path: Path | str) -> int:
     """Returns the disk usage of *path* in kilobytes via ``du -s``.
 
@@ -815,11 +986,40 @@ def _du_kbytes(path: Path | str) -> int:
         return 0
 
 
+def _tconvert_chunk_arg(a_pass: experiment.CorrelatorPass) -> str:
+    """Returns the ``chunk_size=...`` tConvert option for a pass, scaled to the IDI size.
+
+    Args:
+        a_pass: Correlator pass whose MS size drives the chunk size.
+
+    Returns:
+        The ``chunk_size=<n>GB`` string to pass to tConvert via ``-o``.
+
+    Raises:
+        IOError: If the >4 TB case would not fit in the current directory.
+    """
+    # The size difference between internal MS and FITS-IDI is around 1.55
+    idi_size = 1.55 * u.kbit * _du_kbytes(a_pass.msfile)
+    if idi_size < 20*u.Gb:
+        return "chunk_size=4GB"
+    elif idi_size < 4*u.Tb:
+        return "chunk_size=8GB"
+    else:
+        if utils.space_available(Path.cwd()) <= 1.1*idi_size:
+            raise IOError("Not enough disk space to create the FITS-IDI files.")
+        return f"chunk_size={int(idi_size.to(u.Tb).value)}GB"
+
+
 def tconvert(exp: experiment.Experiment) -> bool:
     """Runs tConvert on all correlator passes to create FITS-IDI files from the MS.
 
     Selects chunk_size based on estimated IDI file size. Skips passes where
     FITS-IDI files already exist.
+
+    When ``exp.tconvert_in_eee`` is set (the default; toggled by
+    ``postprocess --no-tConvert-in-eee``) each pass is converted on eee instead, as a
+    temporary workaround for a broken local tConvert (see :func:`_tconvert_pass_in_eee`).
+    Passes are independent, so they run in parallel.
 
     Args:
         exp: Experiment object.
@@ -827,27 +1027,69 @@ def tconvert(exp: experiment.Experiment) -> bool:
     Returns:
         True if all passes converted successfully.
     """
-    tConvert_bin = _resolve_tconvert_binary()
-    for a_pass in exp.correlator_passes:
-        if len(glob.glob(f"{a_pass.fitsidifile}*")) > 0:
-            continue
+    passes = [a_pass for a_pass in exp.correlator_passes
+              if len(glob.glob(f"{a_pass.fitsidifile}*")) == 0]
+    if not passes:
+        return True
 
-        # The size difference between internal MS and FITS-IDI is around 1.55
-        idi_size = 1.55 * u.kbit * _du_kbytes(a_pass.msfile)
+    if not exp.tconvert_in_eee:
+        for a_pass in passes:
+            utils.shell_command(_TCONVERT_BIN, ["-v", a_pass.lisfile.name, "-o",
+                                                _tconvert_chunk_arg(a_pass)],
+                                stdout=None, stderr=subprocess.STDOUT,
+                                logfile=exp.dirs.logs / "tconvert.log")
+        return True
 
-        if idi_size < 20*u.Gb:
-            utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o", "chunk_size=4GB"],
-                                stdout=None, stderr=subprocess.STDOUT)
-        elif idi_size < 4*u.Tb:
-            utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o", "chunk_size=8GB"],
-                                stdout=None, stderr=subprocess.STDOUT)
-        else:
-            if utils.space_available(Path.cwd()) <= 1.1*idi_size:
-                raise IOError("Not enough disk space to create the FITS-IDI files.")
+    server = experiment.retrieve_servers()['eee']
+    remote = f"{server.user}@{server.host}"
+    with ThreadPoolExecutor(max_workers=min(len(passes), 4)) as pool:
+        futures = [pool.submit(_tconvert_pass_in_eee, exp, remote, a_pass) for a_pass in passes]
+        return all(future.result() for future in futures)
 
-            utils.shell_command(tConvert_bin, ["-v", a_pass.lisfile.name, "-o",
-                                f"chunk_size={int(idi_size.to(u.Tb).value)}GB"],
-                                stdout=None, stderr=subprocess.STDOUT)
+
+def _tconvert_pass_in_eee(exp: experiment.Experiment, remote: str,
+                          a_pass: experiment.CorrelatorPass) -> bool:
+    """Converts one correlator pass to FITS-IDI by running tConvert on eee.
+
+    Temporary workaround for the broken local tConvert: copies the pass MS (and its
+    small .lis) to ``<remote>:/data0/temp/<lisname>/``, runs the very same tConvert
+    command there, copies the produced FITS-IDI files back into the current directory,
+    and finally removes the remote temp directory (even if a step failed). Each pass
+    uses its own remote sub-directory so several passes can run concurrently.
+
+    Args:
+        exp: Experiment object (used for the log directory).
+        remote: ``user@host`` of eee.
+        a_pass: Correlator pass to convert.
+
+    Returns:
+        True on success.
+    """
+    chunk_arg = _tconvert_chunk_arg(a_pass)
+    remote_dir = _EEE_TCONVERT_TEMP / a_pass.lisfile.stem
+    try:
+        utils.ssh(remote, f"rm -rf {remote_dir} && mkdir -p {remote_dir}")
+        # rsync (not scp): the MS is a directory tree of many files, and rsync both moves
+        # such trees faster and can resume a partial transfer (--partial) of these very
+        # large files. The .lis is tiny and goes in the same call as the MS.
+        utils.rsync([str(a_pass.msfile), str(a_pass.lisfile)], f"{remote}:{remote_dir}/",
+                    timeout=_EEE_RSYNC_TIMEOUT_S)
+
+        # Run from inside the temp dir so the relative MS / FITS-IDI names in the .lis resolve.
+        cmd = f"cd {remote_dir} && {_TCONVERT_BIN} -v {a_pass.lisfile.name} -o {chunk_arg}"
+        output = utils.ssh(remote, cmd, stderr=subprocess.STDOUT, timeout=_EEE_TCONVERT_TIMEOUT_S)
+        log_fh, log_path = utils.open_unique_log(exp.dirs.logs / "tconvert.log")
+        try:
+            log_fh.write(output or "")
+        finally:
+            log_fh.close()
+        logger.debug(f"tConvert (eee) output for {a_pass.lisfile.name} written to {log_path}")
+
+        # Bring the (several) FITS-IDI files this pass produced back to the current directory.
+        utils.rsync(f"{remote}:{remote_dir}/{a_pass.fitsidifile}*", ".",
+                    timeout=_EEE_RSYNC_TIMEOUT_S)
+    finally:
+        utils.ssh(remote, f"rm -rf {remote_dir}")
 
     return True
 
