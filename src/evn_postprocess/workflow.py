@@ -180,6 +180,8 @@ _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
                         "required MS file."),
                    Task('msops', 'msops', "Applies MS operations including weight flagging, polswap, "
                         "and 1-bit scaling."),
+                   Task('tconvert', 'tconvert', "Creates the FITS-IDI files from the MS by running "
+                        "tConvert on every correlator pass."),
                    Task('polconvert', 'polconvert', 'Runs polConvert on all available MS files'),
                    Task('standardplots2', 'msops_post', "Re-runs the standard plots after all msops "
                         "have been performed"),
@@ -456,8 +458,11 @@ def msops(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if all MS operations completed successfully.
     """
+    # If the FITS-IDI files already exist, the 'tconvert' step (which runs right after msops)
+    # has already produced them, which means these in-place MS operations were applied too;
+    # skip to avoid re-applying them. tConvert itself is now the separate 'tconvert' step.
     if all(len(glob.glob(f"{p.fitsidifile}*")) > 0 for p in exp.correlator_passes):
-        logger.debug("FITS IDI files already exist. Skipping creation.")
+        logger.debug("FITS IDI files already exist. MS operations were already applied. Skipping.")
         return True
 
     if _auto_msops_available(exp):
@@ -498,7 +503,25 @@ def msops(exp: experiment.Experiment) -> bool:
 
     exp.store()
     return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) \
-        & process.print_exp(exp, False) & process.tconvert(exp)
+        & process.print_exp(exp, False)
+
+
+def tconvert(exp: experiment.Experiment) -> bool:
+    """Creates the FITS-IDI files from the MS files by running tConvert on every correlator pass.
+
+    Split out from :func:`msops` into its own workflow step so it can be run (and re-run)
+    on its own via ``postprocess run tconvert``. This is convenient because tConvert
+    currently runs on eee as a temporary workaround (see :func:`process.tconvert`) and may
+    need re-triggering independently of the MS operations. The step is idempotent: passes
+    whose FITS-IDI files already exist are skipped.
+
+    Args:
+        exp (experiment.Experiment): Experiment object.
+
+    Returns:
+        bool: True if all correlator passes were converted successfully.
+    """
+    return process.tconvert(exp)
 
 
 def _auto_msops_available(exp: experiment.Experiment) -> bool:
@@ -564,25 +587,26 @@ def _apply_auto_msops(exp: experiment.Experiment) -> None:
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
-    """Runs PolConvert automatically with iterative parameter tuning.
+    """Runs PolConvert (auto-selecting scan and reference antenna) and post-processes it.
 
-    Calls process.polconvert() which finds all fringe-finder scans and iterates over
-    different scans, parameter combinations (solve_weight, time_avg, time_range),
-    checks quality, and applies the best solution found.
-    Then renames output files via post_polconvert/post_post_polconvert.
+    Calls process.polconvert(), which converts the linear-polarization antennas locally,
+    iterating over the best fringe-finder scans and reference antennas until the solution
+    quality passes. Then converts/plots the output via post_polconvert/post_post_polconvert.
 
     Args:
         exp (experiment.Experiment): Experiment object.
 
     Returns:
-        bool: True if PolConvert completed successfully, False on failure.
+        bool: True if the converted files are present and post-processed; False if no good
+        solution could be reached (inspect polconvert_logs or run it manually).
     """
     if not exp.antennas.polconvert:
         logger.info("No antennas require PolConvert. Skipping.")
         return True
 
     if not process.polconvert(exp):
-        logger.error("PolConvert could not reach a good solution. Try running it manually.")
+        logger.warning("PolConvert did not reach a good solution automatically — inspect "
+                       "polconvert_logs, adjust polconvert_inputs.toml, and re-run this step.")
         return False
 
     if not process.post_polconvert(exp):
@@ -920,7 +944,7 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
       - lisfiles:       (none) -> *.lis
       - j2ms2:          *.lis  -> *.ms
       - standardplots:  *.ms   -> *.ps
-      - msops:          *.ms   -> *IDI*
+      - tconvert:       *.ms   -> *IDI*
       - polconvert:     *IDI*  -> *IDI*.PCONVERT  (only if polconvert antennas exist)
       - antab:          (none) -> pipeline/in/*.antab
       - pipeline:       pipeline/in/* + *IDI* -> pipeline/out/*
@@ -995,18 +1019,20 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
             _remove_stale(ps_files)
             _reset_from('standardplots', "Standard plot(s) older than MS file(s)")
 
-    # --- msops: inputs=*.ms, outputs=*IDI* ---
-    if 'msops' in step_names and all_steps[step_names.index('msops')].done:
+    # --- tconvert: inputs=*.ms, outputs=*IDI* ---
+    # (msops itself modifies the MS files in place and has no distinct output file to check;
+    # the FITS-IDI files are produced by the separate tconvert step.)
+    if 'tconvert' in step_names and all_steps[step_names.index('tconvert')].done:
         idi_files = []
         for p in (exp.correlator_passes or []):
             idi_files.extend(Path('.').glob(f"{p.fitsidifile}*"))
         ms_files = [p.msfile for p in exp.correlator_passes] if exp.correlator_passes else []
 
         if not idi_files:
-            _reset_from('msops', "FITS-IDI file(s) missing on disk")
+            _reset_from('tconvert', "FITS-IDI file(s) missing on disk")
         elif ms_files and _oldest_mtime(idi_files) < _newest_mtime(ms_files):
             _remove_stale(idi_files)
-            _reset_from('msops', "FITS-IDI file(s) older than MS file(s)")
+            _reset_from('tconvert', "FITS-IDI file(s) older than MS file(s)")
 
     # --- polconvert: inputs=*IDI*, outputs=*IDI*.PCONVERT (only if needed) ---
     if 'polconvert' in step_names and all_steps[step_names.index('polconvert')].done:

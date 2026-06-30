@@ -64,8 +64,10 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
             - [bold green]plots[/bold green] : Runs standardplots.
             - [bold green]msops[/bold green] : Runs the full MS operations like ysfocus, polswap,
                                                flag_weights, etc.
-            - [bold green]tconvert[/bold green] : Runs tConvert on all available MS files,
-                                                  and runs polConvert is required.
+            - [bold green]tconvert[/bold green] : Runs tConvert on all available MS files to
+                                                  create the FITS-IDI files.
+            - [bold green]polconvert[/bold green] : Runs PolConvert on the FITS-IDI files
+                                                    (only if some antennas need it).
             - [bold green]post_polconvert[/bold green] : if polConvert did run, then this steps
                                                          renames the new *.PCONVERT files and do
                                                          standardplots on them.
@@ -226,10 +228,13 @@ def main():
                              '(weight threshold, polswap/polconvert/onebit antennas, refant, '
                              'pause_after, skip_archive). See evn_postprocess.policy for the schema.')
     parser.add_argument('--tConvert-in-eee', action=argparse.BooleanOptionalAction, default=True,
-                        help='Temporary workaround for the broken local tConvert: run the tConvert '
-                             'step on eee instead (copy the MS files to jops@eee:/data0/temp/, run '
-                             'tConvert there, copy the FITS-IDI files back, and clean up the remote '
-                             'files). Enabled by default; use --no-tConvert-in-eee to run locally.')
+                        help='Temporary workaround for the broken local tConvert and PolConvert: run '
+                             'both steps on eee instead. tConvert copies the MS files to '
+                             'jops@eee:/data0/temp/, runs there, and copies the FITS-IDI files back; '
+                             'polconvert pushes its input file to the experiment directory on eee '
+                             '(where the FITS-IDI files already are), runs there, and copies the '
+                             '.PCONVERT files back. Enabled by default; use --no-tConvert-in-eee to '
+                             'run both locally.')
     parser.add_argument('--batch', action='store_true', default=False,
                         help='Run unattended: never invoke interactive dialogs or open the '
                              'standardplots dashboard. The runner stops with exit code 0 and '
