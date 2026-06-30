@@ -1,10 +1,23 @@
 import os
+import re
 import glob
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from . import experiment, utils
 from .experiment import Server
+
+
+# Suffix tagging the auxiliary lag-space products ({expname}-lag.lis / {expname}-lag.ms).
+# These are NOT correlator passes: the lag MS is only used to compute per-scan antenna SNR,
+# so the lag .lis must be excluded from pass discovery (otherwise checklis/j2ms2/msops would
+# treat it as an extra pass and operate on it).
+LAG_TAG = "-lag."
+
+
+def _pass_lisfiles(pattern: str) -> list[str]:
+    """Sorted .lis files matching *pattern*, excluding the auxiliary lag-space .lis file."""
+    return sorted(f for f in glob.glob(pattern) if LAG_TAG not in f)
 
 
 def lis_files_in_ccs(exp: experiment.Experiment, server: Server) -> bool:
@@ -34,16 +47,16 @@ def get_lis_files(exp: experiment.Experiment) -> bool:
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
     server = experiment.retrieve_servers()['ccs']
     cmds = []
-    if len(sorted(glob.glob(f"{eEVNname.lower()}*.lis"))) == 0:
+    if len(_pass_lisfiles(f"{eEVNname.lower()}*.lis")) == 0:
         utils.scp(f"{server.user}@{server.host}:" + \
                         str(Path(str(server.path).format(expname=eEVNname)) / f"{eEVNname.lower()}*.lis"), '.')
 
-    for a_lis in sorted(glob.glob("*.lis")):
+    for a_lis in _pass_lisfiles("*.lis"):
         split_lis_cont_line(exp, a_lis)
 
     # In the case of e-EVN runs, a renaming of the lis files may be required:
     if eEVNname != exp.expname:
-        for a_lis in sorted(glob.glob("*.lis")):
+        for a_lis in _pass_lisfiles("*.lis"):
             # Modify the references for eEVNname to expname inside the lis files
             # if it has not been done yet
             if exp.expname.lower() not in a_lis:
@@ -98,6 +111,44 @@ def update_lis_file(lisfilename: str | Path, oldexp: str, newexp: str) -> None:
 
     with open(lisfilename, 'w') as lisfile:
         lisfile.write(''.join(lisfilelines))
+
+
+def create_lag_lisfile(exp: experiment.Experiment, source_pass: experiment.CorrelatorPass) -> Path:
+    """Creates a ``{expname}-lag.lis`` copy of the given pass configured to produce the
+    lag-space MS (``{expname}-lag.ms``).
+
+    ``j2ms2`` ignores the ``-o output`` option when an input ``.lis`` file is supplied via
+    ``-v`` (the output MS name is taken from the ``.lis`` header instead). To control the
+    lag-space MS name we therefore duplicate the source ``.lis`` file and rewrite the output
+    MS field in its header line(s).
+
+    Args:
+        exp (experiment.Experiment): Experiment object (provides the experiment name).
+        source_pass (experiment.CorrelatorPass): The pass whose .lis file is duplicated
+            (normally the first/main correlator pass).
+
+    Returns:
+        Path: The path to the created ``{expname}-lag.lis`` file.
+    """
+    lag_lisfile = Path(f"{exp.expname.lower()}-lag.lis")
+    lag_msname = f"{exp.expname.lower()}-lag.ms"
+    old_msname = source_pass.msfile.name
+
+    with open(source_pass.lisfile, 'r') as f:
+        lines = f.readlines()
+
+    # The header line(s) are the ones not starting with the +/- job markers. Replace the
+    # output MS name (matched as a whitespace-delimited token so other fields, e.g. the
+    # .vix or .IDI names, are left untouched).
+    token_re = re.compile(rf'(?<!\S){re.escape(old_msname)}(?!\S)')
+    for i, line in enumerate(lines):
+        if line.lstrip()[:1] not in ('+', '-') and '.ms' in line:
+            lines[i] = token_re.sub(lag_msname, line)
+
+    with open(lag_lisfile, 'w') as f:
+        f.writelines(lines)
+
+    return lag_lisfile
 
 
 def split_lis_cont_line(exp: experiment.Experiment, fulllisfile: str | Path) -> None:
@@ -205,7 +256,7 @@ def get_passes_from_lisfiles(exp: experiment.Experiment) -> bool:
     # deterministic across machines and reruns. The previous unsorted glob.glob()
     # call could produce a different order from the file-system, which silently
     # broke pass-to-IDI assignments for spectral-line experiments.
-    lisfiles = sorted(glob.glob(f"{exp.expname.lower()}*.lis"))
+    lisfiles = _pass_lisfiles(f"{exp.expname.lower()}*.lis")
     thereis_line = True if '_line' in ''.join(lisfiles) else False
     
     # Prepare arguments for parallel processing
@@ -219,9 +270,27 @@ def get_passes_from_lisfiles(exp: experiment.Experiment) -> bool:
     
     with ThreadPoolExecutor() as executor:
         results = list(executor.map(_process_single_lisfile, args_list))
-    
-    exp.correlator_passes = [result for result in results if result is not None]
-    
+
+    new_passes = [result for result in results if result is not None]
+
+    # Preserve already-extracted MS metadata for passes that are unchanged. Rebuilding the
+    # passes from the .lis files (e.g. on a reload triggered when the user edits the .lis
+    # set) otherwise resets freqsetup/antennas/sources/scans to empty, which silently breaks
+    # later steps that need them (e.g. comment_tasav -> "No frequency setup available").
+    # We match on the .lis and .ms file names; if those are unchanged we carry the metadata
+    # over, so reloading the pass list is non-destructive for passes that did not change.
+    previous = {(p.lisfile.name, p.msfile.name): p for p in exp.correlator_passes}
+    for a_pass in new_passes:
+        old = previous.get((a_pass.lisfile.name, a_pass.msfile.name))
+        if old is not None and old.freqsetup is not None:
+            a_pass.freqsetup = old.freqsetup
+            a_pass.antennas = old.antennas
+            a_pass.sources = old.sources
+            a_pass.scans = old.scans
+            a_pass.flagged_weights = old.flagged_weights
+
+    exp.correlator_passes = new_passes
+
     # Aggregate sources from all correlator passes into the global experiment sources
     from . import process
     process.aggregate_sources_from_passes(exp)
@@ -241,7 +310,11 @@ def _check_single_lisfile(args):
     """
     a_pass, is_multi_phase_center = args
     
-    output = utils.shell_command("checklis.py", a_pass.lisfile.name, shell=True)
+    # checklis.py (external, /home/jops/opt/evn_support) uses non-raw regex strings that
+    # emit noisy SyntaxWarnings on Python >= 3.12. The script still works (the sequences are
+    # interpreted literally), and we cannot edit it, so silence the warning for this call.
+    output = utils.shell_command("PYTHONWARNINGS=ignore::SyntaxWarning checklis.py",
+                                 a_pass.lisfile.name, shell=True)
     # The output has the form:
     #      First scan = X
     #       {errors if any otherwise no extra lines}
