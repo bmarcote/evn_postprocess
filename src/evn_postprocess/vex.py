@@ -174,13 +174,13 @@ def p_value(t: yacc.YaccProduction) -> None:
         try:
             t[0] = t[1]
             t[0].append("")
-        except:
+        except AttributeError:  # t[1] is a scalar (str), not a list yet
             t[0] = [t[1], ""]
     else:
         try:
             t[0] = t[1]
             t[0].append(t[3])
-        except:
+        except AttributeError:  # t[1] is a scalar (str), not a list yet
             t[0] = [t[1], t[3]]
 
     return

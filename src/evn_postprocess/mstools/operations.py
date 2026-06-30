@@ -466,7 +466,14 @@ def change_source_name(msfile: str | Path, oldname: str, newname: str):
             srcnames = ms_field.getcol('NAME')
             try:
                 idx = srcnames.index(oldname)
-                srcnames[idx] = newname
             except ValueError:
                 rprint(f"[bold red]ERROR: [/bold red] [red]The source {oldname} is not present in the MS[/red]")
                 rprint(f"[red]The only source names found are: {', '.join(srcnames)}[/red]")
+                return
+            srcnames[idx] = newname
+            # The previous implementation modified the list in memory but never wrote it
+            # back, so the rename silently did nothing. Persist it to disk.
+            ms_field.putcol('NAME', srcnames)
+            ms_field.flush()
+
+    rprint(f"[green]Source '{oldname}' renamed to '{newname}' in {msfile}.[/green]")

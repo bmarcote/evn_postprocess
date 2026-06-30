@@ -138,10 +138,14 @@ def get_jexp_info(expname: str, server: Server) -> dict[str, str | None]:
         dict[str, str | None]: Dictionary containing all information described in the jexp file.
     """
     temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.jex')
-    utils.scp(f"{server.user}@{server.host}:" + str(server.path / f"{expname.lower()}.jex"),
-                    temp_file.name, capture_output=True)
-    with open(temp_file.name, 'r') as f:
-        jexp_content = f.read()
+    temp_file.close()
+    try:
+        utils.scp(f"{server.user}@{server.host}:" + str(server.path / f"{expname.lower()}.jex"),
+                        temp_file.name, capture_output=True)
+        with open(temp_file.name, 'r') as f:
+            jexp_content = f.read()
+    finally:
+        Path(temp_file.name).unlink(missing_ok=True)
 
     result = {}
     for line in jexp_content.strip().split('\n'):
@@ -153,13 +157,15 @@ def get_jexp_info(expname: str, server: Server) -> dict[str, str | None]:
         if line.endswith(';'):
             line = line[:-1]
 
-        # Split by '=' to get key-value pairs
+        # Split by '=' to get key-value pairs. Lines without '=' are skipped (previously
+        # they fell through and re-stored the previous line's key/value, or raised
+        # NameError when the first data line had no '=').
         if '=' in line:
             key, value = line.split('=', 1)
             key = key.strip()
             value = value.strip()
-        # Set empty values to empty string
-        result[key] = value if value else None
+            # Set empty values to None
+            result[key] = value if value else None
 
     return result
 
