@@ -53,24 +53,26 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
 
 
         The available steps are:
-            - [bold green]start[/bold green] : Sets up the experiment, creates the required folders
-                                               in @eee and @pipe, and copy the already-existing
-                                               files (.expsum, .vix, etc).
-            - [bold green]lisfile[/bold green] : Produces a .lis file(s) in @ccs
-                                                 and copies them to @eee.
+            - [bold green]initialize[/bold green] : Sets up the experiment, creates the required
+                                                    folders in @eee and @pipe, and copies the
+                                                    already-existing files (.expsum, .vix, etc).
+            - [bold green]lisfiles[/bold green] : Produces a .lis file(s) in @ccs
+                                                  and copies them to @eee.
             - [bold green]checklis[/bold green] : Checks the existing .lis files.
-            - [bold green]ms[/bold green] : Gets the data for all available .lis files and
-                                            runs j2ms2 to produce MS files.
-            - [bold green]plots[/bold green] : Runs standardplots.
+            - [bold green]j2ms2[/bold green] : Gets the data for all available .lis files and
+                                               runs j2ms2 to produce MS files.
+            - [bold green]standardplots[/bold green] : Runs standardplots.
             - [bold green]msops[/bold green] : Runs the full MS operations like ysfocus, polswap,
                                                flag_weights, etc.
             - [bold green]tconvert[/bold green] : Runs tConvert on all available MS files to
                                                   create the FITS-IDI files.
             - [bold green]polconvert[/bold green] : Runs PolConvert on the FITS-IDI files
                                                     (only if some antennas need it).
-            - [bold green]post_polconvert[/bold green] : if polConvert did run, then this steps
-                                                         renames the new *.PCONVERT files and do
+            - [bold green]post_polconvert[/bold green] : if polConvert did run, then this step
+                                                         renames the new *.PCONVERT files and does
                                                          standardplots on them.
+            - [bold green]standardplots2[/bold green] : Re-runs standardplots after all the MS
+                                                        operations have been performed.
             - [bold green]antab[/bold green] : Retrieves the .antab file to be used in the pipeline.
                                                If it was not generated, Opens antab_editor.py.
                 Needs to run again once you have run antab_editor.py manually.
@@ -78,7 +80,7 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
                                                     and recovers all needed files.
             - [bold green]pipeline[/bold green] : Runs the EVN Pipeline for all correlated passes.
             - [bold green]postpipe[/bold green] : Runs all steps to be done after the pipeline:
-                                                  creates tasav, comment files, feedback.pl
+                                                  creates tasav, comment files, feedback.
             - [bold green]prearchive[/bold green] : Appends Tsys/GC and re-archive FITS-IDI and
                                               the PI letter. Asks to conduct the
                                               last post-processing steps.
