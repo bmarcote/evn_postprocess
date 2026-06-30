@@ -1,0 +1,71 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+        <title>{title}</title>
+        <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+        <link rel="stylesheet"
+              type="text/css"
+              href="http://old.evlbi.org/css/evn.css"
+              title="JIVE style sheet" />
+
+</head>
+<body>
+
+
+<div class="totale">
+
+
+   <div class="content">
+
+      <div class="banner">
+                <script type="text/javascript"
+                        src="http://old.evlbi.org/javascript/imagecycle4.js">
+                </script>
+                <noscript>
+                <img src="http://old.evlbi.org/graphics/banner/evnbanner.gif" alt="EVN Banner" />
+                </noscript>
+      </div>
+
+      <div class="main">
+
+
+<br />
+<h1 class="title">{heading}</h1>
+<br />
+
+
+<p>
+<object>
+<center>
+<em>
+Pipeline feedback for experiment {expname_upper}.
+If you have any comments on this experiment please email
+ the address below. <br />
+A <a href="http://old.evlbi.org/pipeline/pipe_desc.html">detailed
+                  description of the pipeline output</a> is available. <br />
+
+</em>
+</center>
+</object>
+</p>
+
+<hr />
+<p>
+<!-- HTML file last updated: -->
+Last updated: {last_updated}
+<a href="mailto:{contact}">{contact}</a>
+
+<br />
+</p>
+
+<hr />
+
+{body}
+</div>
+<!--#include virtual="./foot.html"-->
+
+</div>
+</div>
+</body>
+</html>
