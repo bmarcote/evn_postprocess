@@ -127,28 +127,57 @@ def get_vlba_antab(exp) -> Optional[bool]:
 def run_antab_editor(exp) -> bool:
     """Opens antab_editor.py for the given experiment.
 
+    For an e-EVN run (several experiments correlated together) the editor is run
+    once from the main experiment, passing the associated experiments via ``-a``
+    together with the path to their FITS-IDI files, so a single, consistent set of
+    Tsys/gain tables is produced for the whole session.
+
     Returns:
         bool: True once the editor exits successfully (the editor itself runs
         interactively; this function only manages the working directory).
+        False if the associated e-EVN experiments do not have their FITS-IDI files yet.
     """
-    original_cwd = os.getcwd()
-    os.chdir(exp.dirs.pipe_temp)
     if (exp.eEVNname is not None) and (exp.expname != exp.eEVNname):
-        os.chdir(original_cwd)
         rprint(f"[bold red]This experiment {exp.expname} is part of the e-EVN run {exp.eEVNname}[/bold red].\n"
               "[red]You should only run antab_editor.py from the main e-EVN experiment run (including the "
               "rest of the run experiments).\nRun it manually in case you indeed want to run it here.[/red]")
         raise ValueError("antab_editor.py should only be run from the main e-EVN experiment run")
 
-    if '_line' in ''.join(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")):
-        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", "..", "-l"], shell=True, stdout=None)
-    else:
-        utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-p", "1", "-f", ".."], shell=True, stdout=None)
-    
-    if len(missing_antabs := [a.name for a in exp.antennas if not a.antabfsfile]) > 0:
-        rprint(f"[red]Note that you are missing ANTAB files from: {', '.join(missing_antabs)}[/red]")
+    # For an e-EVN run, gather the other experiments observed in the same session.
+    # Computed before chdir, while the .vix file is reachable from the experiment root.
+    other_exps = []
+    if exp.eEVNname is not None:
+        other_exps = [e for e in exp.eEVN_experiments() if e.upper() != exp.expname.upper()]
 
-    os.chdir(original_cwd)
+    original_cwd = os.getcwd()
+    os.chdir(exp.dirs.pipe_temp)
+    try:
+        # The associated experiments must already be correlated (FITS-IDI present) so
+        # antab_editor can read their Tsys information. Their data live in a sibling
+        # experiment directory, i.e. ../../<EXP>/ relative to the antenna_files dir.
+        missing_idi = [e for e in other_exps if not glob.glob(f"../../{e}/{e.lower()}*.IDI*")]
+        if missing_idi:
+            rprint(f"[bold red]Cannot run antab_editor.py for the e-EVN run {exp.eEVNname}:[/bold red] "
+                   f"[red]no FITS-IDI files found for {', '.join(missing_idi)}.[/red]\n"
+                   "[red]Correlate (and produce the FITS-IDI of) those experiments first.[/red]")
+            return False
+
+        assoc_args = ["-a", *other_exps] if other_exps else []
+        assoc_paths = [f"../../{e}/" for e in other_exps]
+
+        if '_line' in ''.join(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")):
+            utils.shell_command("antab_editor.py",
+                                ["-e", exp.expname.lower(), *assoc_args, "-f", "..", "-l", *assoc_paths],
+                                shell=True, stdout=None)
+        else:
+            utils.shell_command("antab_editor.py",
+                                ["-e", exp.expname.lower(), *assoc_args, "-p", "1", "-f", "..", *assoc_paths],
+                                shell=True, stdout=None)
+
+        if len(missing_antabs := [a.name for a in exp.antennas if not a.antabfsfile]) > 0:
+            rprint(f"[red]Note that you are missing ANTAB files from: {', '.join(missing_antabs)}[/red]")
+    finally:
+        os.chdir(original_cwd)
     return True
 
 
