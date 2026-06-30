@@ -664,6 +664,7 @@ class Experiment:
                  correlator_passes: list[CorrelatorPass] | None = None,
                  lag_pass: CorrelatorPass | None = None,
                  lag_snr: dict | None = None,
+                 lag_bandpass: dict | None = None,
                  pol_diagnostics: dict | None = None,
                  no_lag: bool = False,
                  policy=None):
@@ -688,6 +689,12 @@ class Experiment:
         # `correlator_passes`; only the SNR computation touches `lag_pass`.
         self.lag_pass: CorrelatorPass | None = lag_pass
         self.lag_snr: dict[str, dict[str, dict[str, float]]] = lag_snr if lag_snr else {}
+        # Per-scan, per-antenna fringe-peak amplitude in each IF (parallel-hand), derived from
+        # the lag MS alongside lag_snr (see process.compute_lag_snr). It is the input to the
+        # PolConvert reference-antenna choice: the best reference is the non-linear antenna with
+        # the flattest bandpass, i.e. the smallest amplitude scatter across IFs. Shape:
+        # {scan_str: {ant_name: [amp_if0, amp_if1, ...]}} (NaN where an IF has no data).
+        self.lag_bandpass: dict[str, dict[str, list[float]]] = lag_bandpass if lag_bandpass else {}
         # Automatic polarization diagnostics derived from the lag MS (process.compute_lag_snr):
         # per-antenna parallel/cross-hand amplitudes for the fringe-finder scans, and the
         # resulting polswap / polconvert findings. Empty until the lag analysis runs. See
@@ -699,7 +706,8 @@ class Experiment:
         self.no_lag: bool = no_lag
         # Temporary workaround for the broken local tConvert (set via --tConvert-in-eee /
         # --no-tConvert-in-eee). When True the tconvert step runs on eee instead of locally
-        # (see process.tconvert). Runtime-only: decided from the CLI on each run, not persisted.
+        # (see process.tconvert). PolConvert is always run manually on eee (see
+        # process.polconvert). Runtime-only: decided from the CLI on each run, not persisted.
         self.tconvert_in_eee: bool = True
         self._timerange: list[dt.datetime] | None = None
         # Policy is set lazily (None means "interactive defaults"). The full Policy
@@ -945,6 +953,7 @@ class Experiment:
                 'no_lag': self.no_lag,
                 '_timerange': [t.isoformat() for t in self._timerange] if self._timerange else None,
                 'lag_snr': self.lag_snr,
+                'lag_bandpass': self.lag_bandpass,
                 'pol_diagnostics': self.pol_diagnostics}
 
     @classmethod
@@ -967,6 +976,7 @@ class Experiment:
         if data.get('_timerange'):
             exp._timerange = [dt.datetime.fromisoformat(t) for t in data['_timerange']]
         exp.lag_snr = data.get('lag_snr', {})
+        exp.lag_bandpass = data.get('lag_bandpass', {})
         # Policy is attached lazily because the Policy dataclass lives in a sibling module
         # imported only when the policy feature is actually used.
         if data.get('policy') is not None:

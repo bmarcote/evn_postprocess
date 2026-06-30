@@ -61,6 +61,26 @@ _EEE_TCONVERT_TEMP = Path("/data0/temp")
 _EEE_RSYNC_TIMEOUT_S = int(os.environ.get("EVN_EEE_RSYNC_TIMEOUT_S", str(6 * 3600)))
 _EEE_TCONVERT_TIMEOUT_S = int(os.environ.get("EVN_EEE_TCONVERT_TIMEOUT_S", str(8 * 3600)))
 
+# --- PolConvert configuration ----------------------------------------------------------
+# PolConvert is run locally (see :func:`polconvert`). It occasionally crashes with a
+# segmentation fault (a known upstream bug under revision); because it runs in a subprocess,
+# a crash returns a negative exit code instead of killing post-processing, so the same
+# attempt is simply retried up to this many extra times before moving on.
+_POLCONVERT_SEGFAULT_RETRIES: int = 2
+# A converted solution is accepted when, in every IF, the parallel-to-cross fringe-peak
+# amplitude ratio (RR+LL)/(RL+LR) on the reference baseline exceeds this value. A failed/linear
+# solution leaves the four products comparable (ratio ~1); a real conversion lifts it well above.
+_POLCONVERT_MIN_RATIO: float = 3.0
+# The reference antenna is chosen as the flattest-bandpass antenna among the *well-detected*
+# ones: only antennas whose lag SNR reaches this fraction of the best candidate's SNR compete
+# on flatness. Without the gate, flatness (a coefficient of variation) is dominated by noise on
+# weak antennas, which would pick a low-SNR station over a strong, equally-flat one.
+_POLCONVERT_REFANT_SNR_FRACTION: float = 0.5
+# Default bandpass-solution parameters written into the PolConvert input file.
+_POLCONVERT_CHANAVG: int = 16
+_POLCONVERT_TIMEAVG_S: int = 20
+_POLCONVERT_SOLVE_WEIGHT: float = 0.1
+
 
 def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
     """Updates the attribute of the CorrelatorPasses from exp to define
@@ -491,8 +511,13 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
     essential: taking |DATA| first, or a per-row maximum, makes pure noise read
     as a detection (every antenna SNR > 7).
 
+    For the fringe-finder scans it additionally records, per antenna, the parallel-hand
+    fringe-peak amplitude in each IF (``exp.lag_bandpass``), which drives the PolConvert
+    reference-antenna choice (flattest bandpass; see :func:`_rank_polconvert_refants`).
+
     Args:
-        exp: Experiment object. Results stored in ``exp.lag_snr`` and ``exp.pol_diagnostics``.
+        exp: Experiment object. Results stored in ``exp.lag_snr``, ``exp.lag_bandpass``
+            and ``exp.pol_diagnostics``.
 
     Returns:
         True if computation succeeded (including when lag MS is absent).
@@ -513,6 +538,8 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
             pol_labels = [mstools.misc.Stokes(ct).name for ct in t.getcol('CORR_TYPE')[0]]
         with mstools.misc.table(ms.getkeyword('FIELD')) as t:
             field_names = list(t.getcol('NAME'))
+        with mstools.misc.table(ms.getkeyword('SPECTRAL_WINDOW')) as t:
+            n_spw = t.nrows()
         # FIELD_IDs that correspond to fringe-finder sources (used for the pol diagnostics).
         ff_field_ids = {fid for fid, name in enumerate(field_names) if name in ff_names}
 
@@ -530,12 +557,20 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
         acc_sum: dict[tuple[int, int, int], np.ndarray] = {}
         acc_cnt: dict[tuple[int, int, int], int] = {}
         acc_ff: dict[tuple[int, int, int], bool] = {}
+        # Per-IF (per spectral window) accumulators, kept ONLY for fringe-finder baselines so
+        # the memory stays small. They feed the per-antenna bandpass (amplitude vs IF) used to
+        # pick the PolConvert reference antenna. Keyed by (scan, a1, a2, ddid) so each IF stays
+        # separate; summing these back over ddid would reproduce acc_sum exactly.
+        acc_if_sum: dict[tuple[int, int, int, int], np.ndarray] = {}
+        acc_if_cnt: dict[tuple[int, int, int, int], int] = {}
 
         for start, nrow in mstools.misc.chunkert(0, len(ms), 1000):
             ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
             ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
             scans = ms.getcol('SCAN_NUMBER', startrow=start, nrow=nrow)
             fields = ms.getcol('FIELD_ID', startrow=start, nrow=nrow)
+            # DATA_DESC_ID indexes the spectral window (IF); on EVN lag MSs ddid == spw index.
+            ddids = ms.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
 
             cross = ants1 != ants2
             if not np.any(cross):
@@ -546,16 +581,25 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
             lag = np.abs(np.fft.fft(data[cross], axis=1)).astype(np.float32)  # (n_cross, nchan, npol)
 
             cross_scans, cross_a1, cross_a2 = scans[cross], ants1[cross], ants2[cross]
-            cross_fields = fields[cross]
+            cross_fields, cross_ddids = fields[cross], ddids[cross]
             for i in range(len(cross_scans)):
                 key = (int(cross_scans[i]), int(cross_a1[i]), int(cross_a2[i]))
+                is_ff_row = int(cross_fields[i]) in ff_field_ids
                 if key not in acc_sum:
                     acc_sum[key] = lag[i].copy()
                     acc_cnt[key] = 1
-                    acc_ff[key] = int(cross_fields[i]) in ff_field_ids
+                    acc_ff[key] = is_ff_row
                 else:
                     acc_sum[key] += lag[i]
                     acc_cnt[key] += 1
+                if is_ff_row:
+                    ifkey = (key[0], key[1], key[2], int(cross_ddids[i]))
+                    if ifkey not in acc_if_sum:
+                        acc_if_sum[ifkey] = lag[i].copy()
+                        acc_if_cnt[ifkey] = 1
+                    else:
+                        acc_if_sum[ifkey] += lag[i]
+                        acc_if_cnt[ifkey] += 1
 
     # Reduce each baseline's mean |lag| spectrum to a per-pol SNR (fringe peak / robust noise)
     # and a per-pol fringe-peak amplitude, then keep, for each (scan, antenna), the strongest
@@ -598,7 +642,32 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
             lag_snr[scan_str] = {}
         lag_snr[scan_str][ant_names[aidx]] = {p: round(float(snr_arr[i]), 1) for i, p in enumerate(pol_labels)}
 
+    # Per-antenna bandpass on the fringe-finder scans: the parallel-hand (RR/LL) fringe-peak
+    # amplitude in each IF, taken on the antenna's strongest baseline for that IF. The PolConvert
+    # reference antenna is later chosen as the non-linear antenna whose amplitudes vary least
+    # across IFs (flattest bandpass); see _rank_polconvert_refants.
+    parallel_idx = [i for i, l in enumerate(pol_labels) if l in _PARALLEL_POLS]
+    bp_amp: dict[tuple[int, int], np.ndarray] = {}  # (scan, antenna) -> per-IF amplitude
+    for (scan, a1i, a2i, ddid), spec_sum in acc_if_sum.items():
+        spec = spec_sum / acc_if_cnt[(scan, a1i, a2i, ddid)]   # mean |lag| spectrum (nchan, npol)
+        peak = np.max(spec, axis=0)                            # (npol,) fringe-peak per pol
+        par = float(np.mean(peak[parallel_idx])) if parallel_idx else float(np.max(peak))
+        for aidx in (a1i, a2i):
+            key = (scan, aidx)
+            if key not in bp_amp:
+                bp_amp[key] = np.full(n_spw, np.nan, dtype=float)
+            cur = bp_amp[key][ddid]
+            if np.isnan(cur) or par > cur:        # keep the strongest baseline per IF
+                bp_amp[key][ddid] = par
+
+    lag_bandpass: dict[str, dict[str, list]] = {}
+    for (scan, aidx), amps in bp_amp.items():
+        # None (not NaN) for IFs without data, so the result stays valid JSON.
+        lag_bandpass.setdefault(str(scan), {})[ant_names[aidx]] = \
+            [round(float(x), 5) if np.isfinite(x) else None for x in amps]
+
     exp.lag_snr = lag_snr
+    exp.lag_bandpass = lag_bandpass
     exp.pol_diagnostics = _derive_pol_diagnostics(ff_amp_sum, ff_amp_cnt, ff_best_snr,
                                                   ant_names, pol_labels)
     logger.info(f"Lag SNR computed for {len(lag_snr)} scans from {lag_ms}")
@@ -1076,7 +1145,7 @@ def _tconvert_pass_in_eee(exp: experiment.Experiment, remote: str,
                     timeout=_EEE_RSYNC_TIMEOUT_S)
 
         # Run from inside the temp dir so the relative MS / FITS-IDI names in the .lis resolve.
-        cmd = f"cd {remote_dir} && {_TCONVERT_BIN} -v {a_pass.lisfile.name} -o {chunk_arg}"
+        cmd = f"cd {remote_dir} && /eee/bin/tConvert -v {a_pass.lisfile.name} -o {chunk_arg}"
         output = utils.ssh(remote, cmd, stderr=subprocess.STDOUT, timeout=_EEE_TCONVERT_TIMEOUT_S)
         log_fh, log_path = utils.open_unique_log(exp.dirs.logs / "tconvert.log")
         try:
@@ -1177,81 +1246,6 @@ def _scan_to_aips_timerange(scan: experiment.Scan, obsdate, trim_start_min: int 
     return _to_aips(start) + _to_aips(end)
 
 
-def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
-    """Check FRINGE.PEAKS .dat files to verify PolConvert solution quality.
-
-    Each .dat file corresponds to one subband and contains lines like
-    ``POL: <amplitude> ; <snr>`` for RR, LL, RL, LR.
-
-    Two checks are applied:
-      1. Per-subband amplitude ratio ``(RR + LL) / (RL + LR) > 5``.
-      2. Across subbands, the ``(RR + LL)`` and ``(RL + LR)`` SNR values must
-         each stay within 40 % of their respective median.
-
-    Args:
-        logdir: Path to the polconvert log directory.
-
-    Returns:
-        True if the solution quality is acceptable.
-    """
-    peaks_dir = Path(logdir) / 'FRINGE.PEAKS'
-    if not peaks_dir.exists():
-        logger.warning(f"FRINGE.PEAKS directory not found in {logdir}")
-        return False
-
-    dat_files = sorted(peaks_dir.glob('*.dat'))
-    if not dat_files:
-        logger.warning("No .dat files found in FRINGE.PEAKS directory")
-        return False
-
-    # Parse amplitude and SNR for every polarization in each subband
-    amps: list[dict[str, float]] = []
-    snrs: list[dict[str, float]] = []
-    for dat_file in dat_files:
-        content = dat_file.read_text()
-        a, s = {}, {}
-        for pol in ('RR', 'LL', 'RL', 'LR'):
-            match = re.search(rf'{pol}:\s*([\d.eE+-]+)\s*;\s*([\d.eE+-]+)', content)
-            if not match:
-                break
-            a[pol], s[pol] = float(match.group(1)), float(match.group(2))
-        if len(a) != 4:
-            logger.debug(f"Could not extract all polarization values from {dat_file.name}")
-            continue
-        amps.append(a)
-        snrs.append(s)
-
-    if not amps:
-        logger.warning("No valid .dat files found in FRINGE.PEAKS")
-        return False
-
-    # Check 1: amplitude ratio (RR+LL)/(RL+LR) > 5 per subband
-    for i, a in enumerate(amps):
-        cross = a['RL'] + a['LR']
-        if cross <= 0:
-            continue
-        ratio = (a['RR'] + a['LL']) / cross
-        if ratio < 5:
-            logger.info(f"Subband {i}: (RR+LL)/(RL+LR)={ratio:.1f} — below 5x threshold")
-            return False
-
-    # Check 2: SNR consistency across subbands (each value within 40% of median)
-    snr_parallel = np.array([s['RR'] + s['LL'] for s in snrs])
-    snr_cross = np.array([s['RL'] + s['LR'] for s in snrs])
-    for label, values in (('RR+LL', snr_parallel), ('RL+LR', snr_cross)):
-        med = np.median(values)
-        if med <= 0:
-            continue
-        dev = np.abs(values - med) / med
-        if np.any(dev > 0.4):
-            worst = int(np.argmax(dev))
-            logger.info(f"SNR {label} subband {worst}: {values[worst]:.1f} deviates "
-                        f"{dev[worst]*100:.0f}% from median {med:.1f} (>40% threshold)")
-            return False
-
-    return True
-
-
 def _write_polconvert_template(exp: experiment.Experiment, ref_idi: str, lin_ants: list, refant: str,
                                exclude_ants: list, do_ifs: list, time_range: list, chan_avg: int,
                                time_avg: int, solve_weight: float, logdir: str,
@@ -1298,18 +1292,207 @@ def _write_polconvert_template(exp: experiment.Experiment, ref_idi: str, lin_ant
     return output_file
 
 
-def polconvert(exp: experiment.Experiment) -> bool:
-    """Run PolConvert automatically with iterative parameter tuning.
+def _scan_number(scan: experiment.Scan) -> Optional[int]:
+    """Integer scan number from a VEX scanno like ``'No0018'`` (-> 18), or None.
 
-    Finds fringe-finder scans and iteratively tries different scans combined with
-    different solve_weight / time_avg / time_range combinations until
-    FRINGE.PEAKS quality checks pass. Then applies the solution to all IDI files.
+    The lag-MS SNR/bandpass dictionaries are keyed by the MS scan number as a string, which
+    matches this integer (verified: lag MS scan 18 == VEX No0018), so this is how a VEX scan
+    is looked up in ``exp.lag_snr`` / ``exp.lag_bandpass``.
+    """
+    try:
+        return int(re.sub(r'\D', '', scan.scanno))
+    except (ValueError, TypeError):
+        return None
+
+
+def _scan_lag_score(exp: experiment.Experiment, scan: experiment.Scan) -> tuple[int, float]:
+    """Score a fringe-finder scan from the lag-MS SNR: ``(#antennas detected, summed SNR)``.
+
+    An antenna counts as detected when its best-polarization lag SNR on the scan reaches
+    ``_POL_MIN_SNR``. Scans absent from ``exp.lag_snr`` (e.g. never correlated, like the early
+    e-MERLIN-only block of EZ041A) score ``(0, 0.0)`` and rank last. This steers the selection
+    to a scan that truly has fringes on many antennas, rather than one merely *scheduled* on
+    many antennas (the old station-count heuristic, which picked a non-correlated scan).
+    """
+    snum = _scan_number(scan)
+    per_ant = exp.lag_snr.get(str(snum), {}) if snum is not None else {}
+    n_det, total = 0, 0.0
+    for snr_by_pol in per_ant.values():
+        best = max(snr_by_pol.values()) if snr_by_pol else 0.0
+        if best >= _POL_MIN_SNR:
+            n_det += 1
+            total += best
+    return n_det, round(total, 1)
+
+
+def _rank_fringefinder_scans(exp: experiment.Experiment) -> list[experiment.Scan]:
+    """Fringe-finder scans ranked best-first for PolConvert.
+
+    Primary key: number of antennas with a detected fringe on the scan (lag SNR);
+    secondary key: the summed SNR of those antennas. Falls back to the scheduled-station
+    ordering only when no lag SNR is available at all (e.g. ``--no-lag`` runs).
+    """
+    ff_scans = [s for s in exp.scans if s.source in exp.sources.fringefinder]
+    if not ff_scans:
+        return []
+    if not exp.lag_snr:
+        return _get_all_fringefinder_scans(exp)
+    return sorted(ff_scans, key=lambda s: _scan_lag_score(exp, s), reverse=True)
+
+
+def _refant_bandpass_scatter(exp: experiment.Experiment, ant: str, scan_key: str,
+                             ifs: list[int]) -> float:
+    """Coefficient of variation (std/mean) of an antenna's per-IF amplitude on a scan.
+
+    Lower means a flatter bandpass across the IFs PolConvert has to convert. Returns ``inf``
+    when the per-IF amplitudes are unavailable, so antennas with bandpass data are always
+    preferred over those without.
+    """
+    amps = exp.lag_bandpass.get(scan_key, {}).get(ant)
+    if not amps:
+        return float('inf')
+    vals = [amps[i] for i in ifs if i < len(amps) and amps[i] is not None]
+    if len(vals) < 2:
+        return float('inf')
+    arr = np.asarray(vals, dtype=float)
+    mean = float(np.mean(arr))
+    return float(np.std(arr) / mean) if mean > 0 else float('inf')
+
+
+def _rank_polconvert_refants(exp: experiment.Experiment, lin_ants: list[str],
+                             subbands: set[int], scan_key: str) -> list[str]:
+    """PolConvert reference-antenna candidates, best-first.
+
+    A candidate must be (1) observed, (2) NOT one of the linear antennas being converted
+    (otherwise the conversion would reference itself), and (3) cover every IF (subband) that
+    has to be converted. The best reference is then the flattest bandpass (smallest per-IF
+    amplitude scatter) *among the well-detected candidates* — those whose lag SNR reaches
+    ``_POLCONVERT_REFANT_SNR_FRACTION`` of the best candidate's SNR. Gating on SNR first is
+    essential: the flatness metric is noise-dominated for weak antennas, so without it a
+    low-SNR station can edge out a strong, equally-flat one (e.g. on EZ041A pure flatness picks
+    Jb at SNR 113 over Mc at SNR 419). Below-gate candidates are kept as lower-priority
+    fallbacks ordered by SNR; the experiment ``refant`` order is the final tie-breaker. Without
+    any lag data the result degrades gracefully to that ``refant`` order.
+    """
+    ifs = sorted(subbands)
+    snr_by_ant = exp.lag_snr.get(scan_key, {})
+
+    def _snr(ant: str) -> float:
+        d = snr_by_ant.get(ant, {})
+        return max(d.values()) if d else 0.0
+
+    candidates = [a.name for a in exp.antennas
+                  if a.observed and a.name not in lin_ants and subbands.issubset(set(a.subbands))]
+    if not candidates:
+        return []
+    priority = {name: i for i, name in enumerate(exp.refant or [])}
+    gate = max(_POL_MIN_SNR, _POLCONVERT_REFANT_SNR_FRACTION * max(_snr(a) for a in candidates))
+
+    def _key(ant: str):
+        sensitive = _snr(ant) >= gate
+        # Sensitive antennas first, ranked by flatness; the rest after, ranked by SNR.
+        return (0 if sensitive else 1,
+                _refant_bandpass_scatter(exp, ant, scan_key, ifs) if sensitive else 0.0,
+                -_snr(ant), priority.get(ant, len(priority)))
+
+    candidates.sort(key=_key)
+    return candidates
+
+
+def _polconvert_exclude_ants(exp: experiment.Experiment, lin_ants: list[str], refant: str,
+                             subbands: set[int]) -> list[str]:
+    """Antennas to exclude from the PolConvert solve: those not observed, plus observed ones
+    (other than the reference or a linear antenna) that did not record every IF to convert."""
+    exclude: list[str] = []
+    for ant in exp.antennas:
+        if not ant.observed:
+            exclude.append(ant.name)
+        elif ant.name not in lin_ants and ant.name != refant \
+                and not subbands.issubset(set(ant.subbands)):
+            exclude.append(ant.name)
+    return sorted(set(exclude))
+
+
+def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
+    """Whether the PolConvert FRINGE.PEAKS indicate a good conversion.
+
+    Each ``FRINGE.PEAKS_*.dat`` (one per IF) lists the normalized fringe-peak amplitude of RR,
+    LL, RL and LR on the reference baseline. A real conversion concentrates power in the
+    parallel hands, so we require ``(RR+LL)/(RL+LR) >= _POLCONVERT_MIN_RATIO`` in every IF; a
+    failed/linear solution leaves the four products comparable (ratio ~1).
+    """
+    peaks_dir = Path(logdir) / 'FRINGE.PEAKS'
+    dat_files = sorted(peaks_dir.glob('*.dat')) if peaks_dir.exists() else []
+    if not dat_files:
+        logger.warning(f"No FRINGE.PEAKS/*.dat files in {logdir}; cannot assess the solution.")
+        return False
+
+    ratios: list[float] = []
+    for dat_file in dat_files:
+        content = dat_file.read_text()
+        a = {pol: float(m.group(1)) for pol in ('RR', 'LL', 'RL', 'LR')
+             if (m := re.search(rf'{pol}:\s*([\d.eE+-]+)\s*;', content))}
+        if len(a) != 4:
+            continue
+        cross = a['RL'] + a['LR']
+        ratios.append((a['RR'] + a['LL']) / cross if cross > 0 else float('inf'))
+
+    if not ratios:
+        logger.warning("Could not parse any FRINGE.PEAKS amplitudes.")
+        return False
+
+    worst = min(ratios)
+    logger.info(f"PolConvert (RR+LL)/(RL+LR) per IF: min={worst:.1f}, "
+                f"median={float(np.median(ratios)):.1f} (need >= {_POLCONVERT_MIN_RATIO} in every IF).")
+    return worst >= _POLCONVERT_MIN_RATIO
+
+
+def _run_polconvert_cli(template_file: Path, mode: str) -> int:
+    """Run ``polconvert.py <template> <mode>`` locally, retrying transient segfaults.
+
+    PolConvert occasionally dies with SIGSEGV (a known upstream bug) for reasons unrelated to
+    the inputs. Because it runs in a subprocess a crash returns a negative exit code instead of
+    killing post-processing, so the identical command is simply retried up to
+    ``_POLCONVERT_SEGFAULT_RETRIES`` extra times. Returns the final exit code (0 on success).
+    """
+    attempts = _POLCONVERT_SEGFAULT_RETRIES + 1
+    rc = 1
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(['polconvert.py', str(template_file), mode],
+                                capture_output=True, text=True)
+        rc = result.returncode
+        if rc == 0:
+            return 0
+        if rc < 0:  # killed by a signal (e.g. -11 = SIGSEGV): transient, retry
+            logger.warning(f"polconvert.py {mode} crashed (signal {-rc}) "
+                           f"[attempt {attempt}/{attempts}]; retrying.")
+            continue
+        logger.warning(f"polconvert.py {mode} failed (rc={rc}): {result.stderr.strip()[-500:]}")
+        break
+    return rc
+
+
+def polconvert(exp: experiment.Experiment) -> bool:
+    """Run PolConvert locally, auto-selecting the scan and reference antenna.
+
+    Linear-polarization antennas (``exp.antennas.polconvert``) are converted to circular using:
+
+      * the fringe-finder scan with the most detected antennas and the highest lag SNR
+        (:func:`_rank_fringefinder_scans`), and
+      * a reference antenna that is circular (not one of the linear antennas), records every IF
+        to convert, and has the flattest bandpass across those IFs
+        (:func:`_rank_polconvert_refants`).
+
+    For each (scan, reference) candidate it runs ``polconvert.py --compute`` (retrying transient
+    segfaults), checks the FRINGE.PEAKS ``(RR+LL)/(RL+LR)`` ratio per IF, and on success applies
+    the solution to every FITS-IDI file with ``--apply``. A candidate that does not yield a good
+    solution falls through to the next reference antenna, then the next scan.
 
     Args:
         exp: Experiment object.
 
     Returns:
-        True if PolConvert succeeded or not needed, False if no good solution found.
+        True if a good conversion was produced (or PolConvert is not needed), else False.
     """
     if not exp.antennas.polconvert:
         logger.info("PolConvert is not required.")
@@ -1319,93 +1502,71 @@ def polconvert(exp: experiment.Experiment) -> bool:
         logger.info("PolConvert output files already exist. Skipping.")
         return True
 
-    # Get all fringe-finder scans sorted by quality (most observed antennas first)
-    ff_scans = _get_all_fringefinder_scans(exp)
-    if not ff_scans:
-        logger.error("No fringe-finder scans found for PolConvert.")
-        return False
-
-    logger.info(f"Found {len(ff_scans)} fringe-finder scan(s) to try")
-
-    # Common parameters
     lin_ants = [a for a in exp.antennas.polconvert]
-    refant = exp.refant[0] if exp.refant else None
-    if not refant:
-        logger.error("No reference antenna set for PolConvert.")
+    subbands = set().union(*(set(exp.antennas[p].subbands) for p in lin_ants))
+    if not subbands:
+        logger.error("Linear antennas have no recorded subbands; cannot run PolConvert.")
         return False
+    do_ifs = [i + 1 for i in sorted(subbands)]
 
-    subbands_to_polconvert = set().union(*(exp.antennas[p].subbands for p in lin_ants))
-    exclude_ants: list[str] = []
-    for ant in exp.antennas:
-        if not ant.observed:
-            exclude_ants.append(ant.name)
-        elif ant.name not in lin_ants and ant.name != refant:
-            if not subbands_to_polconvert.issubset(set(ant.subbands)):
-                exclude_ants.append(ant.name)
-
-    exclude_ants = sorted(set(exclude_ants))
-    do_ifs = [i+1 for i in sorted(list(subbands_to_polconvert))]
     idi_files = sorted(glob.glob(f"{exp.expname.lower()}_*_1.IDI*"))
     if not idi_files:
         logger.error("No FITS-IDI files found for PolConvert.")
         return False
 
+    ff_scans = _rank_fringefinder_scans(exp)
+    if not ff_scans:
+        logger.error("No fringe-finder scans found for PolConvert.")
+        return False
+
     logdir = 'polconvert_logs'
+    tried = 0
+    for scan in ff_scans:
+        scan_key = str(_scan_number(scan))
+        time_range = _scan_to_aips_timerange(scan, exp.obsdate)
+        ref_idi = find_idi_mod.find_idi_with_time(idi_files=idi_files, aipstime=time_range[:4],
+                                                  verbose=False)
+        if ref_idi is None:
+            logger.debug(f"No FITS-IDI covers scan {scan.scanno} ({time_range[:4]}); skipping.")
+            continue
 
-    # Iterative parameter search: scans, solve_weight, time_avg, and time trimming
-    solve_weights = [0.1, 0.01, 0.001]
-    time_avgs = [20, 30, 60]
-    trim_configs = [(1, 0), (2, 1), (3, 2)]
+        refants = _rank_polconvert_refants(exp, lin_ants, subbands, scan_key)
+        if not refants:
+            logger.warning(f"No circular reference antenna covers all IFs on scan {scan.scanno}.")
+            continue
 
-    # Loop over different fringe-finder scans
-    for scan_idx, scan in enumerate(ff_scans, start=1):
-        n_stations = len(scan.stations_observed) if scan.stations_observed else len(scan.stations_scheduled)
-        logger.info(f"Trying scan {scan_idx}/{len(ff_scans)}: scan {scan.scanno} on {scan.source} "
-                    f"({n_stations} stations, {scan.duration_s}s duration)")
+        n_det, snr_sum = _scan_lag_score(exp, scan)
+        logger.info(f"PolConvert: scan {scan.scanno} on {scan.source} "
+                    f"({n_det} antennas detected, SNR sum {snr_sum}); "
+                    f"reference-antenna order: {', '.join(refants)}.")
 
-        for trim_start, trim_end in trim_configs:
-            time_range = _scan_to_aips_timerange(scan, exp.obsdate, trim_start, trim_end)
+        for refant in refants:
+            exclude_ants = _polconvert_exclude_ants(exp, lin_ants, refant, subbands)
+            scatter = _refant_bandpass_scatter(exp, refant, scan_key, sorted(subbands))
+            logger.info(f"PolConvert attempt: linants={lin_ants}, refant={refant} "
+                        f"(bandpass scatter {scatter:.3f}), exclude={exclude_ants}, IFs={do_ifs}.")
+            template_file = _write_polconvert_template(
+                exp, ref_idi, lin_ants, refant, exclude_ants, do_ifs, time_range,
+                _POLCONVERT_CHANAVG, _POLCONVERT_TIMEAVG_S, _POLCONVERT_SOLVE_WEIGHT, logdir)
+            tried += 1
 
-            ref_idi = find_idi_mod.find_idi_with_time(
-                idi_files=sorted(idi_files), aipstime=time_range[:4], verbose=False)
-            if ref_idi is None:
-                logger.warning(f"No IDI file contains time with trim=({trim_start},{trim_end})min. Skipping.")
+            if _run_polconvert_cli(template_file, '--compute') != 0:
+                continue
+            if not _check_fringe_peaks(logdir):
+                logger.info(f"Solution with refant {refant} on scan {scan.scanno} is not good "
+                            "enough; trying the next reference antenna.")
                 continue
 
-            for solve_weight in solve_weights:
-                for time_avg in time_avgs:
-                    logger.info(f"PolConvert attempt: solve_weight={solve_weight}, time_avg={time_avg}, "
-                                f"trim=({trim_start},{trim_end})min")
-                    template_file = _write_polconvert_template(
-                        exp, ref_idi, lin_ants, refant, exclude_ants, do_ifs,
-                        time_range, 16, time_avg, solve_weight, logdir)
-                    result = subprocess.run(['polconvert.py', str(template_file), '--compute'],
-                                           capture_output=True, text=True)
-                    if result.returncode != 0:
-                        logger.warning(f"PolConvert compute failed (rc={result.returncode}): {result.stderr}")
-                        return False
+            logger.info(f"Good PolConvert solution: scan {scan.scanno}, refant {refant}. "
+                        "Applying it to all FITS-IDI files.")
+            if _run_polconvert_cli(template_file, '--apply') != 0:
+                logger.error("PolConvert --apply failed after a good --compute. Stopping.")
+                return False
+            exp.store()
+            return True
 
-                    if _check_fringe_peaks(logdir):
-                        logger.info(f"PolConvert solution quality check passed using scan {scan.scanno}! "
-                                    f"Parameters stored in {template_file}.")
-
-                        logger.info("Applying PolConvert solution to all IDI files...")
-                        result = subprocess.run(['polconvert.py', str(template_file), '--apply'],
-                                               capture_output=True, text=True)
-                        if result.returncode != 0:
-                            logger.error(f"PolConvert apply failed (rc={result.returncode}): {result.stderr}")
-                            return False
-
-                        exp.store()
-                        return True
-
-                    logger.info("Solution quality insufficient, trying next parameters...")
-
-        if scan_idx < len(ff_scans):
-            logger.info(f"No good solution found with scan {scan.scanno}, moving to next scan...")
-
-    logger.error(f"PolConvert could not reach a good solution with any of the {len(ff_scans)} fringe-finder scan(s) "
-                 f"and parameter combinations.")
+    logger.error(f"PolConvert could not reach a good solution after {tried} attempt(s) over "
+                 f"{len(ff_scans)} fringe-finder scan(s). Inspect {logdir} or run it manually.")
     return False
 
 
