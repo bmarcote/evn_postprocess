@@ -8,10 +8,12 @@ import socket
 import signal
 import subprocess
 import collections
+import mimetypes
 import http.server
 import threading
 from operator import methodcaller
 from functools import reduce, partial
+from urllib.parse import unquote
 from pathlib import Path
 from rich import print as rprint
 from typing import List, Optional, Generator
@@ -565,6 +567,15 @@ def convert_ps_to_png(plots_dir: Path, expname: str, resolution: int = 150) -> l
     created: list[Path] = []
     for ps_file in ps_files:
         stem = Path(ps_file).stem
+        # Skip conversion if up-to-date PNG(s) already exist (newer than the .ps file).
+        # This avoids needlessly re-rendering every plot each time the dashboard is opened
+        # (e.g. when re-running the msops step without having regenerated the plots).
+        ps_mtime = os.path.getmtime(ps_file)
+        existing = sorted(plots_dir.glob(f"{stem}.png")) or sorted(plots_dir.glob(f"{stem}-page*.png"))
+        if existing and all(p.stat().st_mtime >= ps_mtime for p in existing):
+            logger.debug(f"PNG(s) for {ps_file} already up to date; skipping conversion.")
+            created.extend(existing)
+            continue
         # Use %03d placeholder so Ghostscript writes one PNG per page (1-based)
         out_pattern = plots_dir / f"{stem}-page%03d.png"
         cmd = ["gs", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=png16m",
@@ -670,8 +681,13 @@ def _build_experiment_summary(exp) -> dict:
             p["bandwidth"] = f"{cp.freqsetup.bandwidth.to(u.MHz):0.04}"
             p["subbands"] = int(cp.freqsetup.subbands)
             p["channels"] = int(cp.freqsetup.channels)
+        if cp.flagged_weights is not None:
+            p["flag_threshold"] = cp.flagged_weights.threshold
+            p["flag_percentage"] = cp.flagged_weights.percentage
         passes.append(p)
     summary["correlator_passes"] = passes
+    # Automatic polarization diagnostics (polswap/polconvert findings from the lag MS).
+    summary["pol_diagnostics"] = exp.pol_diagnostics if hasattr(exp, 'pol_diagnostics') else {}
 
     # Scans overview
     all_antennas = sorted(exp.antennas.names)
@@ -754,6 +770,15 @@ def _build_dashboard_html() -> str:
   #plot-img { max-width: 100%; border-radius: 4px; border: 1px solid var(--border); display: block; margin: 0 auto; }
   #plot-placeholder { text-align: center; color: var(--dim); padding: 3rem; }
   .footer-note { text-align: center; color: var(--dim); font-size: 0.8rem; margin-top: 1rem; }
+  /* Tabs (right panel) */
+  .tabs { display: flex; gap: 0.4rem; margin-bottom: 0.8rem; border-bottom: 1px solid var(--border); }
+  .tab { background: transparent; color: var(--dim); border: none; border-bottom: 2px solid transparent;
+         padding: 0.5rem 1rem; font-size: 1.1rem; cursor: pointer; font-family: inherit; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab-view { height: calc(100% - 3rem); }
+  #pipeline-frame { width: 100%; height: 100%; min-height: 75vh; border: 1px solid var(--border);
+                    border-radius: 4px; background: #fff; }
 </style>
 </head>
 <body>
@@ -766,17 +791,30 @@ def _build_dashboard_html() -> str:
     <h2>Experiment Summary</h2>
     <div id="summary-content"><p style="color:var(--dim)">Loading...</p></div>
   </div>
-  <!-- Right panel: plots -->
+  <!-- Right panel: pipeline + standard-plots tabs -->
   <div class="panel" id="plots-panel">
-    <h2>Standard Plots</h2>
-    <div class="controls">
-      <div><label for="sel-type">Plot type:</label><br>
-        <select id="sel-type"><option value="">-- select --</option></select></div>
-      <div><label for="sel-scan">Scan:</label><br>
-        <select id="sel-scan"><option value="">all</option></select></div>
+    <div class="tabs">
+      <button class="tab" id="tab-pipeline" onclick="showTab('pipeline')">Pipeline</button>
+      <button class="tab active" id="tab-plots" onclick="showTab('plots')">Standard Plots</button>
     </div>
-    <div id="plot-area">
-      <p id="plot-placeholder">Select a plot type above to view.</p>
+    <!-- Pipeline feedback tab (only shown once the pipeline feedback page exists) -->
+    <div class="tab-view" id="view-pipeline" style="display:none">
+      <div class="controls" id="pipeline-controls"></div>
+      <p id="pipeline-placeholder" style="display:none; text-align:center; color:var(--dim); padding:3rem">
+        The pipeline feedback page is not available yet. It is generated after the EVN pipeline runs.</p>
+      <iframe id="pipeline-frame" title="Pipeline feedback"></iframe>
+    </div>
+    <!-- Standard plots tab -->
+    <div class="tab-view" id="view-plots">
+      <div class="controls">
+        <div><label for="sel-type">Plot type:</label><br>
+          <select id="sel-type"><option value="">-- select --</option></select></div>
+        <div><label for="sel-scan">Scan:</label><br>
+          <select id="sel-scan"><option value="">all</option></select></div>
+      </div>
+      <div id="plot-area">
+        <p id="plot-placeholder">Select a plot type above to view.</p>
+      </div>
     </div>
     <div class="footer-note">Press Ctrl+C in the terminal to stop the dashboard server.</div>
   </div>
@@ -824,6 +862,11 @@ function renderSummary(d) {
       h += row('LIS file', cp.lisfile);
       h += row('MS file', cp.msfile);
       h += row('FITS-IDI files', cp.fitsidi);
+      if (cp.flag_threshold !== undefined && cp.flag_threshold !== null) {
+        const pct = (cp.flag_percentage !== undefined && cp.flag_percentage !== null && cp.flag_percentage >= 0)
+          ? `${cp.flag_percentage.toFixed(2)}% flagged` : 'not yet applied';
+        h += row('Weight flag', `threshold ${cp.flag_threshold} (${pct})`);
+      }
       h += '</div>';
     });
     h += '</div>';
@@ -849,7 +892,18 @@ function renderSummary(d) {
   h += '<div class="section"><h2>Antennas</h2>';
   h += `<div>Observed (${(a.observed||[]).length}): ${(a.observed||[]).map(n=>`<span class="tag tag-green">${n}</span>`).join(' ')}</div>`;
   if ((a.not_observed||[]).length) h += `<div>Not observed: ${a.not_observed.map(n=>`<span class="tag tag-red">${n}</span>`).join(' ')}</div>`;
-  h += '<div>Ref. ant.: ' + (d.refant || []).map(n => `<span class="tag">${n}</span>`).join(' ') + '</div>';
+  // Reference antenna: editable via dropdown (first refant pre-selected). The remaining
+  // refants stay as fallback order; changing the primary reorders the list and persists it.
+  const refList = d.refant || [];
+  const refPrimary = refList.length ? refList[0] : '';
+  const refOptions = (a.observed || []);
+  h += '<div>Ref. ant.: ';
+  h += `<select onchange="changeRefant(this.value)" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85rem">`;
+  if (!refOptions.length && refPrimary) h += `<option value="${refPrimary}" selected>${refPrimary}</option>`;
+  refOptions.forEach(n => { h += `<option value="${n}"${n===refPrimary?' selected':''}>${n}</option>`; });
+  h += '</select>';
+  if (refList.length > 1) h += ' <span style="color:var(--dim);font-size:0.8rem">(fallback: ' + refList.slice(1).join(', ') + ')</span>';
+  h += '</div>';
   if ((a.polswap||[]).length) h += `<div>Polswap: ${a.polswap.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
   if ((a.polconvert||[]).length) h += `<div>PolConvert: ${a.polconvert.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
   if ((a.onebit||[]).length) h += `<div>1-bit: ${a.onebit.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
@@ -857,12 +911,20 @@ function renderSummary(d) {
 
   // Scan overview table
   if (d.scans && d.scans.length && d.all_antennas) {
+    const hasSnr = d.lag_snr && Object.keys(d.lag_snr).length > 0;
     h += '<div class="section"><h2>Scan Overview</h2>';
-    h += '<div style="font-size:0.8rem;margin-bottom:4px"><span class="tag tag-green">&#10003;</span> Observed (SNR &gt; 7) '
-       + '<span class="tag" style="background:#3a3a1a;color:#f0c040">&#10003;</span> Weak (3 &lt; SNR &lt; 7) '
-       + '<span class="tag tag-red">&#10003;</span> No signal (SNR &lt; 3) '
-       + '<span class="tag tag-red">&#10007;</span> Scheduled but missing '
-       + '<span style="color:var(--dim)">—</span> Not scheduled</div>';
+    if (hasSnr) {
+      h += '<div style="font-size:0.8rem;margin-bottom:4px"><span class="tag tag-green">&#10003;</span> Observed (SNR &gt; 7) '
+         + '<span class="tag" style="background:#3a3a1a;color:#f0c040">&#10003;</span> Weak (3 &lt; SNR &lt; 7) '
+         + '<span class="tag tag-red">&#10003;</span> No signal (SNR &lt; 3) '
+         + '<span class="tag tag-red">&#10007;</span> Scheduled but missing '
+         + '<span style="color:var(--dim)">—</span> Not scheduled</div>';
+    } else {
+      // No lag SNR available (e.g. --no-lag): only report data presence per antenna/scan.
+      h += '<div style="font-size:0.8rem;margin-bottom:4px"><span class="tag tag-green">&#10003;</span> Has data '
+         + '<span class="tag tag-red">&#10007;</span> Scheduled but missing '
+         + '<span style="color:var(--dim)">—</span> Not scheduled</div>';
+    }
     h += '<div style="font-size:0.8rem;margin-bottom:4px">Source type: '
        + '<span class="src-fringefinder">Fringe-finder</span> · '
        + '<span class="src-target">Target</span> · '
@@ -977,8 +1039,59 @@ async function changeSourceType(name, newType) {
   else { alert('Error: ' + (result.error || 'unknown')); }
 }
 
+async function changeRefant(newRef) {
+  const resp = await fetch(API + '/api/set_refant', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({refant: newRef})
+  });
+  const result = await resp.json();
+  if (result.ok) { await loadSummary(); }
+  else { alert('Error: ' + (result.error || 'unknown')); }
+}
+
+function showTab(name) {
+  const isPipe = name === 'pipeline';
+  document.getElementById('view-pipeline').style.display = isPipe ? 'block' : 'none';
+  document.getElementById('view-plots').style.display = isPipe ? 'none' : 'block';
+  document.getElementById('tab-pipeline').classList.toggle('active', isPipe);
+  document.getElementById('tab-plots').classList.toggle('active', !isPipe);
+}
+
+async function loadPipeline() {
+  const frame = document.getElementById('pipeline-frame');
+  const placeholder = document.getElementById('pipeline-placeholder');
+  try {
+    const resp = await fetch(API + '/api/pipeline');
+    if (!resp.ok) return;
+    const pages = await resp.json();
+    if (!pages || !pages.length) {
+      // No pipeline feedback yet (e.g. the pre-msops dashboard): the tab stays visible
+      // but shows a note instead of an empty frame; the standard plots stay selected.
+      frame.style.display = 'none';
+      placeholder.style.display = '';
+      return;
+    }
+    placeholder.style.display = 'none';
+    frame.style.display = '';
+    if (pages.length > 1) {
+      const controls = document.getElementById('pipeline-controls');
+      let sel = '<div><label for="sel-pipe">Pipeline pass:</label><br><select id="sel-pipe">';
+      pages.forEach(p => { sel += `<option value="${p}">${p}</option>`; });
+      sel += '</select></div>';
+      controls.innerHTML = sel;
+      document.getElementById('sel-pipe').addEventListener('change', e => {
+        frame.src = '/pipeline/' + encodeURIComponent(e.target.value);
+      });
+    }
+    frame.src = '/pipeline/' + encodeURIComponent(pages[0]);
+    // Pipeline feedback takes precedence: show it on top by default.
+    showTab('pipeline');
+  } catch (e) { console.error('loadPipeline error:', e); }
+}
+
 loadSummary();
 loadPlots();
+loadPipeline();
 </script>
 </body>
 </html>"""
@@ -998,6 +1111,11 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
     expname: str = ""
     dashboard_html: str = ""
     exp: object = None
+    # Pipeline feedback page(s): directory holding the {expname}*.html feedback page(s)
+    # and their linked products, and the list of page filenames. Empty/None until the
+    # pipeline feedback has been generated (see serve_dashboard's pipeline_dir argument).
+    pipeline_dir: Optional[Path] = None
+    pipeline_pages: List[str] = []
 
     def do_GET(self):
         """Route GET requests to the appropriate handler."""
@@ -1008,8 +1126,12 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._serve_json(self.experiment_summary)
             elif self.path == "/api/plots":
                 self._serve_plot_list()
+            elif self.path == "/api/pipeline":
+                self._serve_json(self.pipeline_pages)
             elif self.path.startswith("/plots/"):
                 self._serve_plot_file()
+            elif self.path.startswith("/pipeline/"):
+                self._serve_pipeline_file()
             else:
                 self.send_error(404)
         except Exception as exc:
@@ -1025,6 +1147,8 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         """Route POST requests. Only /api/set_source_type is supported."""
         if self.path == "/api/set_source_type":
             self._handle_set_source_type()
+        elif self.path == "/api/set_refant":
+            self._handle_set_refant()
         else:
             self.send_error(404)
 
@@ -1068,6 +1192,34 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         logger.info(f"Source '{src_name}' type changed to '{new_type_name}' and stored.")
         self._serve_json({"ok": True})
 
+    def _handle_set_refant(self):
+        """Change the primary reference antenna and persist via exp.store().
+
+        Expects JSON body: {"refant": "AntName"}. The chosen antenna becomes the
+        first element of exp.refant (the primary used everywhere); any other
+        previously-listed refants are kept after it as fallback order.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            new_ref = body["refant"]
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            self._serve_json({"ok": False, "error": str(exc)})
+            return
+
+        exp = self.__class__.exp
+        if new_ref not in exp.antennas.names:
+            self._serve_json({"ok": False, "error": f"Antenna '{new_ref}' not in this experiment"})
+            return
+
+        # Put the chosen antenna first, keeping the rest of the previous list as fallback.
+        rest = [r for r in exp.refant if r != new_ref]
+        exp.refant = [new_ref] + rest
+        exp.store()
+        self.__class__.experiment_summary = _build_experiment_summary(exp)
+        logger.info(f"Reference antenna set to '{new_ref}' (refant order: {', '.join(exp.refant)}) and stored.")
+        self._serve_json({"ok": True})
+
     def _serve_html(self):
         """Serve the dashboard HTML page."""
         content = self.dashboard_html.encode("utf-8")
@@ -1107,6 +1259,38 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _serve_pipeline_file(self):
+        """Serve a pipeline feedback file (HTML page or a linked product) from pipeline_dir.
+
+        Handles the feedback page itself plus every product it links to (PDF, PNG, FITS,
+        TXT, DTSUM, SCAN, ...). The content type is guessed from the suffix, defaulting to
+        plain text for the textual products and octet-stream (download) otherwise.
+        """
+        if self.pipeline_dir is None:
+            self.send_error(404)
+            return
+        rel = unquote(self.path.split("/pipeline/", 1)[-1])
+        filename = Path(rel).name  # collapse any path components to prevent traversal
+        if not filename:
+            self.send_error(404)
+            return
+        filepath = self.pipeline_dir / filename
+        if not filepath.exists() or not filepath.is_file():
+            self.send_error(404)
+            return
+        ctype, _ = mimetypes.guess_type(str(filepath))
+        if ctype is None:
+            # Products without a registered MIME type: serve the textual ones inline,
+            # everything else (e.g. .FITS) as a download.
+            ctype = ("text/plain" if filepath.suffix.lower() in (".txt", ".ampcal", ".dtsum", ".scan")
+                     else "application/octet-stream")
+        data = filepath.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def log_message(self, format, *args):
         """Suppress routine access logs but let errors through via loguru."""
         pass
@@ -1116,7 +1300,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         logger.error(f"Dashboard HTTP error: {format % args}")
 
 
-def serve_dashboard(exp, plots_dir: Path) -> None:
+def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -> None:
     """Start an HTTP dashboard server showing experiment summary and standard plots.
 
     Converts any .ps files to PNG (if not already done), then serves a web dashboard
@@ -1129,12 +1313,22 @@ def serve_dashboard(exp, plots_dir: Path) -> None:
     Args:
         exp: experiment.Experiment object with all metadata populated.
         plots_dir: Path to the directory where PNG plot files are stored (Dirs.plots).
+        pipeline_dir: Optional path to the directory holding the pipeline feedback
+            page(s) (``{expname}*.html``) and their linked products (normally
+            ``Dirs.pipe_out``). When given and at least one feedback page is found, the
+            dashboard shows a "Pipeline" tab (selected by default, on top of the standard
+            plots). When None or no page exists, only the standard plots are shown.
     """
     # Ensure PNGs exist
     existing_pngs = list(plots_dir.glob(f"{exp.expname.lower()}*.png"))
     if not existing_pngs:
         logger.info("Converting PostScript plots to PNG for the dashboard...")
         convert_ps_to_png(plots_dir, exp.expname.lower())
+
+    # Discover pipeline feedback page(s), if any.
+    pipeline_pages: List[str] = []
+    if pipeline_dir is not None and pipeline_dir.exists():
+        pipeline_pages = sorted(p.name for p in pipeline_dir.glob(f"{exp.expname.lower()}*.html"))
 
     port = _find_available_port()
 
@@ -1144,6 +1338,8 @@ def serve_dashboard(exp, plots_dir: Path) -> None:
     _DashboardHandler.plots_dir = plots_dir
     _DashboardHandler.expname = exp.expname.lower()
     _DashboardHandler.dashboard_html = _build_dashboard_html()
+    _DashboardHandler.pipeline_dir = pipeline_dir if pipeline_pages else None
+    _DashboardHandler.pipeline_pages = pipeline_pages
 
     server = http.server.HTTPServer(("0.0.0.0", port), _DashboardHandler)
     url = f"http://localhost:{port}"
@@ -1151,7 +1347,7 @@ def serve_dashboard(exp, plots_dir: Path) -> None:
     rprint(f"[green]  EVN Dashboard for {exp.expname} running at:[/green]")
     rprint(f"[bold green]  {url}[/bold green]")
     rprint("[bold green]Create a tunnel to open it in your browser with "
-           f"'ssh -L {port}:localhost:{port} <user>@<eee2>'[/bold green]")
+           f"'ssh -L {port}:localhost:{port} {exp.supsci.lower()}@eee2'[/bold green]")
     rprint("[green]  Press Ctrl+C to stop the server.\n[/green]")
     rprint(f"[green]{'=' * 60}[/green]")
 

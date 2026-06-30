@@ -450,6 +450,12 @@ def build_summary_text(exp) -> str:
             lines.append(f"  Frequency: {cp.freqsetup.frequency.to(u.GHz):0.04}")
             lines.append(f"  Bandwidth: {cp.freqsetup.bandwidth.to(u.MHz):0.04} "
                          f"({int(cp.freqsetup.subbands)} subbands × {int(cp.freqsetup.channels)} ch)")
+        fw = cp.flagged_weights
+        if fw is not None:
+            if fw.percentage is not None and fw.percentage >= 0:
+                lines.append(f"  Weight flag: threshold {fw.threshold}, {fw.percentage:.2f}% flagged")
+            else:
+                lines.append(f"  Weight flag: threshold {fw.threshold} (not yet applied)")
 
     return "\n".join(lines)
 

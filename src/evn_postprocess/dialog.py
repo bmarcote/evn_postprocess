@@ -112,12 +112,7 @@ class Terminal(Dialog):
         Returns:
             bool: True if the dialog and recording of the parameters went successfully.
         """
-        # Check if all antennas have >95% of data in first or last weight interval (<0.001 or >0.9)
-        low_weight_antennas = []
-        for ant in exp.antennas:
-            if (total_data := sum(ant.weights)) > 0:
-                if ((ant.weights[0] + ant.weights[6]) / total_data) < 0.95 or (ant.weights[6] == 0):
-                    low_weight_antennas.append(ant.name)
+        low_weight_antennas = exp.antennas.low_weights
 
         ant_list = ', '.join(exp.antennas.names)
         _console.print(Panel("[bold]Review the standard plots and answer the following questions.[/bold]\n"
