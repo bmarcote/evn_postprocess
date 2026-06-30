@@ -88,6 +88,53 @@ class TestRunAntabEditorReturnsTrueOnSuccess:
             assert pipeline.run_antab_editor(exp) is True
 
 
+class TestRunAntabEditoreEVNAssociatesOtherExperiments:
+    """The antab step of an e-EVN run must invoke antab_editor.py once from the main
+    experiment, passing the other experiments of the session via ``-a`` together with
+    the path to their FITS-IDI files, and only once those FITS-IDI files exist.
+    """
+
+    def _make_exp(self, tmp_path: Path, others: list[str]):
+        # Mirror the real layout: <base>/EZ041A/antenna_files with siblings at <base>/<EXP>,
+        # so ../../<EXP>/ (relative to antenna_files) points at the sibling experiment dir.
+        pipe_temp = tmp_path / "EZ041A" / "antenna_files"
+        pipe_temp.mkdir(parents=True)
+        (pipe_temp / "ez041a.lis").write_text("")  # non-line branch
+
+        exp = Mock(spec=experiment.Experiment)
+        exp.expname = "EZ041A"
+        exp.eEVNname = "EZ041A"  # main experiment of the e-EVN run
+        exp.eEVN_experiments = Mock(return_value=["EZ041A", *others])
+        exp.dirs = Mock()
+        exp.dirs.pipe_temp = pipe_temp
+        exp.antennas = []
+        return exp
+
+    def test_builds_associated_command_when_idi_present(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        exp = self._make_exp(tmp_path, ["ER057C"])
+        # FITS-IDI for the sibling must exist (../../ER057C/ relative to antenna_files).
+        sibling = tmp_path / "ER057C"
+        sibling.mkdir()
+        (sibling / "er057c_1_1.IDI1").write_text("")
+
+        with patch("evn_postprocess.pipeline.utils.shell_command") as mock_shell:
+            mock_shell.return_value = ""
+            assert pipeline.run_antab_editor(exp) is True
+
+        args = mock_shell.call_args[0][1]
+        assert args == ["-e", "ez041a", "-a", "ER057C", "-p", "1", "-f", "..", "../../ER057C/"]
+
+    def test_returns_false_when_sibling_idi_missing(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        exp = self._make_exp(tmp_path, ["ER057C"])
+        # No FITS-IDI created for the sibling.
+
+        with patch("evn_postprocess.pipeline.utils.shell_command") as mock_shell:
+            assert pipeline.run_antab_editor(exp) is False
+            mock_shell.assert_not_called()
+
+
 class TestParseMasterprojectsReExportedFromIO:
     """`io.parse_masterprojects` must be the same callable as
     `experiment.parse_masterprojects` so legacy code paths continue to work

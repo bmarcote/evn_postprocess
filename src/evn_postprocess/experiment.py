@@ -856,6 +856,37 @@ class Experiment:
             raise RuntimeError(f"Error processing VEX data: {e}")
 
 
+    def eEVN_experiments(self) -> list[str]:
+        """Returns the experiment codes (upper case) that were observed together in the
+        same e-EVN session as this one, including this experiment itself.
+
+        For a regular (non e-EVN) experiment this is simply ``[self.expname.upper()]``.
+        For an e-EVN run the list is read from the ``exper_description`` field of the VEX
+        file, which has the form ``e-EVN: EXP1, EXP2, ...``. If it cannot be parsed it
+        falls back to just this experiment.
+        """
+        if self.eEVNname is None:
+            return [self.expname.upper()]
+
+        try:
+            vex_data = vex.Vex(self.vixfile)
+            descriptions = [block['exper_description'] for block in vex_data['EXPER'].values()
+                            if 'exper_description' in block]
+        except Exception as e:
+            logger.warning(f"Could not read exper_description from {self.vixfile}: {e}")
+            descriptions = []
+
+        for descr in descriptions:
+            if 'e-EVN' in descr:
+                # Format: "e-EVN: EXP1, EXP2, ..."
+                exps = [e.strip().upper() for e in descr.split(':', 1)[1].split(',') if e.strip()]
+                if exps:
+                    return exps
+
+        logger.warning(f"Could not determine the e-EVN experiments for {self.expname} from {self.vixfile}.")
+        return [self.expname.upper()]
+
+
     # NOTE: A previous Experiment.get_setup_from_ms() implementation was removed because
     # (a) it was dead code: it called a non-existent Antennas.add() method and would have
     # raised AttributeError at runtime, and (b) the canonical metadata loader is
