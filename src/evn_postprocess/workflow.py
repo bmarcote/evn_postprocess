@@ -182,12 +182,18 @@ _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
                         "and 1-bit scaling."),
                    Task('tconvert', 'tconvert', "Creates the FITS-IDI files from the MS by running "
                         "tConvert on every correlator pass."),
-                   Task('polconvert', 'polconvert', 'Runs polConvert on all available MS files'),
+                   Task('polconvert', 'polconvert', "Runs PolConvert on the FITS-IDI files for the "
+                        "antennas that observed with linear polarization (only if any of them need it)."),
+                   Task('post_polconvert', 'post_polconvert', "Post-processes PolConvert: renames the "
+                        "new *.PCONVERT files to the standard FITS-IDI names (backing up the originals) "
+                        "and re-runs the standard plots on the converted data."),
                    Task('standardplots2', 'msops_post', "Re-runs the standard plots after all msops "
                         "have been performed"),
                    Task('antab', 'antfiles', "Retrieves the .antabfs and .log files from vlbeer. Creates "
                         "the .antab (requires graphical interaction via antab_editor), and the .uvflg file."),
-                   Task('pipeline', 'run_pipeline', "Prepares the input file for the EVN Pypeline and runs it."),
+                   Task('pipeinputs', 'create_pipeline_inputs', "Prepares a draft input file for the EVN "
+                        "Pipeline and gathers the required antab/uvflg files into pipeline/in."),
+                   Task('pipeline', 'run_pipeline', "Runs the EVN Pipeline for all correlated passes."),
                    Task('postpipe', 'pipeline_diagnostics', 'Runs diagnostics on the pipeline outputs.'),
                    Task('prearchive', 'pre_archive', "Prepares the experiment for archiving. Attaches the Tsys "
                         "information to the FITS-IDI files."),
@@ -587,18 +593,19 @@ def _apply_auto_msops(exp: experiment.Experiment) -> None:
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
-    """Runs PolConvert (auto-selecting scan and reference antenna) and post-processes it.
+    """Runs PolConvert (auto-selecting scan and reference antenna) on the FITS-IDI files.
 
     Calls process.polconvert(), which converts the linear-polarization antennas locally,
     iterating over the best fringe-finder scans and reference antennas until the solution
-    quality passes. Then converts/plots the output via post_polconvert/post_post_polconvert.
+    quality passes. The post-processing (renaming the *.PCONVERT files and re-plotting the
+    converted data) is handled by the separate 'post_polconvert' step.
 
     Args:
         exp (experiment.Experiment): Experiment object.
 
     Returns:
-        bool: True if the converted files are present and post-processed; False if no good
-        solution could be reached (inspect polconvert_logs or run it manually).
+        bool: True if PolConvert produced the converted files (or no antenna needed it);
+        False if no good solution could be reached (inspect polconvert_logs or run it manually).
     """
     if not exp.antennas.polconvert:
         logger.info("No antennas require PolConvert. Skipping.")
@@ -609,6 +616,28 @@ def polconvert(exp: experiment.Experiment) -> bool:
                        "polconvert_logs, adjust polconvert_inputs.toml, and re-run this step.")
         return False
 
+    return True
+
+
+def post_polconvert(exp: experiment.Experiment) -> bool:
+    """Post-processes the PolConvert output.
+
+    Split out from the 'polconvert' step so it can be run (and re-run) on its own once
+    PolConvert has produced the *.PCONVERT FITS-IDI files. It converts/plots the output
+    (process.post_polconvert) and then backs up the original FITS-IDI files and renames the
+    *.PCONVERT files to the standard names (process.post_post_polconvert). It is a no-op when
+    no antenna required PolConvert.
+
+    Args:
+        exp (experiment.Experiment): Experiment object.
+
+    Returns:
+        bool: True if the post-processing completed (or was not needed), False on error.
+    """
+    if not exp.antennas.polconvert:
+        logger.info("No antennas require PolConvert. Skipping post-PolConvert.")
+        return True
+
     if not process.post_polconvert(exp):
         return False
 
@@ -616,13 +645,13 @@ def polconvert(exp: experiment.Experiment) -> bool:
 
 
 def msops_post(exp: experiment.Experiment) -> bool:
-    """Applies MS operations including weight flagging, polswap, and 1-bit scaling.
+    """Re-runs the standard plots after the MS operations (polswap, flagging, 1-bit) have run.
 
     Args:
         exp (experiment.Experiment): Experiment object.
 
     Returns:
-        bool: True if all MS operations completed successfully.
+        bool: True if the standard plots were re-created successfully.
     """
     return create_standardplots(exp, do_weights=False)
 
@@ -679,13 +708,33 @@ def antfiles(exp: experiment.Experiment) -> bool:
     return True
 
 
-def run_pipeline(exp: experiment.Experiment) -> bool:
-    """Prepares input files for EVN Pipeline.
+def create_pipeline_inputs(exp: experiment.Experiment) -> bool:
+    """Prepares the EVN Pipeline input file(s) and gathers the required antab/uvflg files.
+
+    Split out from 'run_pipeline' into its own step so the draft input file can be reviewed
+    (and edited) before the pipeline is actually run.
 
     Args:
-        expobj_file: Path to experiment JSON file
+        exp (experiment.Experiment): Experiment object.
+
+    Returns:
+        bool: True if the input file(s) were created successfully.
     """
-    return pipeline.create_input_file(exp) & pipeline.run_pipeline(exp)
+    return pipeline.create_input_file(exp)
+
+
+def run_pipeline(exp: experiment.Experiment) -> bool:
+    """Runs the EVN Pipeline.
+
+    The input file(s) are prepared by the separate 'pipeinputs' step.
+
+    Args:
+        exp (experiment.Experiment): Experiment object.
+
+    Returns:
+        bool: True if the pipeline ran successfully.
+    """
+    return pipeline.run_pipeline(exp)
 
 
 def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
@@ -944,10 +993,13 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
       - lisfiles:       (none) -> *.lis
       - j2ms2:          *.lis  -> *.ms
       - standardplots:  *.ms   -> *.ps
-      - tconvert:       *.ms   -> *IDI*
-      - polconvert:     *IDI*  -> *IDI*.PCONVERT  (only if polconvert antennas exist)
-      - antab:          (none) -> pipeline/in/*.antab
-      - pipeline:       pipeline/in/* + *IDI* -> pipeline/out/*
+      - tconvert:        *.ms   -> *IDI*
+      - polconvert:      *IDI*  -> *IDI*.PCONVERT  (only if polconvert antennas exist,
+                         and only until post_polconvert renames them away)
+      - post_polconvert: *IDI*.PCONVERT -> idi_ori/ backup  (only if polconvert antennas exist)
+      - antab:           (none) -> pipeline/in/*.antab
+      - pipeinputs:      pipeline/in/*.antab -> pipeline/in/*.inp.txt
+      - pipeline:        pipeline/in/* + *IDI* -> pipeline/out/*
     """
     step_names = [s.name for s in all_steps]
 
@@ -1035,8 +1087,14 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
             _reset_from('tconvert', "FITS-IDI file(s) older than MS file(s)")
 
     # --- polconvert: inputs=*IDI*, outputs=*IDI*.PCONVERT (only if needed) ---
+    # Once post_polconvert has run it renames the *.PCONVERT files to the plain IDI names
+    # (backing the originals up into idi_ori/), so the *.PCONVERT files no longer exist. In
+    # that case the idi_ori/ backup checked under post_polconvert is the evidence that
+    # PolConvert ran, so we only check for *.PCONVERT here while post_polconvert is pending.
+    post_pc_done = ('post_polconvert' in step_names
+                    and all_steps[step_names.index('post_polconvert')].done)
     if 'polconvert' in step_names and all_steps[step_names.index('polconvert')].done:
-        if exp.antennas.polconvert:
+        if exp.antennas.polconvert and not post_pc_done:
             pconv_files = list(Path('.').glob("*IDI*.PCONVERT"))
             idi_files = []
             for p in (exp.correlator_passes or []):
@@ -1049,6 +1107,11 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
                 _remove_stale(pconv_files)
                 _reset_from('polconvert', "PolConvert output(s) older than IDI input(s)")
 
+    # --- post_polconvert: outputs=idi_ori/ backup (only if needed) ---
+    if 'post_polconvert' in step_names and all_steps[step_names.index('post_polconvert')].done:
+        if exp.antennas.polconvert and not (Path('.') / 'idi_ori').is_dir():
+            _reset_from('post_polconvert', "PolConvert backup (idi_ori/) missing on disk")
+
     # --- standardplots2: inputs=*.ms (post-ops), outputs=*.ps (re-created) ---
     # Note: standardplots2 re-runs plots; its outputs overlap with standardplots.
     # We skip timestamp validation here since msops_post just calls create_standardplots
@@ -1059,6 +1122,12 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
         antab_files = list(exp.dirs.pipe_in.glob("*.antab")) if exp.dirs.pipe_in.exists() else []
         if not antab_files:
             _reset_from('antab', "ANTAB file(s) missing in pipeline/in")
+
+    # --- pipeinputs: outputs=pipeline/in/*.inp.txt ---
+    if 'pipeinputs' in step_names and all_steps[step_names.index('pipeinputs')].done:
+        inp_files = list(exp.dirs.pipe_in.glob("*.inp.txt")) if exp.dirs.pipe_in.exists() else []
+        if not inp_files:
+            _reset_from('pipeinputs', "Pipeline input file(s) missing in pipeline/in")
 
     # --- pipeline: inputs=pipeline/in/*, outputs=pipeline/out/* ---
     if 'pipeline' in step_names and all_steps[step_names.index('pipeline')].done:
