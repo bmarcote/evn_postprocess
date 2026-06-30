@@ -17,6 +17,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from rich import print as rprint
 from . import experiment
 from . import utils
+from . import lisfiles
 from . import comment_tasav
 
 
@@ -139,7 +140,7 @@ def run_antab_editor(exp) -> bool:
               "rest of the run experiments).\nRun it manually in case you indeed want to run it here.[/red]")
         raise ValueError("antab_editor.py should only be run from the main e-EVN experiment run")
 
-    if '_line' in ''.join(glob.glob(f"{exp.expname.lower()}*.lis")):
+    if '_line' in ''.join(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")):
         utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-f", "..", "-l"], shell=True, stdout=None)
     else:
         utils.shell_command("antab_editor.py", ["-e", exp.expname.lower(), "-p", "1", "-f", ".."], shell=True, stdout=None)
@@ -268,8 +269,12 @@ def create_input_file(exp) -> bool:
             '{phaseref}': ', '.join([apass.sources.calibrator_for_target(tgt) for tgt in apass.sources.target]) if apass.sources.calibrator else '',
             '{dosolint}': '#' if apass.sources.calibrator else '',
             '{solint}': '2',
+            # doprimarybeam/setup_station are only relevant for multi-phase-center
+            # (wide-field) experiments. For a single-pass experiment they are commented
+            # out via the {do_primarybeam} prefix so they never take effect.
+            '{do_primarybeam}': '' if exp.multi_phase_center else '#',
             '{doprimarybeam}': '1' if exp.multi_phase_center else '-1',
-            '{setup_station}': exp.refant[0],
+            '{setup_station}': exp.refant[0] if len(exp.refant) > 0 else '',
             '{do_all_sources}': '' if exp.multi_phase_center else '#',
             '{all_sources}': ', '.join(set(apass.sources.target + apass.sources.fringefinder + apass.sources.calibrator)) if exp.multi_phase_center else '',
             }
@@ -321,16 +326,19 @@ def run_pipeline(exp) -> bool:
         else:
             utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=None) #subprocess.PIPE)
 
-        os.chdir(original_cwd)
         return True
     except Exception as e:
         logger.error(f"Unexpected error running pipeline: {e}")
         traceback.print_exc()
+        return False
+    finally:
+        # Always restore the working directory. Several early-return paths above
+        # (no pipeline passes, a failed pass) previously left the process in
+        # exp.dirs.pipe_in, corrupting the cwd for every later step.
         try:
             os.chdir(original_cwd)
         except OSError:
             pass
-        return False
 
 
 def comment_tasav_files(exp) -> bool:
@@ -377,25 +385,39 @@ def comment_tasav_files(exp) -> bool:
 
 
 def pipeline_feedback(exp) -> bool:
-    """Runs the feedback.pl script after the EVN Pipeline has run.
+    """Generates the pipeline-feedback HTML page(s) after the EVN Pipeline has run.
+
+    This is the in-tree Python port of the historical ``feedback.pl`` script
+    (see :mod:`evn_postprocess.feedback`). For multi-pass experiments one page is
+    produced per pass (``{expname}_{p}.html``), otherwise a single ``{expname}.html``.
     """
-    original_cwd = os.getcwd()
-    try:
-        os.chdir(exp.dirs.pipe_out)
-        pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
-        sources_str = f"'{' '.join([s.name for s in exp.sources])}'"
-        if len(pipepasses) > 1:
-            for p in range(1, len(pipepasses) + 1):
-                utils.shell_command("feedback.pl",
-                                    ["-exp", f"{exp.expname.lower()}_{p}", "-jss", exp.supsci, "-source", sources_str],
-                                    stdout=None)
-        else:
-            utils.shell_command("feedback.pl",
-                                ["-exp", exp.expname.lower(), "-jss", exp.supsci, "-source", sources_str],
-                                stdout=None)
-        return True
-    finally:
-        os.chdir(original_cwd)
+    import re
+    from . import feedback
+    pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
+    sources = [s.name for s in exp.sources]
+    # Network Monitoring Experiments (and the e-EVN test experiments) use the NME-formatted
+    # feedback page. These are identified by the experiment name starting with 'N' or 'F'.
+    is_nme = exp.expname[:1].upper() in ('N', 'F')
+
+    # Always regenerate the feedback page(s): remove any pre-existing feedback HTML for this
+    # experiment first. This guarantees the page reflects the latest products/comments on
+    # every run, and clears stale pages (e.g. a {expname}_2.html left over from a previous
+    # multi-pass run that is now single-pass). The match is restricted to the feedback page
+    # naming ({expname}.html / {expname}_<n>.html) so other HTML in pipe_out is left alone.
+    page_re = re.compile(rf"^{re.escape(exp.expname.lower())}(_\d+)?\.html$")
+    for old_page in exp.dirs.pipe_out.glob(f"{exp.expname.lower()}*.html"):
+        if page_re.match(old_page.name):
+            logger.debug(f"Removing existing feedback page before regenerating: {old_page.name}")
+            old_page.unlink()
+
+    if len(pipepasses) > 1:
+        for p in range(1, len(pipepasses) + 1):
+            feedback.generate_feedback_page(f"{exp.expname.lower()}_{p}", sources=sources,
+                                            nme=is_nme, contact=exp.supsci, directory=exp.dirs.pipe_out)
+    else:
+        feedback.generate_feedback_page(exp.expname.lower(), sources=sources,
+                                        nme=is_nme, contact=exp.supsci, directory=exp.dirs.pipe_out)
+    return True
 
 
 def archive(exp) -> bool:
