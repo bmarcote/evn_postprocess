@@ -640,6 +640,21 @@ def notify_dashboard_review(exp, notifier: Notifier) -> dict | None:
     return None
 
 
+def notify_operator(exp, subject: str, body: str, notifier: Notifier | None) -> None:
+    """Sends an informational message to the operator through *notifier* (never blocks).
+
+    The single idiom for operator notifications outside the step-pause flow (which
+    keeps its dedicated :func:`notify_step_pause`): a None notifier or a send failure
+    only logs, so notifications can never stop the workflow.
+    """
+    if notifier is None:
+        return
+    try:
+        notifier.send_message(f"{exp.expname}: {subject}", body)
+    except Exception as e:
+        logger.warning(f"Could not send the '{subject}' notification: {e}")
+
+
 def notify_step_pause(exp, step: str, reason: str, notifier: Notifier) -> None:
     """Send an informational notification that the workflow has paused.
 

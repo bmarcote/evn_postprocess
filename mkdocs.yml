@@ -41,31 +41,50 @@ nav:
     - Configuration: getting-started/configuration.md
   - User Guide:
     - Workflow Overview: guide/workflow.md
+    - Plugin Backends: guide/backends.md
     - Running the Pipeline: guide/running.md
     - Batch Mode: guide/batch-mode.md
     - Communications: guide/comms.md
     - Dashboard: guide/dashboard.md
     - Editing Metadata: guide/editing.md
+    - Source Classification: guide/source-classification.md
+    - e-EVN Coordination: guide/eevn.md
     - External Tools: guide/tools.md
   - Reference:
     - CLI: reference/cli.md
-    - Workflow Steps: reference/steps.md
+    - Workflow Steps & Local Tools: reference/steps.md
+    - Experiment TOML Schema: reference/experiment-toml.md
     - Policy File: reference/policy.md
     - Comms Config: reference/comms-config.md
     - Environment Variables: reference/env-vars.md
   - API:
-    - experiment: api/experiment.md
-    - workflow: api/workflow.md
-    - comms: api/comms.md
-    - dialog: api/dialog.md
-    - plotting: api/plotting.md
-    - process: api/process.md
-    - pipeline: api/pipeline.md
-    - policy: api/policy.md
-    - tools: api/tools.md
-    - io: api/io.md
-    - utils: api/utils.md
-    - mstools: api/mstools.md
+    - Core:
+      - experiment: api/experiment.md
+      - experiment_state: api/experiment_state.md
+      - inputs: api/inputs.md
+      - workflow: api/workflow.md
+    - Backends:
+      - retrieval: api/retrieval.md
+      - pipelines: api/pipelines.md
+      - distribution: api/distribution.md
+    - Analysis:
+      - source_classify: api/source_classify.md
+      - review: api/review.md
+      - eevn: api/eevn.md
+    - Support:
+      - comms: api/comms.md
+      - dialog: api/dialog.md
+      - plotting: api/plotting.md
+      - process: api/process.md
+      - pipeline: api/pipeline.md
+      - policy: api/policy.md
+      - tools: api/tools.md
+      - io: api/io.md
+      - lisfiles: api/lisfiles.md
+      - vex: api/vex.md
+      - feedback: api/feedback.md
+      - utils: api/utils.md
+      - mstools: api/mstools.md
   - Development:
     - Contributing: development/contributing.md
     - Architecture: development/architecture.md

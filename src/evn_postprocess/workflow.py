@@ -1,7 +1,8 @@
 """Workflow functions for post-processing EVN experiments.
 
-These functions are called by the Snakemake workflow and wrap the functionality
-from process.py, pipeline.py, and pre.py modules.
+Step functions of the post-processing workflow, executed in order by
+:func:`run_workflow` (see ``_WORKFLOW_STEPS``). They wrap the functionality
+from the inputs, process, pipeline, and lisfiles modules.
 """
 import re
 import sys
@@ -9,7 +10,6 @@ import json
 import glob
 import shutil
 import traceback
-from datetime import datetime as dt
 from pathlib import Path
 from typing import Callable
 from dataclasses import dataclass
@@ -17,11 +17,16 @@ from loguru import logger
 from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
-from astropy import units as u
-from astropy import coordinates as coord
 from . import experiment
+from . import experiment_state
+from . import inputs
 from . import io
+from . import distribution
+from . import eevn
+from . import pipelines
 from . import process
+from . import retrieval
+from . import review
 from . import pipeline
 from . import lisfiles
 from . import dialog
@@ -166,10 +171,11 @@ class Task(object):
 
 _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
                         "Creates the directory structure to post-process the experiment. "
-                        "Checks that the necessary servers are configured. Retrieves the observing date and "
-                        "e-EVN run (if applicable) from the MASTER_PROJECT.LIS file. Retrieves the observing "
-                        "files (.key, .sum) from vlbeer, and reads the .jexp files related to the project. "
-                        "Verifies if the post-processing has already run before and recovers it."),
+                        "Locates (or retrieves) the .vex file and derives all metadata from it: "
+                        "observing date, e-EVN run (from exper_description), stations, sources, and "
+                        "scans. Applies the experiment toml (source types, PI, support scientist) "
+                        "when present. Verifies if the post-processing has already run before and "
+                        "recovers it."),
                    Task('lisfiles', 'retrieve_lisfiles', "Creates the .lis files in ccs and retrieves them. "
                         "Processes the files to this experiment."),
                    Task('checklis', 'check_lisfiles', "Verifies that the .lis files seem to be fine, "
@@ -204,104 +210,64 @@ _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
 def create_folder_structure() -> experiment.Dirs:
     """Creates the folder structure required for post-processing.
 
-    Returns:
-        Iterable[Path]: List of created folders.
+    Thin alias of :func:`inputs.create_folder_structure` (the canonical
+    implementation), kept for existing callers.
     """
-    folders = {k: Path(v) for k, v in {'logs': "logs", # 'data': "data", 'results': "results",
-                                       'plots': "plots",
-                                       'pipeline': "pipeline", 'pipe_in': "pipeline/in", 'pipe_out': "pipeline/out",
-                                       'pipe_temp': "antenna_files"}.items()}
-    for folder in folders.values():
-        if not folder.exists():
-            Path(folder).mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created folder {folder}")
-        else:
-            logger.debug(f"Folder {folder} already exists. Skipped creation.")
+    return inputs.create_folder_structure()
 
-    return experiment.Dirs(**folders)
 
 
 def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
-    """Initializes an experiment object with all the relevant metadata, obtained from MASTER_PROJECTS.LIS.
+    """Initializes an experiment object with all the metadata derived from the .vex file.
+
+    Vex-only bootstrap (no MASTER_PROJECTS.LIS, .jexp, or .expsum): the observing date
+    comes from the vex $EXPER block, the e-EVN membership from exper_description, and
+    stations/sources/scans from the vex sections. Source types, PI contacts, and the
+    support scientist may be complemented by the experiment toml ({expname}.toml).
+
+    When no vex file is present locally, it is fetched from the correlator server
+    (requires computers.toml; this fallback moves into the JIVE retrieval backend in a
+    later phase). Fully offline runs just need the vex file already in the directory.
 
     Args:
         expname (str): Experiment name.
         supsci (str): Support scientist name assigned to this experiment.
 
     Returns:
-        bool: True if experiment was initialized successfully.
+        experiment.Experiment: The initialized experiment.
     """
     logger.debug(f"Initializing experiment {expname}")
+    dirs = create_folder_structure()
+
+    # Backend selection: CLI --retrieval > experiment toml [retrieval] mode > 'jive'.
+    exp_toml = experiment_state.load_toml(experiment_state.toml_path_for(expname))
+    mode = retrieval.selected_mode(exp_toml)
     try:
-        servers = experiment.retrieve_servers()
-    except FileNotFoundError:
-        logger.error("Missing configuration file computers.toml")
-        rprint("[red]Expected to be found at ~jops/.config/evn/computers.toml, "
-               "or in your local .config directory.[/red]")
+        retriever = retrieval.get_retriever(mode)
+        inputset = retriever.fetch(Path('.'), expname)
+    except retrieval.RetrievalError as e:
+        logger.error(f"Retrieval ({mode}) failed for {expname}: {e}")
+        rprint(f"[red]{e}[/red]")
         sys.exit(1)
 
-    #if experiment.Experiment.exists(expname):
-    #    logger.debug(f"Recovering previously-stored experiment {expname} from file")
-    #    return experiment.Experiment.load(expname)
-
     try:
-        obsdate, eEVNname = io.parse_masterprojects(expname, servers['master_projects'])
-    except ValueError:
-        logger.error("[bold red]The assumed eperiment code {args.expname} "
-                     "is not recognized.[/bold red]")
-        rprint("[red]Run the program from the experiment folder in /data/exp or use --expname[/red]")
-        rprint("[red]Or at least it was not found in MASTER_PROJECTS.LIS[/red]")
+        exp = inputs.load_experiment(inputset.vexfile, lisfiles=inputset.lisfiles or None,
+                                     supsci=supsci, dirs=dirs, expname=expname)
+    except inputs.InputsError as e:
+        logger.error(f"Could not initialize {expname} from {inputset.vexfile}: {e}")
+        rprint(f"[red]{e}[/red]")
         sys.exit(1)
+    exp.retrieval_mode = mode
 
-    # MASTER_PROJECTS.LIS entries are not always consistent: most use YYMMDD, but some
-    # carry a 4-digit year (YYYYMMDD). Accept both rather than failing to parse.
-    obsdate = obsdate.strip()
-    obsdate_fmt = "%Y%m%d" if len(obsdate) == 8 else "%y%m%d"
-    exp = experiment.Experiment(expname, dt.strptime(obsdate, obsdate_fmt).date(), supsci,
-                                create_folder_structure(), eEVNname)
-    try:
-        io.get_init_files(exp, servers)
-    except ValueError:
-        logger.error("Could not retrieve init files from this experiment (vox/vix, piletter, or expsum)")
-        sys.exit(1)
-
-    io.get_vlbeer_sched_files(exp.expname if exp.eEVNname is None else exp.eEVNname,
-                              exp.obsdate, servers['vlbeer'])
-    exp.get_info_from_vex()
-    jexp_info = io.get_jexp_info(exp.expname, servers['jexp'])
-    assert jexp_info['piname'] is not None, "piname is None"
-    assert jexp_info['pimail'] is not None, "pimail is None"
-    exp.pi.append(experiment.PI(jexp_info['piname'], jexp_info['pimail']))
-    if jexp_info['coname'] is not None:
-        assert jexp_info['coimail'] is not None, "coimail is None"
-        exp.pi.append(experiment.PI(jexp_info['coname'], jexp_info['coimail']))
-
-    assert jexp_info['schedsrc'] is not None, "No source information supplied in the jexp file"
-    for src in jexp_info['schedsrc'].split(','):
-        src_name, src_type_str, src_protected = src.strip().replace('(', '').replace(')', '').replace('|', ' ').split()
-        match src_type_str.strip():
-            case 'T':
-                src_type = experiment.SourceType.target
-            case 'R':
-                src_type = experiment.SourceType.calibrator
-            case 'C':
-                src_type = experiment.SourceType.fringefinder
-            case 'F':
-                src_type = experiment.SourceType.fringefinder
-            case _:
-                src_type = experiment.SourceType.other
-
-        if src_name not in exp.sources.names:
-            # Use placeholder coordinates (0,0) - will be updated when MS data is processed
-            placeholder_coords = coord.SkyCoord(ra=0*u.deg, dec=0*u.deg, frame='icrs')
-            exp.sources.append(experiment.Source(name=src_name, coordinates=placeholder_coords, 
-                                               type=src_type, protected=False))
-        else:
-            exp.sources[src_name].type = src_type
-            exp.sources[src_name].protected = src_protected.strip() == 'X'
-
-    # TODO: implement this one!
-    # io.get_station_feedback_info(exp.expname, servers['station_feedback'])
+    if mode == 'jive':
+        # Observing schedule files (.key/.sum) from vlbeer: best-effort, JIVE-only
+        # nicety. Their absence must never block a run.
+        try:
+            servers = experiment.retrieve_servers()
+            io.get_vlbeer_sched_files(exp.expname if exp.eEVNname is None else exp.eEVNname,
+                                      exp.obsdate, servers['vlbeer'])
+        except (FileNotFoundError, KeyError, ValueError, RuntimeError) as e:
+            logger.warning(f"Could not retrieve the .key/.sum files from vlbeer (continuing): {e}")
 
     exp.store()
     return exp
@@ -318,23 +284,25 @@ def retrieve_lisfiles(exp: experiment.Experiment) -> bool:
         bool: True if lis files were retrieved and processed successfully.
     """
     try:
-        if len(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")) > 0:
+        if len(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")) == 0:
+            # No local .lis files: the selected retrieval backend obtains them
+            # (jive: create on ccs + copy; none: explicit error, nothing creates them).
+            mode = retrieval.selected_mode(getattr(exp, 'exp_toml', None))
+            try:
+                retrieval.get_retriever(mode).fetch_lisfiles(exp)
+            except retrieval.RetrievalError as e:
+                logger.error(f"Could not obtain the .lis files ({mode}): {e}")
+                rprint(f"[red]{e}[/red]")
+                return False
+        else:
             logger.debug(".lis files already exist. Skipping retrieval.")
-            return True
+            if exp.correlator_passes:
+                return True  # passes already set up (at initialize or a previous run)
 
-        # Check each step individually for better error reporting
-        if not lisfiles.create_lis_files(exp):
-            logger.error("Failed to create .lis files")
-            return False
-            
-        if not lisfiles.get_lis_files(exp):
-            logger.error("Failed to retrieve .lis files")
-            return False
-            
         if not lisfiles.get_passes_from_lisfiles(exp):
             logger.error("Failed to extract passes from .lis files")
             return False
-            
+
         return True
     except Exception as e:
         logger.error(f"Unexpected error retrieving .lis files: {e}")
@@ -471,7 +439,12 @@ def msops(exp: experiment.Experiment) -> bool:
         logger.debug("FITS IDI files already exist. MS operations were already applied. Skipping.")
         return True
 
-    if _auto_msops_available(exp):
+    if _toml_msops_available(exp):
+        # The experiment toml defines every MS-ops decision (a completed [postprocess]
+        # section from a previous run, or hand-written): apply silently, no dialog, no
+        # dashboard notification. This is the "silent re-run" contract of the PRD.
+        _apply_toml_msops(exp)
+    elif _auto_msops_available(exp):
         # The lag-MS polarization diagnostics gave a confident answer, so apply the MS
         # operations automatically (no dashboard/dialog needed). See _apply_auto_msops.
         _apply_auto_msops(exp)
@@ -508,8 +481,13 @@ def msops(exp: experiment.Experiment) -> bool:
                 return False
 
     exp.store()
-    return process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) \
+    ok = process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) \
         & process.print_exp(exp, False)
+    if ok:
+        # Whatever path decided the parameters (toml, auto, dialog, Mattermost reply),
+        # persist them into the experiment toml so the next run is silent (PRD story 22).
+        _record_msops_in_toml(exp)
+    return ok
 
 
 def tconvert(exp: experiment.Experiment) -> bool:
@@ -528,6 +506,151 @@ def tconvert(exp: experiment.Experiment) -> bool:
         bool: True if all correlator passes were converted successfully.
     """
     return process.tconvert(exp)
+
+
+def _ask_review_confirmation() -> str | None:
+    """Asks the operator to approve the review, re-run from a step, or quit.
+
+    Returns:
+        None to approve (continue with the final steps), a validated step name to
+        re-run from it, or 'quit' to stop the run here.
+    """
+    step_names = [s.name for s in _WORKFLOW_STEPS]
+    while True:
+        try:
+            answer = input("Review answer [Enter=finalize / STEP=re-run from STEP / quit]: ").strip()
+        except EOFError:  # no interactive stdin after all: behave like quit
+            logger.warning("No interactive stdin available for the review confirmation; "
+                           "stopping here (resume with `postprocess run`).")
+            return 'quit'
+        if answer == '':
+            return None
+        if answer.lower() in ('q', 'quit', 'exit'):
+            return 'quit'
+        if answer in step_names:
+            return answer
+        rprint(f"[yellow]'{answer}' is not a step name. Available steps: "
+               f"{', '.join(step_names)}[/yellow]")
+
+
+def _pipeline_backend(exp: experiment.Experiment):
+    """Returns the selected pipeline backend (CLI > experiment toml > 'aips').
+
+    An unknown/unimplemented backend raises pipelines.PipelineError at selection time
+    (main already validates at startup; this re-check covers `postprocess exec` and
+    toml edits made mid-run). Callers turn it into a clean step failure.
+    """
+    return pipelines.get_pipeline(pipelines.selected_mode(_exp_toml(exp)))
+
+
+def _run_pipeline_stage(exp: experiment.Experiment, stage: str) -> bool:
+    """Runs one PipelineBackend stage ('prepare'|'run'|'collect') with clean errors.
+
+    Returns False (with an explicit log, no traceback) on PipelineError, so a wrong
+    backend selection or a backend failure reads as a step failure, not a crash.
+    """
+    try:
+        backend = _pipeline_backend(exp)
+        return getattr(backend, stage)(exp)
+    except pipelines.PipelineError as e:
+        logger.error(f"Pipeline backend error at '{stage}': {e}")
+        rprint(f"[red]{e}[/red]")
+        return False
+
+
+class StepPaused(Exception):
+    """Raised by a step to signal a clean wait state (NOT a failure).
+
+    Used by the e-EVN synchronisation barriers: the step cannot proceed yet, a
+    REVIEW_REQUIRED marker explains what it waits for, and the run must stop with a
+    "paused" (not "failed") log and notification, exiting cleanly for the scheduler.
+    """
+
+
+def _exp_toml(exp: experiment.Experiment) -> experiment_state.ExperimentToml:
+    """Returns the experiment toml attached to *exp* (thin alias of attached_toml).
+
+    Steps reached via `postprocess exec` load the experiment straight from the JSON
+    checkpoint, where the toml is not attached; the lazy load keeps them consistent.
+    """
+    return experiment_state.attached_toml(exp)
+
+
+def _fresh_exp_toml(exp: experiment.Experiment) -> experiment_state.ExperimentToml:
+    """Reloads the experiment toml from disk (thin alias of attached_toml(fresh=True)).
+
+    MUST be used before every write from the workflow process: see
+    experiment_state.attached_toml for the lost-update rationale.
+    """
+    return experiment_state.attached_toml(exp, fresh=True)
+
+
+def _toml_msops_available(exp: experiment.Experiment) -> bool:
+    """Whether the experiment toml defines every MS-operations decision.
+
+    Requires [postprocess] to explicitly define the weight threshold and the three
+    antenna lists (an explicit empty list means "no antenna needs it" and counts as
+    defined; an absent key does not). refant is optional: the workflow auto-picks one.
+    """
+    post = _exp_toml(exp).postprocess
+    return (post.weight_threshold is not None and post.polswap is not None
+            and post.polconvert is not None and post.onebit is not None)
+
+
+def _apply_toml_msops(exp: experiment.Experiment) -> None:
+    """Applies the MS-operations parameters defined in the experiment toml onto *exp*.
+
+    Mirrors dialog.PolicyDriven.askMSoperations, sourcing the values from the toml
+    [postprocess] section instead of the policy (the toml wins per the precedence rule).
+    Antennas named in the toml but not part of the observation log a warning.
+    """
+    post = _exp_toml(exp).postprocess
+    for a_pass in exp.correlator_passes:
+        existing = a_pass.flagged_weights
+        if existing and existing.threshold == post.weight_threshold and existing.percentage >= 0:
+            continue
+        a_pass.flagged_weights = experiment.FlagWeight(post.weight_threshold, -1)
+    for key in ('polswap', 'polconvert', 'onebit'):
+        for antenna in getattr(post, key) or []:
+            if antenna in exp.antennas:
+                setattr(exp.antennas[antenna], key, True)
+            else:
+                logger.warning(f"Antenna {antenna} ({key} in the experiment toml) is not "
+                               "part of this observation; ignored.")
+    if post.refant and not exp.refant:
+        exp.refant = list(post.refant)
+    logger.info(f"MS operations resolved from the experiment toml: weight "
+                f"threshold={post.weight_threshold}, polswap={post.polswap or 'none'}, "
+                f"polconvert={post.polconvert or 'none'}, onebit={post.onebit or 'none'}. "
+                "No interaction needed.")
+
+
+def _record_msops_in_toml(exp: experiment.Experiment) -> None:
+    """Persists the applied MS-operations parameters into the experiment toml.
+
+    Called after the MS operations completed, whatever decided the values (toml,
+    lag-MS auto-diagnostics, terminal dialog, or Mattermost feedback), so a re-run
+    resolves silently from the toml. Never blocks the workflow on failure.
+    """
+    try:
+        threshold, percentage = None, None
+        for a_pass in exp.correlator_passes:
+            if a_pass.flagged_weights is not None:
+                threshold = a_pass.flagged_weights.threshold
+                if a_pass.flagged_weights.percentage >= 0:
+                    percentage = a_pass.flagged_weights.percentage
+                break
+        exp_toml = _fresh_exp_toml(exp)  # never save a stale document (lost-update guard)
+        exp_toml.record_parameters(weight_threshold=threshold, flagged_percent=percentage,
+                                   polswap=list(exp.antennas.polswap),
+                                   polconvert=list(exp.antennas.polconvert),
+                                   onebit=list(exp.antennas.onebit),
+                                   refant=list(exp.refant) if exp.refant else None)
+        exp_toml.save()
+        logger.debug(f"MS-operations parameters recorded in {exp_toml.path}.")
+    except (experiment_state.ExperimentTomlError, OSError) as e:
+        logger.warning(f"Could not record the MS-operations parameters in the experiment "
+                       f"toml (continuing): {e}")
 
 
 def _auto_msops_available(exp: experiment.Experiment) -> bool:
@@ -636,12 +759,18 @@ def post_polconvert(exp: experiment.Experiment) -> bool:
     """
     if not exp.antennas.polconvert:
         logger.info("No antennas require PolConvert. Skipping post-PolConvert.")
+        # The FITS-IDI files are final at this point: publish the completion marker
+        # that the e-EVN antab barrier checks in the sibling directories.
+        eevn.mark_fitsidi_ready(exp)
         return True
 
     if not process.post_polconvert(exp):
         return False
 
-    return process.post_post_polconvert(exp)
+    ok = process.post_post_polconvert(exp)
+    if ok:
+        eevn.mark_fitsidi_ready(exp)
+    return ok
 
 
 def msops_post(exp: experiment.Experiment) -> bool:
@@ -674,7 +803,29 @@ def antfiles(exp: experiment.Experiment) -> bool:
         return True
 
     if (exp.eEVNname is None) or (exp.expname == exp.eEVNname):
-        pipeline.get_files_from_vlbeer(exp, experiment.retrieve_servers()['vlbeer'])
+        # e-EVN barrier (a): a single antab_editor session covers the whole run, so
+        # the run leader must wait until every sibling produced its FITS-IDI files
+        # (explicit completion markers). Pause cleanly and resume on re-invocation.
+        if exp.eEVNname is not None:
+            missing = eevn.fitsidi_missing(exp)
+            if missing:
+                reason = (f"Waiting for the FITS-IDI completion of the other e-EVN "
+                          f"experiments: {', '.join(missing)} (markers in ../EXPn). "
+                          f"Re-run `postprocess run` once they are processed.")
+                _write_review_flag(exp, 'antab', reason)
+                if _NOTIFIER is not None:
+                    _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
+                raise StepPaused(reason)
+
+        # Station .log/.antabfs files come from the selected retrieval backend
+        # (jive: vlbeer download; none: validate they are already local).
+        try:
+            mode = retrieval.selected_mode(getattr(exp, 'exp_toml', None))
+            retrieval.get_retriever(mode).fetch_station_files(exp)
+        except retrieval.RetrievalError as e:
+            logger.error(f"Could not obtain the station files ({mode}): {e}")
+            rprint(f"[red]{e}[/red]")
+            return False
         if any(s.lower() in ('br', 'kp', 'la', 'yy', 'mk') for s in exp.antennas.names):
             pipeline.get_vlba_antab(exp)
 
@@ -682,6 +833,11 @@ def antfiles(exp: experiment.Experiment) -> bool:
             logger.error("uvflg creation needs manual intervention.")
             rprint("[bold red]STOPPED PROCESS:[/bold red] [red]uvflg creation needs manual intervention.[/red]")
             return False
+
+        # Show the operator what to fix (stations that did not observe, missed time
+        # ranges, reduced bandwidths) right before the manual antab_editor session,
+        # in the terminal and via the notifier (PRD stories 10-11).
+        review.announce_antab_summary(exp, _NOTIFIER)
 
         if not pipeline.run_antab_editor(exp):  # TODO: use the correct codes if eEVN or line
             rprint("[bold yellow]STOPPED PROCESS:[/bold yellow] [yellow]antab_editor needs manual intervention.[/yellow]")
@@ -693,16 +849,23 @@ def antfiles(exp: experiment.Experiment) -> bool:
         for afile in exp.dirs.pipe_temp.glob("*.uvflg"):
             shutil.copy(afile, exp.dirs.pipe_in / afile.name)
     else:
-        eEVNpath = Path(str(experiment.retrieve_servers()['eee'].path).format(expname=exp.eEVNname)) \
-                    / "pipeline" / "in"
-        if not (antabfiles := eEVNpath.glob("*.antab")):
-            logger.error(f"Create the antab/uvflg files from {exp.eEVNname} before continue here.")
-            return False
+        # e-EVN barrier (b): EXPn (n>1) takes the final antab/uvflg files from the run
+        # leader in ../EXP1 (sibling-directory convention). When they are not there
+        # yet, pause cleanly and resume on the next invocation.
+        if not eevn.final_antab_available(exp):
+            reason = (f"Waiting for the final .antab files of the e-EVN run leader "
+                      f"{exp.eEVNname} (expected in ../{exp.eEVNname.upper()}/pipeline/in/). "
+                      f"Re-run `postprocess run` once they exist.")
+            _write_review_flag(exp, 'antab', reason)
+            if _NOTIFIER is not None:
+                _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
+            raise StepPaused(reason)
 
-        for afile in antabfiles:
+        eEVNpath = eevn.leader_antab_dir(exp)
+        for afile in sorted(eEVNpath.glob("*.antab")):
             shutil.copy(afile, exp.dirs.pipe_in / afile.name.replace(exp.eEVNname.lower(), exp.expname.lower()))
 
-        for afile in eEVNpath.glob("*.uvflg"):
+        for afile in sorted(eEVNpath.glob("*.uvflg")):
             shutil.copy(afile, exp.dirs.pipe_in / afile.name.replace(exp.eEVNname.lower(), exp.expname.lower()))
 
     return True
@@ -720,7 +883,7 @@ def create_pipeline_inputs(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if the input file(s) were created successfully.
     """
-    return pipeline.create_input_file(exp)
+    return _run_pipeline_stage(exp, 'prepare')
 
 
 def run_pipeline(exp: experiment.Experiment) -> bool:
@@ -734,7 +897,7 @@ def run_pipeline(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if the pipeline ran successfully.
     """
-    return pipeline.run_pipeline(exp)
+    return _run_pipeline_stage(exp, 'run')
 
 
 def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
@@ -749,7 +912,7 @@ def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
     Args:
         exp: Experiment object.
     """
-    result = pipeline.comment_tasav_files(exp) & pipeline.pipeline_feedback(exp)
+    result = _run_pipeline_stage(exp, 'collect')
     if result:
         result &= process.update_piletter(exp)
 
@@ -764,22 +927,61 @@ def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
 
 
 def pre_archive(exp: experiment.Experiment) -> bool:
-    """Appends Tsys/GC information to FITS-IDI files.
+    """Appends Tsys/GC information to FITS-IDI files and records the final toml state.
 
-    Args:
-        expobj_file: Path to experiment JSON file
+    On success the derived experiment information (final antab/polconvert-input file
+    links, flagged-data percentage) is persisted into the experiment toml, completing
+    the [postprocess] record that the PI letter and the future feedback upload consume
+    (PRD stories 21-22, 34).
     """
-    return process.append_antab(exp)
+    ok = process.append_antab(exp)
+    if ok:
+        _record_final_in_toml(exp)
+    return ok
+
+
+def _record_final_in_toml(exp: experiment.Experiment) -> None:
+    """Records the finalisation products into the experiment toml (never blocks).
+
+    Covers: links to the final .antab files (pipeline/in) and the polconvert input
+    files (working directory), plus the flagged-data percentage now that flag_weights
+    has run. Gain corrections are added here once a structured source for them exists
+    (currently only free text in the ANTAB comments).
+    """
+    try:
+        antab_files = sorted(str(p) for p in exp.dirs.pipe_in.glob('*.antab')) \
+            if exp.dirs.pipe_in.exists() else []
+        polconvert_inputs = sorted(str(p) for p in Path('.').glob('polconvert*')
+                                   if p.is_file() and not p.name.endswith(('.log', '.ms')))
+        flagged = None
+        for a_pass in exp.correlator_passes:
+            if a_pass.flagged_weights is not None and a_pass.flagged_weights.percentage >= 0:
+                flagged = a_pass.flagged_weights.percentage
+                break
+        exp_toml = _fresh_exp_toml(exp)  # never save a stale document (lost-update guard)
+        exp_toml.record_parameters(antab_files=antab_files or None,
+                                   polconvert_input_files=polconvert_inputs or None,
+                                   flagged_percent=flagged)
+        exp_toml.save()
+        logger.debug(f"Finalisation products recorded in {exp_toml.path}.")
+    except (experiment_state.ExperimentTomlError, OSError) as e:
+        logger.warning(f"Could not record the finalisation products in the experiment "
+                       f"toml (continuing): {e}")
 
 
 def archive(exp: experiment.Experiment) -> bool:
-    """Archives experiment files to the EVN archive.
+    """Delivers the experiment through the selected distribution backend.
 
-    Args:
-        expobj_file: Path to experiment JSON file
+    Backend selection: experiment toml [distribution] mode > 'jive' (the historical
+    EVN-archive delivery). Mode 'none' completes without archiving anything.
     """
-    return process.set_credentials(exp) & process.protect_experiment_files(exp) & process.print_exp(exp, display_in_terminal=False) & \
-           process.archive(exp) & pipeline.archive(exp) & process.send_letters(exp) & process.antenna_feedback(exp) & process.nme_report(exp)
+    try:
+        mode = distribution.selected_mode(_exp_toml(exp))
+        return distribution.get_distributor(mode).deliver(exp)
+    except distribution.DistributionError as e:
+        logger.error(f"Distribution failed: {e}")
+        rprint(f"[red]{e}[/red]")
+        return False
 
 
 @dataclass
@@ -844,9 +1046,11 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
         'antab':         ExecCommand(pipeline.run_antab_editor,
                                      "Prepare .antab and run antab_editor.py."),
         'uvflg':         ExecCommand(pipeline.create_uvflg, "Create .uvflg from all log files."),
-        'vlbeer':        ExecCommand(lambda exp: pipeline.get_files_from_vlbeer(exp,
-                                                                                experiment.retrieve_servers()['vlbeer']),
-                                     "Retrieve the antabfs, log, and flag files from vlbeer."),
+        'vlbeer':        ExecCommand(lambda exp: retrieval.get_retriever(
+                                         retrieval.selected_mode(getattr(exp, 'exp_toml', None))
+                                     ).fetch_station_files(exp),
+                                     "Obtain the station antabfs/log/flag files (through the "
+                                     "selected retrieval backend)."),
         'pyinput':       ExecCommand(pipeline.create_input_file,
                                      "Create the input file for the EVN pipeline."),
         'pipe':          ExecCommand(pipeline.run_pipeline, "Run the EVN Pipeline."),
@@ -1141,6 +1345,16 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
             _reset_from('pipeline', "Pipeline output(s) older than input(s)")
 
 
+def _log_file_path(exp: experiment.Experiment) -> Path:
+    """Returns the post_processing.log path: the JIVE eee location when configured,
+    otherwise the current working directory (standalone runs need no computers.toml)."""
+    try:
+        return Path(experiment.retrieve_servers()['eee'].path) / exp.expname.upper() \
+            / "post_processing.log"
+    except (FileNotFoundError, KeyError):
+        return Path("post_processing.log")
+
+
 def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
     """Configure loguru file sink for the debug log (post_process.log).
 
@@ -1188,8 +1402,8 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
 
     try:
         logger.remove()  # Remove default stderr handler to avoid duplicate messages
-        logger.add(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log",
-                   colorize=False, level=level, backtrace=True, diagnose=True, format=_file_format)
+        logger.add(_log_file_path(exp), colorize=False, level=level, backtrace=True,
+                   diagnose=True, format=_file_format)
         logger.add(_console_sink, colorize=False, level=level, backtrace=True, diagnose=True,
                    format="{message}")
     except (OSError, PermissionError) as e:
@@ -1214,7 +1428,7 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
     Returns:
         bool: True if workflow completed successfully (or paused at postpipe), False otherwise.
     """
-    if not (f := Path(experiment.retrieve_servers()['eee'].path / f"{exp.expname.upper()}/post_processing.log")).exists():
+    if not (f := _log_file_path(exp)).exists():
         exp.write_log_file(f)
 
     _setup_loguru(exp, debug)
@@ -1272,29 +1486,62 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
             step.done = True
             exp.store()
             logger.info(f"Step {step.name} completed successfully")
+        except StepPaused as pause:
+            # A clean wait state (e.g. an e-EVN barrier), NOT a failure: log and
+            # notify as "paused" so failure notifications stay trustworthy, and exit
+            # cleanly for the scheduler. The step stays pending and re-runs on resume.
+            logger.info(f"Step {step.name} paused: {pause}")
+            utils.notify(f"{exp.expname} post-processing", f"Paused at {step.name}: {pause}")
+            return True
         except Exception as e:
             logger.error(f"Unexpected error in step {step.name}: {e}")
             traceback.print_exc()
             utils.notify(f"{exp.expname} post-processing", f"Crashed at step {step.name}: {e}")
             return False
 
-        # After postpipe, pause and ask the user to review before archiving
+        # After postpipe, ask the user to review the dashboard before archiving
+        # (PRD stories 13, 20, 21): announce in the terminal AND via the notifier with
+        # the exact command to open, then confirm interactively — approving continues
+        # with the final steps in this same run; naming a step re-runs from it.
         if step.name == 'postpipe':
             remaining = steps_to_run[steps_to_run.index(step) + 1:]
             if remaining:
                 piletter = f"{exp.expname.lower()}.piletter"
-                body = (f"[bold]Please do the following before continuing:[/bold]\n\n"
-                        f"  1. Check the pipeline output plots and logs.\n"
+                open_cmd = f"postprocess -e {exp.expname} info --serve"
+                body = (f"[bold]Please review before continuing:[/bold]\n\n"
+                        f"  1. Open the dashboard: [bold green]{open_cmd}[/bold green]\n"
+                        f"     (from [dim]{Path.cwd()}[/dim]; check the plots, the Pipeline\n"
+                        f"     tab, and fill in the [bold]Comments[/bold] tab per station).\n"
                         f"  2. Review the PI letter ([bold cyan]{piletter}[/bold cyan]).\n"
                         f"     Non-observing antennas and PolConvert remarks have been\n"
                         f"     filled in automatically — verify and edit if needed.\n\n"
-                        f"[bold]When ready, run one of:[/bold]\n\n"
-                        f"  [bold green]postprocess run[/bold green]           — finalize and archive everything\n"
-                        f"  [bold green]postprocess run postpipe[/bold green]  — re-run diagnostics\n")
+                        f"[bold]Then answer below:[/bold] press Enter to finalize and archive,\n"
+                        f"type a step name (e.g. [bold green]pipeline[/bold green]) to re-run from it, "
+                        f"or type [bold green]quit[/bold green] to stop here.")
                 Console().print(Panel(body, title="[bold yellow]Pipeline Results Ready for Review[/bold yellow]",
                                       border_style="yellow", padding=(1, 2)))
                 utils.notify(f"{exp.expname} post-processing", "Paused — review pipeline results before continuing")
-                return True
+                if _NOTIFIER is not None:
+                    _comms.notify_step_pause(exp, 'postpipe',
+                                             f"Review the dashboard: run `{open_cmd}` in {Path.cwd()} "
+                                             f"(plots + Pipeline tab + Comments tab), and check the "
+                                             f"PI letter ({piletter}). Then answer in the terminal "
+                                             f"(or `postprocess run` to finalize).", _NOTIFIER)
+                if _BATCH_MODE:
+                    _write_review_flag(exp, 'postpipe',
+                                       f"Review the dashboard ({open_cmd}) and the PI letter, then "
+                                       f"resume with `postprocess run` (or `postprocess run STEP` "
+                                       f"to re-run from STEP).")
+                    return True
+                answer = _ask_review_confirmation()
+                if answer == 'quit':
+                    return True
+                if answer is not None:
+                    logger.info(f"Operator requested a re-run from step '{answer}'.")
+                    return run_workflow(exp, archive=archive, debug=debug,
+                                        from_step=answer, to_step=to_step)
+                _clear_review_flag(exp)
+                # approved: fall through and continue with the remaining steps
 
     logger.info(f"The processing of {exp.expname} seems to have finalized properly.")
     utils.notify(f"{exp.expname} post-processing", "Completed successfully")

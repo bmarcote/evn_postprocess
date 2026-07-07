@@ -1,81 +1,299 @@
-# Workflow Steps Reference
+# Workflow Steps & Local Tools
 
-Complete list of all pipeline steps, their internal command names, and what they do.
+The pipeline runs as a fixed, ordered list of 16 steps (`Task` objects in
+`workflow._WORKFLOW_STEPS`). Each step wraps a Python function; `postprocess run`
+walks the list from the last completed step, `postprocess run STEP` jumps to a
+named step, and `postprocess exec NAME` runs a single underlying command in
+isolation (see the table at the bottom of this page).
 
-## Step details
+This page has two jobs: describe what each step does, and — for anyone who needs
+to reproduce a step **by hand outside `postprocess`** (a server is unreachable, a
+step needs a one-off tweak, or you're debugging) — name the exact local tool or
+script each step calls, mirroring the historical [EVN Post-Correlation Checklist](https://code.jive.eu/marcote/science_support_doc).
 
-### `initialize` → `initialize_experiment`
+!!! note "Backends change what runs"
+    Three steps (`lisfiles`/`antab` station files, `pipeinputs`/`pipeline`/`postpipe`,
+    `archive`) delegate to a **plugin backend** selected in the experiment toml or via
+    `--retrieval`/`--pipeline`/`--distribution`. The commands below describe the
+    default JIVE backends (`jive`, `aips`, `jive`). See
+    [Plugin Backends](../guide/backends.md) for the `none` equivalents.
 
-Creates the directory structure to post-process the experiment. Checks that the necessary servers are configured. Retrieves the observing date and e-EVN run (if applicable) from the `MASTER_PROJECT.LIS` file. Retrieves the observing session information.
+## Step reference
 
-### `lisfile` → `get_lis_files`
+### 1. `initialize` → `initialize_experiment`
 
-Produces a `.lis` file (or multiple for multi-pass experiments) in ccs and copies it to eee. Validates the contents for known patterns.
+Creates the experiment directory structure (`logs/`, `plots/`, `pipeline/{in,out}`,
+`antenna_files/`), obtains the `.vex`/`.vix` file through the selected **retrieval**
+backend, and derives all metadata from it: observing date (`$EXPER
+exper_nominal_start`), e-EVN membership (`exper_description`), stations, sources,
+scans. The experiment toml (`{expname}.toml`) is then applied (source types, PI,
+support scientist); any source still untyped is classified heuristically (see
+[Source Classification](../guide/source-classification.md)).
 
-### `checklis` → `check_lisfiles`
+**Manual equivalent** (retrieval mode `jive`):
 
-Verifies the existing `.lis` files for completeness and consistency with the experiment metadata.
+```bash
+ssh jops@ccs
+cd /ccs/expr/{EXP}/
+# vex is normally already there from correlation; for e-EVN EXPn copy EXP1's vex
+```
+```bash
+# on eee, in the experiment directory
+scp jops@ccs:/ccs/expr/{EXP}/{exp}.vix .
+ln -s {exp}.vix {EXP}.vix
+```
 
-### `ms` → `create_ms`
+No `MASTER_PROJECTS.LIS`, `.jexp`, or `.expsum` lookup happens any more — everything
+comes from the vex and the experiment toml.
 
-Runs `j2ms2` on all available `.lis` files to produce Measurement Set files. Extracts metadata (antennas, sources, frequency setup, scans) from the resulting MS.
+### 2. `lisfiles` → `retrieve_lisfiles`
 
-### `plots` → `standardplots`
+If no local `.lis` files exist yet, the retrieval backend creates them remotely and
+copies them over.
 
-Generates standard plots using `jplotter`: weight distribution, auto-correlations, cross-correlations, amplitude vs phase, amplitude vs time. Converts PostScript output to PNG and opens the web dashboard.
+**Manual equivalent** (on `ccs`):
 
-### `msops` → `msops`
+```bash
+showlog_new {EXP}          # GUI: mark PRODUCTION runs, ExportFile -> {exp}.lis
+# or, non-interactively:
+make_lis -e {exp} -p {profile} -s {exp}.lis
+```
+```bash
+scp jops@ccs:/ccs/expr/{EXP}/{exp}*.lis .
+```
 
-Applies MS operations. In interactive mode, opens the dashboard and asks:
+### 3. `checklis` → `check_lisfiles`
 
-- Weight flagging threshold.
-- Antennas requiring polswap.
-- Antennas that recorded 1-bit data.
-- Antennas requiring PolConvert.
+Pure-Python validation (no external `checklis` binary): checks each `.lis` file for
+duplicated/missing scans, and that all passes have unique `.lis`/MS/FITS-IDI names.
+Also extracts the correlator passes (`lisfiles.get_passes_from_lisfiles`).
 
-Then applies: `flag_weights`, `ysfocus`, `polswap`, `onebit`, `print_exp`, `tconvert`.
+### 4. `j2ms2` → `create_msfile`
 
-### `tconvert` → `tconvert`
+Fetches the correlator output for the jobs in the `.lis` file(s), then converts to a
+Measurement Set:
 
-Runs `tConvert` on all available MS files. If PolConvert antennas are flagged, also runs PolConvert.
+```bash
+getdata.pl -proj {EXP} -lis {exp}.lis
+j2ms2 -v {exp}.lis
+```
 
-### `post_polconvert` → `post_polconvert`
+For e-EVN EXPn, the MS project name is fixed up afterwards (`expname.py` equivalent,
+`process.update_ms_expname`). Metadata (antennas, sources, frequency setup) is then
+read back from the MS (`process.get_metadata_from_ms`), and — unless `--no-lag` is
+given — a lag-space MS is built to compute a per-scan antenna SNR
+(`process.compute_lag_snr`), feeding the automatic MS-ops decisions in `msops`.
 
-If PolConvert ran: renames `*.PCONVERT` files and re-runs standard plots on the new data.
+### 5. `standardplots` → `create_standardplots`
 
-### `antab` → `get_antab`
+Runs `jplotter`/`standardplots` to produce the weight, auto-correlation,
+cross-correlation, and amplitude/phase-vs-time plots:
 
-Retrieves the `.antab` amplitude calibration file. If it doesn't exist, invokes `antab_editor.py` for manual creation.
+```bash
+standardplots -weight [-scan {scan_no}] {exp}.ms {refant} {calsrcs}
+```
 
-### `pipeinputs` → `prepare_pipeline_inputs`
+If it fails, the manual `jplotter` session from the
+[old checklist](https://code.jive.eu/marcote/science_support_doc) is the fallback —
+see `guide/tools.md` for the `jplotter` command cheat-sheet. Plots are converted to
+PNG and become available in the web dashboard (`postprocess info --serve`).
 
-Prepares a draft input file for the EVN Pipeline and recovers all necessary calibration files.
+### 6. `msops` → `msops`
 
-### `pipeline` → `run_pipeline`
+Applies the MS operations. Parameters (weight threshold, polswap/polconvert/onebit
+antenna lists, refant) are resolved through the precedence rule: **experiment toml
+→ confident lag-MS auto-diagnostics → interactive dialog/dashboard → batch policy /
+`REVIEW_REQUIRED`** (see [Experiment TOML Schema](experiment-toml.md)). Unlike the
+historical standalone scripts, the operations run **in-process** via the `mstools`
+subpackage — there is no `ysfocus.py`/`polswap.py`/`flag_weights.py`/`scale1bit.py`
+call any more; the equivalent standalone entry point today is the `mstools` CLI:
 
-Runs the EVN Pipeline (`EVN.py`) for all correlator passes.
+```bash
+mstools run ysfocus {exp}.ms                        # Yebes mount fix (hofocus for Hobart)
+mstools run flag_weights {exp}.ms {threshold}        # flag + reports % flagged
+mstools run polswap {exp}.ms {antenna}               # fix swapped polarizations
+mstools run scale1bit {exp}.ms {antenna} [{antenna2} ...]  # scale 1-bit data to 2-bit
+```
 
-### `postpipe` → `post_pipeline`
+The resolved parameters are recorded into the experiment toml `[postprocess]`
+section so a re-run applies them silently (no dialog, no dashboard).
 
-Creates TASAV files, comment files, and the `feedback.pl` script. This step typically triggers a pause for human review.
+### 7. `tconvert` → `tconvert`
 
-### `prearchive` → `prearchive`
+Converts the MS to FITS-IDI:
 
-Appends Tsys/GC to FITS-IDI, re-archives, and prompts for final verification of the PI letter.
+```bash
+tConvert {exp}.ms {exp}_1_1.IDI
+```
 
-### `archive` → `archive`
+With `--tConvert-in-eee` (default), the MS is copied to `jops@eee:/data0/temp/`, run
+there, and the FITS-IDI files copied back (workaround for a broken local
+tConvert/PolConvert on some machines); `--no-tConvert-in-eee` runs locally.
 
-Sets archive credentials, creates the pipe letter, and archives all data products.
+### 8. `polconvert` → `polconvert`
+
+Runs **only** if any antenna is flagged for PolConvert (linear→circular
+polarization conversion). Prepares `polconvert_inputs.ini` and runs:
+
+```bash
+polconvert.py polconvert_inputs.ini
+```
+
+producing `{exp}_*_1.IDI*.PCONVERT` files. See
+[the manual PolConvert notes](https://code.jive.eu/marcote/science_support_doc)
+(including the legacy CASA-script fallback) if the automated run needs
+troubleshooting.
+
+### 9. `post_polconvert` → `post_polconvert`
+
+If PolConvert ran: backs up the original FITS-IDI files to `idi_ori/`, then renames
+`*.PCONVERT` files to the standard FITS-IDI names (pure file management, no external
+tool). Once the FITS-IDI files are final, the e-EVN completion marker
+(`{exp}.fitsidi_ready`) is written here — see
+[e-EVN Coordination](../guide/eevn.md).
+
+### 10. `standardplots2` → `msops_post`
+
+Re-runs `standardplots` (same command as step 5) on the post-MS-ops / post-PolConvert
+data, so the plots that get archived reflect what is actually delivered.
+
+### 11. `antab` → `antfiles`
+
+The most interactive automated step. In order:
+
+1. **e-EVN barrier (a)**: for a multi-experiment e-EVN run, the leader (EXP1) waits
+   until every sibling has its FITS-IDI completion marker (pauses cleanly otherwise —
+   see [e-EVN Coordination](../guide/eevn.md)).
+2. Station `.log`/`.antabfs` files are fetched through the retrieval backend:
+   ```bash
+   sftp evn@vlbeer.ira.inaf.it
+   cd vlbi_arch/{monthYY}
+   mget {exp}*.log {exp}*.antabfs {exp}*.uvflgfs
+   ```
+   (VLBA stations additionally pull `{exp}cal.vlba` — see `pipeline.get_vlba_antab`.)
+3. `.uvflg` files are created from the `.log` files:
+   ```bash
+   uvflgall.sh
+   ```
+4. The **station summary** (did-not-observe, missed time ranges, reduced bandwidth)
+   is printed as a terminal panel and sent via the configured notifier — see
+   [Communications](../guide/comms.md).
+5. `antab_editor.py` opens for manual ANTAB creation/editing:
+   ```bash
+   antab_editor.py [-e {EXPERIMENT}] [-l] [-a EXP2 [EXP3 ...]]
+   ```
+   This interaction is unchanged from the historical checklist — see the
+   [ANTAB files section](https://code.jive.eu/marcote/science_support_doc) for VLBA
+   handling, interpolation, and nominal-file fallbacks.
+
+For e-EVN EXPn (n>1): **barrier (b)** instead waits for the run leader's final
+`.antab`/`.uvflg` in `../EXP1/pipeline/in/`, then copies them over (renamed).
+
+### 12. `pipeinputs` → `create_pipeline_inputs`
+
+The selected **pipeline** backend's `prepare()`. For `aips` (default), builds the
+EVN Pipeline input file from the local antab/uvflg files:
+
+```bash
+# equivalent of pipeline.create_input_file, using $IN/template.inp as a base
+```
+
+### 13. `pipeline` → `run_pipeline`
+
+The pipeline backend's `run()`. For `aips`:
+
+```bash
+EVN.py {exp}.inp.txt
+```
+
+For `pipeline = "none"` in the experiment toml, this step is a no-op (calibration
+skipped entirely — see [Plugin Backends](../guide/backends.md)).
+
+### 14. `postpipe` → `pipeline_diagnostics`
+
+The pipeline backend's `collect()`, then `process.update_piletter`. For `aips`:
+
+```bash
+comment_tasav_file.py '{exp}'   # writes {exp}.tasav.txt and the .comment file
+```
+
+followed by the in-tree Python port of `feedback.pl`
+(`evn_postprocess.feedback` / `pipeline.pipeline_feedback` — no external Perl script
+needed any more). The PI letter is then auto-filled with non-observing antennas and
+PolConvert remarks. **This is the usual review pause**: the terminal and the
+notifier point to `postprocess info --serve` (dashboard: plots, Pipeline tab, and the
+Comments tab) and to the PI letter; answering re-runs from a chosen step, or falls
+through to finalisation.
+
+### 15. `prearchive` → `pre_archive`
+
+Appends the ANTAB Tsys/gain-curve information into the FITS-IDI files:
+
+```bash
+append_antab_idi.py [--antab {an_antab_file}] [--fits '{exp}_*_1.IDI*']
+```
+
+(internally: `append_tsys.py --replace` then `append_gc.py --replace` per FITS-IDI
+file). On success, the finalisation record (final antab/polconvert-input file links,
+flagged-data percentage) is written into the experiment toml `[postprocess]` section.
+
+### 16. `archive` → `archive`
+
+The selected **distribution** backend's `deliver()`. For `jive` (default), in strict
+order (stops at the first failure — nothing is archived if credentials/protection
+fail):
+
+```bash
+auth_pipe.py -e {EXP}_{YYMMDD} ...        # credentials / file protection
+archive.pl -auth -e {exp}_{YYMMDD} -n {exp} -p {password}
+archive.pl -stnd -e {exp}_{YYMMDD} {exp}.piletter *ps.gz
+archive.pl -fits -e {exp}_{YYMMDD} *IDI*
+archive.pl -pipe -e {exp}_{YYMMDD}        # pipeline $IN/$OUT directories
+```
+
+then the PI letter is sent, the operator is reminded to log station feedback
+(`/feedback` in Mattermost + JIVE RedMine), and — for NMEs — reminded to write the
+NME Report. `distribution = "none"` skips archiving entirely and leaves the data in
+place (external/standalone use).
+
+## Steps not run automatically
+
+A few historical checklist steps have no automated `Task` (still manual, run from
+`pipe`):
+
+```bash
+ampcal.sh   # copies pipeline gain corrections into the feedback database
+```
 
 ## Using step names
 
 ```bash
-# Run from msops to end:
+# Run from msops to the end:
 postprocess run msops
 
-# Run only pipeline and postpipe:
-postprocess run pipeline postpipe
+# Run only from tconvert to polconvert (inclusive):
+postprocess run tconvert polconvert
 
-# Re-run a single step's function:
-postprocess exec standardplots
+# List all steps and which have completed:
+postprocess list
 ```
+
+## `postprocess exec`: running a single underlying command
+
+`exec` calls one of the functions above directly, bypassing the step order and
+staleness checks — useful for a one-off retry. `postprocess exec` with no argument
+lists every command; the table mirrors the step-by-step tools described above:
+
+| Command | Underlying tool |
+| --- | --- |
+| `makelis` / `getlis` / `modlis` / `checklis` | `.lis` creation/copy/parsing (ccs) |
+| `getdata` / `j2ms2` / `expname` / `metadata` / `lagsnr` | `getdata.pl`, `j2ms2`, MS metadata |
+| `standardplots` / `gv` | `jplotter`/`standardplots`, `gv` viewer |
+| `ysfocus` / `polswap` / `flag_weights` / `onebit` | `mstools` MS operations |
+| `tconvert` / `polconvert` / `postpolconvert` | `tConvert`, `polconvert.py` |
+| `auth` / `protect` / `archive-fits` / `archive-pilet` | `auth_pipe.py`, `archive.pl` |
+| `append` | `append_antab_idi.py` (`append_tsys.py` + `append_gc.py`) |
+| `issues` / `nme` | Station-feedback / NME-report reminders |
+| `antab` / `uvflg` / `vlbeer` | `antab_editor.py`, `uvflgall.sh`, retrieval backend |
+| `pyinput` / `pipe` / `comment_tasav` / `feedback` | EVN Pipeline input, `EVN.py`, tasav/comment, feedback page |
+| `piletter` | PI letter auto-fill |

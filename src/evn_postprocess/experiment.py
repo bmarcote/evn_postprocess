@@ -6,6 +6,7 @@ This also keeps track of the steps that have been condducted in the post-process
 resumed, or restarted.
 """
 import os
+import re
 import copy
 import json
 import subprocess
@@ -159,12 +160,20 @@ def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]
 def retrieve_expname() -> str:
     """Returns the experiment name, assuming it is the name of the current directory.
 
+    The name is validated against the EVN experiment-code shape (letters followed by
+    digits, e.g. EB101, N24L2) instead of the historical MASTER_PROJECTS.LIS lookup,
+    so no server access is needed.
+
+    Raises:
+        ValueError: If the directory name does not look like an experiment code.
+
     Returns:
         str: The experiment name
     """
     potential_experiment = Path.cwd().name
-    # It will throw an exception if the experiment is not found
-    _ = parse_masterprojects(potential_experiment, retrieve_servers()['master_projects'])
+    if not re.fullmatch(r'[A-Za-z]+[0-9]+[A-Za-z0-9]*', potential_experiment):
+        raise ValueError(f"The current directory name '{potential_experiment}' does not look like "
+                         "an EVN experiment code. Use --expname to name the experiment explicitly.")
     return potential_experiment
 
 
@@ -512,25 +521,39 @@ class Antennas(list[Antenna]):
 
 @dataclass
 class Scan:
-    """Defines a scan in the experiment."""
+    """Defines a scan in the experiment.
+
+    ``phase_centers`` lists ALL sources correlated in the scan (multi-phase-centre
+    correlations have several); ``source`` remains the primary (first) one. An empty
+    tuple means "just the primary source" (single phase centre), which keeps old JSON
+    state files loading unchanged.
+    """
     scanno: str
     starttime: dt.datetime
     duration_s: int
     source: str
     stations_scheduled: tuple[str, ...]
     stations_observed: tuple[str, ...] = ()
+    phase_centers: tuple[str, ...] = ()
+
+    @property
+    def all_sources(self) -> tuple[str, ...]:
+        """All sources of the scan: the phase centres, or just the primary source."""
+        return self.phase_centers if self.phase_centers else (self.source,)
 
     def to_dict(self) -> dict:
         return {'scanno': self.scanno, 'starttime': self.starttime.isoformat(), 'duration_s': self.duration_s,
                 'source': self.source, 'stations_scheduled': list(self.stations_scheduled),
-                'stations_observed': list(self.stations_observed)}
+                'stations_observed': list(self.stations_observed),
+                'phase_centers': list(self.phase_centers)}
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Scan':
         return cls(scanno=data['scanno'], starttime=dt.datetime.fromisoformat(data['starttime']),
                    duration_s=data['duration_s'], source=data['source'],
                    stations_scheduled=tuple(data['stations_scheduled']),
-                   stations_observed=tuple(data.get('stations_observed', [])))
+                   stations_observed=tuple(data.get('stations_observed', [])),
+                   phase_centers=tuple(data.get('phase_centers', [])))
 
 
 class Scans(list[Scan]):
@@ -722,8 +745,33 @@ class Experiment:
     
     @property
     def multi_phase_center(self) -> bool:
-        """Returns if the experiment contains a multi-phase center correlation."""
+        """Returns if the experiment contains a multi-phase center correlation.
+
+        Detected either from the vex scan section (scans listing several sources) or,
+        as before, from the pass layout (multiple non-spectral-line passes).
+        """
+        if any(len(scan.phase_centers) > 1 for scan in self.scans):
+            return True
         return (len(self.correlator_passes) > 1) and (not self.spectral_line)
+
+    @property
+    def phase_center_sources(self) -> dict[str, list[str]]:
+        """The phase centres per primary source, for multi-phase-centre experiments.
+
+        Returns {primary_source: [all correlated sources of its scans]} for every
+        primary source whose scans carry more than one phase centre; empty otherwise.
+        This is the phase-centre -> pass mapping record: each phase centre ends up in
+        its own correlator pass (own .lis/MS/FITS-IDI), whose sources are read from
+        the MS as with any other multi-pass experiment.
+        """
+        mapping: dict[str, list[str]] = {}
+        for scan in self.scans:
+            if len(scan.phase_centers) > 1:
+                centers = mapping.setdefault(scan.source, [])
+                for center in scan.phase_centers:
+                    if center not in centers:
+                        centers.append(center)
+        return mapping
 
 
     @property
@@ -848,10 +896,20 @@ class Experiment:
                     duration_s = 0
                     
                 stations_scheduled = [s[0] for s in station_entries]
-                
+
+                # Multi-phase-centre correlations list several 'source' entries in the
+                # scan (vex $SCHED); the first one is the primary source.
+                sources_in_scan = [s for ss, s in scan.items() if ss == 'source']
+                if len(sources_in_scan) > 1:
+                    logger.debug(f"Scan {scanno} has {len(sources_in_scan)} phase centres: "
+                                 f"{', '.join(sources_in_scan)}.")
+
                 self.scans.append(Scan(scanno, starttime=starttime,
                                        duration_s=duration_s,
-                                       source=scan['source'], stations_scheduled=stations_scheduled))
+                                       source=sources_in_scan[0],
+                                       stations_scheduled=stations_scheduled,
+                                       phase_centers=tuple(sources_in_scan)
+                                       if len(sources_in_scan) > 1 else ()))
         except Exception as e:
             raise RuntimeError(f"Error processing VEX data: {e}")
 

@@ -4,9 +4,17 @@ This guide walks you through running a basic EVN post-processing session.
 
 ## Prerequisites
 
-1. SSH access to the JIVE processing servers (eee, ccs, pipe).
-2. A correlated experiment with FITS-IDI files available.
+### At JIVE (default `retrieval`/`pipeline`/`distribution` = `jive`/`aips`/`jive`)
+
+1. SSH access to the JIVE processing servers (eee, ccs, pipe, vlbeer).
+2. A correlated experiment on the correlator server.
 3. `computers.toml` configured (see [Configuration](configuration.md)).
+
+### Standalone / external use
+
+1. The observation `.vex` file and the `.lis` file(s) of the correlated passes,
+   already on disk.
+2. No server access needed at all with `--retrieval none --distribution none`.
 
 ## Basic usage
 
@@ -19,20 +27,34 @@ postprocess run
 
 The pipeline will:
 
-1. **Initialize** — Create directory structure, retrieve metadata from MASTER_PROJECTS.LIS.
-2. **Lis files** — Generate or verify `.lis` file(s) for j2ms2.
-3. **MS creation** — Run `j2ms2` to produce Measurement Set(s).
-4. **Standard plots** — Generate weight, auto-correlation, cross-correlation, and amp-vs-time plots. A web dashboard opens for review.
-5. **MS operations** — Interactively ask about weight threshold, polswap, 1-bit, and PolConvert antennas, then apply the operations.
-6. **tConvert / PolConvert** — Convert data and apply polarisation corrections.
-7. **ANTAB** — Retrieve or create the amplitude calibration table.
-8. **Pipeline** — Run the EVN Pipeline for all correlator passes.
-9. **Post-pipeline** — Create TASAV, comment files, feedback scripts.
-10. **Archive** — Set credentials, create the PI letter, archive data.
+1. **initialize** — Create the directory structure; obtain the `.vex` (via the
+   retrieval backend); derive observing date, e-EVN membership, stations, sources,
+   and scans directly from it; apply the experiment toml.
+2. **lisfiles** / **checklis** — Create/verify the `.lis` file(s) and extract the
+   correlator passes.
+3. **j2ms2** — Run `j2ms2` to produce Measurement Set(s).
+4. **standardplots** — Generate the standard plots. A web dashboard is available
+   for review (`postprocess info --serve`).
+5. **msops** — Resolve and apply weight threshold, polswap, 1-bit, and PolConvert
+   flags (from the experiment toml if set, otherwise interactively or from a
+   batch policy).
+6. **tconvert** / **polconvert** / **post_polconvert** / **standardplots2** —
+   Convert to FITS-IDI, apply polarisation corrections if needed, re-plot.
+7. **antab** — Fetch station files, show the pre-ANTAB station summary, open
+   `antab_editor.py`.
+8. **pipeinputs** / **pipeline** / **postpipe** — Run the calibration pipeline and
+   its diagnostics. **Pauses here for review** (dashboard + PI letter).
+9. **prearchive** / **archive** — Attach Tsys/GC, then deliver (credentials,
+   PI letter, archive upload).
+
+See [Workflow Overview](../guide/workflow.md) for the full step list and
+[Plugin Backends](../guide/backends.md) for how `retrieval`/`pipeline`/
+`distribution` change what actually runs at each stage.
 
 ## Resuming after interruption
 
-The pipeline saves state to `{expname}.json` after each step. Simply run `postprocess run` again — it resumes from the last successful step.
+The pipeline saves state to `{expname}.json` after each step. Simply run
+`postprocess run` again — it resumes from the last successful step.
 
 ## Specifying a step range
 
@@ -50,7 +72,7 @@ postprocess run msops tconvert
 # Terminal summary:
 postprocess info
 
-# Web dashboard (plots + summary):
+# Web dashboard (plots + summary + Comments tab):
 postprocess info --serve
 ```
 

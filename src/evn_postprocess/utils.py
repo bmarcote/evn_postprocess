@@ -10,6 +10,11 @@ from typing import Optional, TextIO, Union
 from loguru import logger
 import astropy.units as u
 
+# The line in the PI letter after which automatic remarks are inserted. Shared
+# single source of truth for process.update_piletter (weight/PolConvert remarks)
+# and distribution.jive._apply_comments_to_letter (review comments).
+PILETTER_REMARKS_ANCHOR = 'Further remarks:'
+
 # Used by format_remote_path to recognise ``{obsdate.strftime('FMT')}`` patterns,
 # with an optional trailing ``.lower()`` / ``.upper()`` method call (used e.g. by the
 # vlbeer path ``{obsdate.strftime('%b%y').lower()}`` to get a lowercase month name).
