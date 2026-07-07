@@ -5,7 +5,17 @@
 - **Python ≥ 3.13**
 - **python-casacore** — Required for Measurement Set access (linked against casacore libraries).
 - **Ghostscript (`gs`)** — Used to convert PostScript plots to PNG.
-- External binaries: `j2ms2`, `tConvert`, `EVN.py`, `feedback.pl`, `archive.pl` (resolved at runtime, see [External Tools](../guide/tools.md)).
+- External binaries (only needed for the `jive`/`aips` backends; not required for a
+  fully local `--retrieval none --pipeline none` run): `j2ms2`, `tConvert`,
+  `EVN.py`, `archive.pl`, `antab_editor.py` (resolved at runtime, see
+  [External Tools](../guide/tools.md)).
+
+!!! note "Standalone / non-JIVE use"
+    The core package (`.vex`/`.lis` parsing, MS operations via `mstools`,
+    experiment-toml handling) only needs `python-casacore` and pure-Python
+    dependencies. JIVE-specific tooling (ssh access, AIPS/ParselTongue, MySQL
+    client) is only imported when the corresponding backend (`jive`, `aips`) is
+    actually selected — see [Plugin Backends](../guide/backends.md).
 
 ## Install with pip
 
@@ -52,6 +62,15 @@ pip install evn-postprocess[test]
 # or
 uv add --dev pytest pytest-mock
 ```
+
+### Source-classification catalogue lookup
+
+```bash
+pip install evn-postprocess[catalogs]
+```
+
+Optional; without it, [heuristic source classification](../guide/source-classification.md)
+degrades gracefully to scan-statistics-only rules.
 
 ## Verifying the installation
 

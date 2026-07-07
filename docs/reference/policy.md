@@ -1,6 +1,9 @@
 # Policy File Reference
 
-A `policy.toml` file provides all decisions for unattended (batch) operation.
+A `policy.toml` file provides all decisions for unattended (batch) operation. It
+sits *beneath* the [experiment toml](experiment-toml.md): when both define the same
+parameter, the experiment toml always wins — see
+[Parameter precedence](experiment-toml.md#parameter-precedence).
 
 ## Schema
 

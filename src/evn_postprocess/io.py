@@ -10,21 +10,30 @@ from . import utils
 from .experiment import Experiment, Server, Servers, parse_masterprojects  # noqa: F401  (re-exported below)
 
 
-def get_init_files(exp: Experiment, servers: Servers) -> bool:
-    """Retrieves the files related to this experiment as .vix (or .vox), .piletter and .expsum.
+def get_init_files(expname: str, servers: Servers, eEVNname: str | None = None) -> bool:
+    """Retrieves the .vix (or .vox) vex file of the experiment, plus the .piletter.
+
+    The vex file is the only hard requirement (all experiment metadata derives from
+    it); the .piletter is fetched best-effort for the later distribution stage and its
+    absence only logs a warning. The historical .expsum retrieval is gone: source
+    types and PI information now come from the experiment toml.
 
     Args:
-        exp (Experiment): Experiment object containing experiment metadata.
+        expname (str): Experiment name.
         servers (Servers): Server configuration objects.
+        eEVNname (str | None): Name of the e-EVN run (EXP1) when known; the vex file on
+            the correlator server carries that name. Defaults to *expname*: on a first
+            e-EVN EXPn initialization the run name is not yet known (it comes from the
+            vex itself), so the fetch may fail and the caller should instruct the
+            operator to copy the vex from ../EXP1.
 
     Returns:
-        bool: True if the files were retrieved successfully, False otherwise.
+        bool: True if the vex file is present locally after the call.
     """
-    eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
+    eEVNname = expname if eEVNname is None else eEVNname
     piletter_server = servers['piletters']
-    piletter_path = Path(f"{exp.expname.lower()}.piletter")
-    expsum_path = Path(f"{exp.expname.lower()}.expsum")
-    main_vex = Path(f"{exp.expname.upper()}.vix")
+    piletter_path = Path(f"{expname.lower()}.piletter")
+    main_vex = Path(f"{expname.upper()}.vix")
 
     def fetch_piletter():
         if not piletter_path.exists():
@@ -33,21 +42,13 @@ def get_init_files(exp: Experiment, servers: Servers) -> bool:
         else:
             logger.debug(f"{piletter_path.name} already exists")
 
-
-    def fetch_expsum():
-        if not expsum_path.exists():
-            utils.scp(f"{piletter_server.user}@{piletter_server.host}:{piletter_server.path / expsum_path}", '.')
-            logger.debug(f"{expsum_path.name} was not found. Retrieved from {piletter_server.host}.")
-        else:
-            logger.debug(f"{expsum_path.name} already exists")
-
     def fetch_vix_or_vox():
         ccs_server = servers['ccs']
         base_path = Path(str(ccs_server.path).format(expname=eEVNname))
         remote_host = f"{ccs_server.user}@{ccs_server.host}"
         # Try .vox first, fallback to .vix
         if main_vex.exists():
-            logger.debug(f"{exp.expname.upper()}.vix already exists.")
+            logger.debug(f"{expname.upper()}.vix already exists.")
             return True
 
         for ext in ['vox', 'vix']:
@@ -64,21 +65,22 @@ def get_init_files(exp: Experiment, servers: Servers) -> bool:
                 main_vex.symlink_to(file_path)
                 logger.debug(f"Symlink {file_path} -> {main_vex} created.")
             except FileExistsError:
-                logger.error(f"{exp.expname.lower()}vix/vox file not found in {remote_host}. It may have a non-standard name.")
+                logger.error(f"{expname.lower()} vix/vox file not found in {remote_host}. "
+                             "It may have a non-standard name.")
                 return False
 
             return True
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [
-            executor.submit(fetch_piletter),
-            executor.submit(fetch_expsum),
-            executor.submit(fetch_vix_or_vox)
-        ]
-        for future in futures:
-            future.result()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {'piletter': executor.submit(fetch_piletter),
+                   'vex': executor.submit(fetch_vix_or_vox)}
+        try:
+            futures['piletter'].result()
+        except Exception as e:  # best-effort: only needed at distribution time
+            logger.warning(f"Could not retrieve {piletter_path.name} (continuing): {e}")
+        futures['vex'].result()
 
-    return all([piletter_path.exists(), expsum_path.exists(), main_vex.exists()])
+    return main_vex.exists()
 
 
 def get_vlbeer_sched_files(expname: str, obsdate: dt.date, server: Server) -> bool:

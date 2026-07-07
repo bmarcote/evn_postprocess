@@ -17,12 +17,18 @@ dependencies = [
     "python-casacore",
     "rich",
     "rich-argparse",
+    "tomlkit",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=7.0.0",
     "pytest-mock>=3.10.0",
+]
+# RFC-catalogue lookup for heuristic source classification (source_classify.py);
+# without it, classification degrades gracefully to scan statistics only.
+catalogs = [
+    "vlbiplanobs>=5.0",
 ]
 docs = [
     "zensical",

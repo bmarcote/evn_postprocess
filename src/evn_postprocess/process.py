@@ -934,7 +934,7 @@ def update_piletter(exp: experiment.Experiment) -> bool:
                                                     f"{ant.name.capitalize()}: Could not observe.")
 
                     destfile.write(tmp_line)
-                    if ('Further remarks:' in tmp_line) and (not polconvert_written):
+                    if (utils.PILETTER_REMARKS_ANCHOR in tmp_line) and (not polconvert_written):
                         # The polconvert paragraph, the bandwidth-limitation paragraph, and
                         # the opacity paragraph are independent: each may apply on its own.
                         # Previously the bandwidth and opacity blocks were nested inside

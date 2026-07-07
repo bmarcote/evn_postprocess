@@ -38,7 +38,8 @@ it will continue from the last successful step.[/italic][/dim]
 """
 
 help_calsources = 'Calibrator sources to use in standardplots (comma-separated, no spaces). ' \
-                  'If not provided, it will pick the fringefinders found in the .expsum file.'
+                  'If not provided, it will pick the fringefinders declared in the experiment ' \
+                  'toml file (or classified heuristically).'
 
 help_run = """[bold]Runs the post-process from a given step[/bold].
 
@@ -54,8 +55,9 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
 
         The available steps are:
             - [bold green]initialize[/bold green] : Sets up the experiment, creates the required
-                                                    folders in @eee and @pipe, and copies the
-                                                    already-existing files (.expsum, .vix, etc).
+                                                    folders, locates (or retrieves) the .vix/.vex
+                                                    file, and derives all metadata from it and the
+                                                    experiment toml.
             - [bold green]lisfiles[/bold green] : Produces a .lis file(s) in @ccs
                                                   and copies them to @eee.
             - [bold green]checklis[/bold green] : Checks the existing .lis files.
@@ -225,6 +227,18 @@ def main():
     parser.add_argument('--refant', type=str, nargs='+', default=None,
                         help='Reference antenna(s) to use (space-separated two-letter codes).\n'
                         'Overrides the auto-selected reference antenna after loading the experiment.')
+    parser.add_argument('--retrieval', type=str, default=None, metavar='MODE',
+                        help='How the input files are obtained: "jive" (JIVE servers; default) or '
+                             '"none" (all files already local; no server is ever contacted).\n'
+                             '[dim]Overrides the [retrieval] mode of the experiment toml.[/dim]')
+    parser.add_argument('--pipeline', type=str, default=None, metavar='MODE',
+                        help='Calibration pipeline to run: "aips" (EVN.py; default), "none", or '
+                             '"vpipe" (future).\n'
+                             '[dim]Overrides the [pipeline] mode of the experiment toml.[/dim]')
+    parser.add_argument('--distribution', type=str, default=None, metavar='MODE',
+                        help='Delivery/archiving mode: "jive" (default), "none" (nothing is '
+                             'archived), or "sweeps" (future).\n'
+                             '[dim]Overrides the [distribution] mode of the experiment toml.[/dim]')
     parser.add_argument('--policy', type=str, default=None, metavar='FILE',
                         help='Path to a policy.toml file with the unattended decisions '
                              '(weight threshold, polswap/polconvert/onebit antennas, refant, '
@@ -280,6 +294,18 @@ def main():
     parser_edit.add_argument('values', type=str, nargs='*', default=[],
                              help='Value(s) to set. If omitted, lists available options.')
     args = parser.parse_args()
+
+    # Validate the backend names before anything runs: an unknown backend (from any
+    # of the three plugin families) must abort before any step executes.
+    from . import distribution, pipelines, retrieval
+    try:
+        retrieval.set_cli_mode(args.retrieval)
+        pipelines.set_cli_mode(args.pipeline)
+        distribution.set_cli_mode(args.distribution)
+    except (retrieval.RetrievalError, pipelines.PipelineError,
+            distribution.DistributionError) as e:
+        rprint(f"[red]{e}[/red]")
+        sys.exit(1)
 
     _con = Console(stderr=False, highlight=False)
     _err_con = Console(stderr=True, highlight=False)
@@ -346,6 +372,24 @@ def main():
                 rprint(f"[red]Error initializing experiment: {e}[/red]")
                 sys.exit(1)
 
+        # Attach the experiment toml ({expname}.toml) when present. Runtime-only:
+        # it is never serialized into the JSON checkpoint (see experiment_state).
+        from . import experiment_state
+        try:
+            experiment_state.attached_toml(exp, fresh=True)
+        except experiment_state.ExperimentTomlError as e:
+            rprint(f"[red]Error in the experiment toml file: {e}[/red]")
+            sys.exit(1)
+
+        # Fail fast on an invalid/unimplemented pipeline or distribution mode: a typo
+        # in the toml must not surface only hours later at the pipeline step.
+        try:
+            pipelines.get_pipeline(pipelines.selected_mode(exp.exp_toml))
+            distribution.get_distributor(distribution.selected_mode(exp.exp_toml))
+        except (pipelines.PipelineError, distribution.DistributionError) as e:
+            rprint(f"[red]{e}[/red]")
+            sys.exit(1)
+
         # Apply --refant override if provided
         if args.refant:
             _apply_refant(exp, args.refant)
@@ -406,6 +450,14 @@ def main():
                 serve_dashboard(exp, exp.dirs.plots)
             else:
                 exp.print_blessed(outputfile=None)
+                # Show the values sourced from the experiment toml, marked with
+                # their origin so they are distinguishable from vex/lis metadata.
+                toml_lines = experiment_state.summary_lines(exp.exp_toml)
+                if toml_lines:
+                    rprint(f"\n[bold]From the experiment file "
+                           f"{exp.exp_toml.path.name}:[/bold]")
+                    for line in toml_lines:
+                        print(f"  {line}")  # plain print: lines may contain [brackets]
     elif args.subpar == 'list' or args.subpar == 'last':
         try:
             workflow.list_tasks(expname, print_docs=True)

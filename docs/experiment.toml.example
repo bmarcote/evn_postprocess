@@ -1,0 +1,112 @@
+# Experiment file for evn_postprocess: EXPNAME.toml
+#
+# This file complements the .vex and .lis files with information they cannot express,
+# and records every decision taken during post-processing so a re-run is fully
+# reproducible and silent.
+#
+# Ownership of sections:
+#   Written by you (or the retrieval module):  [observation], [sources], [[pi]],
+#                                              [retrieval], [pipeline], [distribution]
+#   Written by the program:                    [postprocess], [comments]
+#   Exception: when source types are missing, the program records its heuristic
+#   guesses into [sources] with `guessed = true`; correct them freely.
+#
+# Every section and key is optional. Missing values are inferred (with a logged
+# warning), asked interactively, or resolved from policy.toml in batch mode.
+
+[observation]
+expname = "EB101"
+# Support scientist username assigned to the experiment.
+supsci = "marcote"
+# Scans to process. A single scan, a range, or comma-separated combinations;
+# also accepted as a TOML list of such entries, e.g. ["1-40", "45", "50-120"].
+# Default: all scans in the .vex.
+# NOTE: currently recorded but NOT applied (scan filtering is a planned feature;
+# a warning is logged when this key is set).
+scans = "1-40,45,50-120"
+
+# One [[pi]] entry per PI / contact person, in order of preference.
+[[pi]]
+name = "Jane Doe"
+email = "jane.doe@institute.edu"
+
+[[pi]]
+name = "John Smith"
+email = "john.smith@other.edu"
+
+# Source types: "target" | "calibrator" | "fringefinder" | "other".
+# `protected = true` means archive credentials are required to download its data.
+# `guessed = true` marks a program-made heuristic classification (editable).
+# NOTE: source names containing '+', '-', or '.' must be quoted (TOML bare-key rule).
+[sources."J1848+3244"]
+type = "target"
+protected = true
+
+[sources."J1846+3229"]
+type = "calibrator"
+
+[sources."3C345"]
+type = "fringefinder"
+
+[sources."J2002+4725"]
+type = "other"
+guessed = true
+
+[retrieval]
+# How the input files (.vex, .lis; later .log/.antabfs) are obtained:
+# "jive" (copy from JIVE servers, default) | "none" (all files already local).
+mode = "jive"
+
+[pipeline]
+# Calibration pipeline to run: "aips" (EVN.py, default) | "none" | "vpipe" (future).
+mode = "aips"
+
+[distribution]
+# Delivery/archiving mode: "jive" (default) | "none" | "sweeps" (future).
+mode = "jive"
+
+# ----------------------------------------------------------------------------------
+# Sections below are written by the program. A file that already contains them
+# re-runs end-to-end with no questions asked. Shown here filled in as an example.
+# ----------------------------------------------------------------------------------
+
+[postprocess]
+# Weight threshold applied by flag_weights, and the resulting flagged fraction (%).
+weight_threshold = 0.9
+flagged_percent = 3.2
+# Antennas (two-letter codes) that required corrections.
+polswap = ["Wb"]
+polconvert = ["Kt"]
+onebit = []
+# Reference antenna(s), in priority order.
+refant = ["Ef", "Mc"]
+# Links to the files produced/used, for reproducibility and the PI letter.
+antab_files = ["../EB101/eb101.antab"]
+polconvert_input_files = ["polconvert_eb101.inp"]
+
+# Gain corrections applied to the ANTAB information, per station (future: uploaded
+# to the EVN feedback database).
+[postprocess.gain_corrections]
+Ef = 1.00
+Wb = 1.12
+
+[comments]
+# Free-text note about the experiment as a whole (shown in the PI letter).
+general = "Good observation overall. Correlated with 2 s integration time."
+
+# One entry per station. `status`: "success" (no problem) | "minor" (issues
+# reported) | "major" (could not observe). Shown as green/orange/red in the
+# dashboard. Notes are pre-filled automatically from the observation (missed
+# scans, reduced bandwidth) and the station feedback database, and remain
+# editable in the dashboard Comments tab.
+[comments.stations.Ef]
+status = "success"
+note = ""
+
+[comments.stations.Wb]
+status = "minor"
+note = "Missed 09:30-10:15 UT (wind stow). Polarizations swapped, corrected."
+
+[comments.stations.Tr]
+status = "major"
+note = "Did not observe."

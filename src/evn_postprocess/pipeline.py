@@ -22,78 +22,15 @@ from . import comment_tasav
 
 
 def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
-    """Retrieves the antabfs, log, and flag files that should be in vlbeer for the given experiment.
+    """Retrieves the antabfs, log, and flag files from vlbeer.
+
+    DEPRECATED thin alias: the implementation moved to
+    retrieval.jive.fetch_from_vlbeer (all vlbeer knowledge belongs to the retrieval
+    backends). Kept so historical call sites keep working; new code should go through
+    ``retrieval.get_retriever(...).fetch_station_files(exp)``.
     """
-    def fetch_file(ext: str):
-        try:
-            s_formatted = utils.format_remote_path(str(server.path), obsdate=exp.obsdate)
-            utils.scp(f"{server.user}@{server.host}:{Path(s_formatted) / f'{exp.expname.lower()}*{ext}'}",
-                      str(exp.dirs.pipe_temp) + "/", timeout=120)
-        except subprocess.TimeoutExpired:
-            rprint(f"[bold yellow]Could not retrieve the {ext} files from vlbeer.[/bold yellow]")
-            logger.warning(f"Could not retrieve {ext} files from vlbeer")
-        except ValueError:
-            rprint(f"[bold yellow]Could not find the {ext} files in vlbeer.[/bold yellow]")
-            logger.warning(f"Could not find {ext} files in vlbeer")
-
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(fetch_file, a_file) for a_file in ('antabfs', 'log', 'flag')]
-        for future in futures:
-            future.result()
-
-    for ext in ('antabfs', 'log'):
-        for a_file in list(exp.dirs.pipe_temp.glob(f"{exp.expname.lower()}*{ext}")):
-            ant = a_file.name.split('.')[0].replace(f"{exp.expname.lower()}", '').split('_')[0].capitalize()
-            try:
-                if ext == 'log':
-                    exp.antennas[ant].logfsfile = True
-                elif ext == 'antabfs':
-                    exp.antennas[ant].antabfsfile = True
-            except ValueError:
-                # Likely the antenna has a different name in the expsum, or is an e-EVN
-                # where this antenna participated but not in this particular experiment
-                rprint(f"[yellow]The antenna '{ant}' has a log file but is not found in " \
-                       "the .expsum file. Just ignoring this and continuing...[/yellow]")
-
-    logger.debug(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
-    if len(set(exp.antennas.names)-set(exp.antennas.logfsfile)) > 0:
-        logger.debug("# Missing files for: " \
-                f"{', '.join((set(exp.antennas.names)-set(exp.antennas.logfsfile)).intersection(set(exp.antennas.observed)))}\n")
-    else:
-        logger.debug("# No missing log files for any station that observed.\n")
-
-    logger.debug(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}")
-    if len(set(exp.antennas.names)-set(exp.antennas.antabfsfile)) > 0:
-        logger.debug("# Missing files for: " \
-                f"{', '.join((set(exp.antennas.names)-set(exp.antennas.antabfsfile)).intersection(set(exp.antennas.observed)))}\n")
-    else:
-        logger.debug("# No missing antab files for any station that observed.\n")
-
-    # In case of high-freq observations, some stations added the "opacity_corrected" flag to
-    #the POLY= line, against any standard... Let's remove it so antab_editor (later) can work fine.
-    # Remove ',opacity_corrected' from local antabfs files and add a comment line after
-    for antabfs_file in exp.dirs.pipe_temp.glob(f"{exp.expname.lower()}*.antabfs"):
-        with open(antabfs_file, 'r') as f:
-            content = f.read()
-        
-        if ',opacity_corrected' in content:
-            new_lines = []
-            for line in content.split('\n'):
-                if ',opacity_corrected' in line:
-                    new_lines.append(line.replace(',opacity_corrected', ''))
-                    new_lines.append('! opacity_corrected')
-                else:
-                    new_lines.append(line)
-            
-            with open(antabfs_file, 'w') as f:
-                f.write('\n'.join(new_lines))
-            
-            antenna = antabfs_file.name.split('.')[0].replace(f"{exp.expname.lower()}_", '').split('_')[0].capitalize()
-            if antenna in exp.antennas:
-                exp.antennas[antenna].opacity = True
-
-    exp.store()
-    return True
+    from .retrieval.jive import fetch_from_vlbeer
+    return fetch_from_vlbeer(exp, server)
 
 
 def get_vlba_antab(exp) -> Optional[bool]:

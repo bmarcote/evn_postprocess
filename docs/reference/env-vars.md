@@ -13,14 +13,18 @@ All environment variables recognised by `evn_postprocess`.
 
 ## External tool overrides
 
-| Variable | Description |
+Derived automatically by `tools.resolve` as `EVN_<NAME>`, where `<NAME>` is the
+tool's canonical name uppercased with `.`/`-` replaced by `_` — see
+[External Tools](../guide/tools.md) for the full resolution order.
+
+| Variable | Overrides |
 | --- | --- |
-| `EVN_J2MS2` | Path to the `j2ms2` binary. |
-| `EVN_TCONVERT` | Path to the `tConvert` binary. |
-| `EVN_EVNPY` | Path to the `EVN.py` pipeline script. |
-| `EVN_FEEDBACKPL` | Path to `feedback.pl`. |
-| `EVN_ARCHIVEPL` | Path to `archive.pl`. |
-| `EVN_ANTAB_EDITOR` | Path to `antab_editor.py`. |
+| `EVN_J2MS2` | `j2ms2` |
+| `EVN_TCONVERT` | `tConvert` |
+| `EVN_EVN_PY` | `EVN.py` |
+| `EVN_FEEDBACK_PL` | `feedback.pl` |
+| `EVN_ARCHIVE_PL` | `archive.pl` |
+| `EVN_ANTAB_EDITOR_PY` | `antab_editor.py` |
 
 ## Communications
 
@@ -34,4 +38,4 @@ All environment variables recognised by `evn_postprocess`.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `EVN_COMPUTERS_TOML` | (search order) | Explicit path to `computers.toml`. |
-| `XDG_CONFIG_HOME` | `~/.config` | Base directory for user-level config files. |
+| `XDG_CONFIG_HOME` | `~/.config` | Base directory for user-level config files (also used to locate `~/.config/evn_postprocess/feedbackdb.toml`, see the [review API](../api/review.md)). |

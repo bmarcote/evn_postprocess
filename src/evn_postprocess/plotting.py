@@ -719,7 +719,7 @@ def _build_dashboard_html() -> str:
     Returns:
         HTML string.
     """
-    return r"""<!DOCTYPE html>
+    html = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -796,6 +796,7 @@ def _build_dashboard_html() -> str:
     <div class="tabs">
       <button class="tab" id="tab-pipeline" onclick="showTab('pipeline')">Pipeline</button>
       <button class="tab active" id="tab-plots" onclick="showTab('plots')">Standard Plots</button>
+      <button class="tab" id="tab-comments" onclick="showTab('comments')">Comments</button>
     </div>
     <!-- Pipeline feedback tab (only shown once the pipeline feedback page exists) -->
     <div class="tab-view" id="view-pipeline" style="display:none">
@@ -814,6 +815,22 @@ def _build_dashboard_html() -> str:
       </div>
       <div id="plot-area">
         <p id="plot-placeholder">Select a plot type above to view.</p>
+      </div>
+    </div>
+    <!-- Comments tab: general experiment note + per-station notes and status,
+         persisted into the experiment toml [comments] section. -->
+    <div class="tab-view" id="view-comments" style="display:none">
+      <div style="margin-bottom:1rem">
+        <label for="comment-general"><b>General experiment note</b> (shown in the PI letter):</label><br>
+        <textarea id="comment-general" rows="3" style="width:100%"></textarea>
+      </div>
+      <table class="scan-table" id="comments-table" style="width:100%">
+        <thead><tr><th>Station</th><th>Status</th><th style="width:70%">Note</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div style="margin-top:1rem">
+        <button id="btn-save-comments" onclick="saveComments()">Save comments</button>
+        <span id="comments-saved-msg" style="color:var(--green); display:none; margin-left:1rem">Saved.</span>
       </div>
     </div>
     <div class="footer-note">Press Ctrl+C in the terminal to stop the dashboard server.</div>
@@ -1050,11 +1067,63 @@ async function changeRefant(newRef) {
 }
 
 function showTab(name) {
-  const isPipe = name === 'pipeline';
-  document.getElementById('view-pipeline').style.display = isPipe ? 'block' : 'none';
-  document.getElementById('view-plots').style.display = isPipe ? 'none' : 'block';
-  document.getElementById('tab-pipeline').classList.toggle('active', isPipe);
-  document.getElementById('tab-plots').classList.toggle('active', !isPipe);
+  for (const tab of ['pipeline', 'plots', 'comments']) {
+    document.getElementById('view-' + tab).style.display = (tab === name) ? 'block' : 'none';
+    document.getElementById('tab-' + tab).classList.toggle('active', tab === name);
+  }
+}
+
+/* Comments tab: statuses map to the dashboard traffic-light colours. */
+const STATUS_COLORS = {success: 'var(--green)', minor: '#f0c040', major: 'var(--red)'};
+
+function statusSelect(name, status) {
+  let html = `<select class="status-select" data-station="${name}" ` +
+             `style="color:${STATUS_COLORS[status]}" onchange="recolorStatus(this)">`;
+  for (const s of ['success', 'minor', 'major']) {
+    html += `<option value="${s}" ${s === status ? 'selected' : ''}>` +
+            `${{success: '● no problem', minor: '● issues reported', major: '● could not observe'}[s]}</option>`;
+  }
+  return html + '</select>';
+}
+
+function recolorStatus(sel) { sel.style.color = STATUS_COLORS[sel.value]; }
+
+async function loadComments() {
+  try {
+    const resp = await fetch(API + '/api/comments');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    document.getElementById('comment-general').value = data.general || '';
+    const tbody = document.querySelector('#comments-table tbody');
+    tbody.innerHTML = '';
+    for (const [name, entry] of Object.entries(data.stations).sort()) {
+      const row = document.createElement('tr');
+      row.innerHTML = `<td><b>${name}</b></td><td>${statusSelect(name, entry.status)}</td>` +
+        `<td><textarea class="station-note" data-station="${name}" rows="2" style="width:100%">` +
+        `${entry.note || ''}</textarea></td>`;
+      tbody.appendChild(row);
+    }
+    for (const sel of document.querySelectorAll('.status-select')) recolorStatus(sel);
+  } catch (e) { console.error('loadComments error:', e); }
+}
+
+async function saveComments() {
+  const stations = {};
+  for (const sel of document.querySelectorAll('.status-select')) {
+    stations[sel.dataset.station] = {status: sel.value, note: ''};
+  }
+  for (const ta of document.querySelectorAll('.station-note')) {
+    if (stations[ta.dataset.station]) stations[ta.dataset.station].note = ta.value;
+  }
+  const resp = await fetch(API + '/api/set_comments', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({general: document.getElementById('comment-general').value, stations})
+  });
+  const result = await resp.json();
+  if (result.ok) {
+    const msg = document.getElementById('comments-saved-msg');
+    msg.style.display = ''; setTimeout(() => { msg.style.display = 'none'; }, 3000);
+  } else { alert('Error saving comments: ' + (result.error || 'unknown')); }
 }
 
 async function loadPipeline() {
@@ -1092,9 +1161,19 @@ async function loadPipeline() {
 loadSummary();
 loadPlots();
 loadPipeline();
+loadComments();
 </script>
 </body>
 </html>"""
+    # Guard against vocabulary drift: the JS above hand-codes the station statuses
+    # (STATUS_COLORS / option labels); they must match experiment_state.STATION_STATUSES.
+    from .experiment_state import STATION_STATUSES
+    for status in STATION_STATUSES:
+        if f"'{status}'" not in html:
+            raise RuntimeError(f"Dashboard HTML is missing station status '{status}': "
+                               "update the Comments-tab JS to match "
+                               "experiment_state.STATION_STATUSES.")
+    return html
 
 
 class _DashboardHandler(http.server.BaseHTTPRequestHandler):
@@ -1128,6 +1207,8 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._serve_plot_list()
             elif self.path == "/api/pipeline":
                 self._serve_json(self.pipeline_pages)
+            elif self.path == "/api/comments":
+                self._serve_comments()
             elif self.path.startswith("/plots/"):
                 self._serve_plot_file()
             elif self.path.startswith("/pipeline/"):
@@ -1144,13 +1225,73 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_POST(self):
-        """Route POST requests. Only /api/set_source_type is supported."""
+        """Route POST requests to the appropriate handler."""
         if self.path == "/api/set_source_type":
             self._handle_set_source_type()
         elif self.path == "/api/set_refant":
             self._handle_set_refant()
+        elif self.path == "/api/set_comments":
+            self._handle_set_comments()
         else:
             self.send_error(404)
+
+    # Cache of the auto-generated default station comments (computed once per server
+    # run: it may query the feedback database). None means "not computed yet".
+    _default_comments: Optional[dict] = None
+
+    def _exp_toml(self):
+        """Returns the experiment toml of the served experiment, loading it if needed."""
+        from . import experiment_state
+        return experiment_state.attached_toml(self.__class__.exp)
+
+    def _serve_comments(self):
+        """GET /api/comments: general note + per-station comments for the Comments tab.
+
+        Saved toml [comments] entries win; stations without a saved entry get the
+        auto-generated defaults (station-summary findings + feedback-DB comment).
+        """
+        from . import review as _review
+        exp_toml = self._exp_toml()
+        if self.__class__._default_comments is None:
+            try:
+                self.__class__._default_comments = _review.default_station_comments(self.__class__.exp)
+            except Exception as exc:  # defaults must never break the dashboard
+                logger.warning(f"Could not compute the default station comments: {exc}")
+                self.__class__._default_comments = {}
+        stations = {}
+        for name, default in self.__class__._default_comments.items():
+            saved = exp_toml.comments.stations.get(name)
+            stations[name] = ({'status': saved.status, 'note': saved.note} if saved is not None
+                              else dict(default))
+        for name, saved in exp_toml.comments.stations.items():
+            stations.setdefault(name, {'status': saved.status, 'note': saved.note})
+        self._serve_json({'general': exp_toml.comments.general, 'stations': stations})
+
+    def _handle_set_comments(self):
+        """POST /api/set_comments: persists the Comments tab into the experiment toml.
+
+        Expects JSON body: {"general": str, "stations": {NAME: {"status": s, "note": n}}}.
+        """
+        from . import experiment_state
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            general = body.get("general")
+            stations = body.get("stations", {})
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._serve_json({"ok": False, "error": str(exc)})
+            return
+        try:
+            # Reload from disk before writing: the paused workflow process may have
+            # recorded parameters since this server loaded the toml (lost-update guard).
+            exp_toml = experiment_state.attached_toml(self.__class__.exp, fresh=True)
+            exp_toml.record_comments(general=general, stations=stations)
+            exp_toml.save()
+        except (experiment_state.ExperimentTomlError, OSError) as exc:
+            self._serve_json({"ok": False, "error": str(exc)})
+            return
+        logger.info(f"Experiment comments saved to {exp_toml.path}.")
+        self._serve_json({"ok": True})
 
     def _handle_set_source_type(self):
         """Change a source's type and persist via exp.store().
@@ -1340,8 +1481,14 @@ def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -
     _DashboardHandler.dashboard_html = _build_dashboard_html()
     _DashboardHandler.pipeline_dir = pipeline_dir if pipeline_pages else None
     _DashboardHandler.pipeline_pages = pipeline_pages
+    # Reset the per-experiment cache: a second serve_dashboard call in the same
+    # process must not show the previous experiment's default station comments.
+    _DashboardHandler._default_comments = None
 
-    server = http.server.HTTPServer(("0.0.0.0", port), _DashboardHandler)
+    # Bind localhost only: the dashboard exposes unauthenticated write endpoints
+    # (comments, source types, refant), so it must not be reachable from the network.
+    # Remote viewing goes through the SSH tunnel whose command is printed below.
+    server = http.server.HTTPServer(("127.0.0.1", port), _DashboardHandler)
     url = f"http://localhost:{port}"
     rprint(f"[green]\n{'=' * 60}[/green]")
     rprint(f"[green]  EVN Dashboard for {exp.expname} running at:[/green]")
