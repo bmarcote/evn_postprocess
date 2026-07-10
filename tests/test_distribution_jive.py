@@ -22,6 +22,11 @@ Further remarks:
 
 - Automatic remark already present.
 
+Remarks on individual stations:
+
+Wb:
+Ef:
+
 Best regards,
 '''
 
@@ -74,7 +79,7 @@ def test_pi_missing_interactive_prompts_and_persists(tmp_path, monkeypatch):
 
 # ----------------------------------------------------------- letter injection
 
-def test_comments_injected_after_anchor(tmp_path, monkeypatch):
+def test_comments_appended_to_station_lines(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / 'eb101.piletter').write_text(LETTER)
     exp = make_exp(tmp_path)
@@ -83,11 +88,32 @@ def test_comments_injected_after_anchor(tmp_path, monkeypatch):
                                            'Ef': es.StationComment('success', '')})
     assert JiveDistributor()._apply_comments_to_letter(exp) is True
     text = (tmp_path / 'eb101.piletter').read_text()
+    # General note goes after the 'Further remarks:' anchor via the sentinel.
     assert COMMENTS_SENTINEL in text
     assert text.index('Further remarks:') < text.index(COMMENTS_SENTINEL)
     assert 'Good observation overall.' in text
+    # Per-station note appended to the matching antenna line, not a separate list.
     assert 'Wb: Missed one hour. (minor issues)' in text
-    assert 'Ef:' not in text.split(COMMENTS_SENTINEL)[1].split('- Automatic')[0]  # success+empty skipped
+    assert text.index('Remarks on individual stations:') < text.index('Wb: Missed one hour.')
+    # success + empty note leaves the Ef line untouched.
+    assert 'Ef:\n' in text
+
+
+def test_reduced_bandwidth_note_not_appended(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'eb101.piletter').write_text(LETTER)
+    exp = make_exp(tmp_path)
+    # Wb only has the reduced-bandwidth note (already stated under Further remarks);
+    # Ef has that note plus a real one.
+    exp.exp_toml.record_comments(
+        stations={'Wb': es.StationComment('minor', 'Observed with reduced bandwidth (6/8 subbands).'),
+                  'Ef': es.StationComment('minor',
+                                          'Missed one hour. Observed with reduced bandwidth (6/8 subbands).')})
+    assert JiveDistributor()._apply_comments_to_letter(exp) is True
+    text = (tmp_path / 'eb101.piletter').read_text()
+    assert 'reduced bandwidth' not in text
+    assert 'Wb:\n' in text  # bandwidth-only note dropped, line untouched
+    assert 'Ef: Missed one hour. (minor issues)' in text
 
 
 def test_comments_injection_is_idempotent(tmp_path, monkeypatch):

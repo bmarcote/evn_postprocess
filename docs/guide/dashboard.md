@@ -15,11 +15,13 @@ serves until you close it with `Ctrl+C`.
 ### Standalone
 
 ```bash
-postprocess info --serve
+postprocess dashboard
 ```
 
-Useful for reviewing a previously processed experiment without re-running steps.
-Prints the SSH tunnel command needed to open it from your local browser.
+Launches the same dashboard on the given experiment, outside the workflow.
+`postprocess info --serve` is an equivalent alias. Useful for reviewing a
+previously processed experiment without re-running steps. Prints the SSH tunnel
+command needed to open it from your local browser.
 
 ## Accessing the dashboard remotely
 

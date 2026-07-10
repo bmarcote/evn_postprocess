@@ -8,7 +8,7 @@ postprocess [-h] [-e EXPNAME] [-jss SUPSCI] [-d DIR] [-a] [--no-lag] [--debug]
             [--retrieval MODE] [--pipeline MODE] [--distribution MODE]
             [--policy FILE] [--tConvert-in-eee | --no-tConvert-in-eee]
             [--batch] [--comms FILE] [-v]
-            {info,list,last,run,exec,edit} ...
+            {info,dashboard,list,last,run,exec,edit} ...
 ```
 
 ### Global options
@@ -54,6 +54,18 @@ postprocess info [--serve]
 
 Shows experiment metadata (including values sourced from the experiment toml,
 marked with their origin). With `--serve`: launches the web dashboard (see
+[Dashboard](../guide/dashboard.md)).
+
+#### `dashboard`
+
+```text
+postprocess dashboard
+```
+
+Launches the web dashboard with the experiment info and plots — the same
+dashboard that regular operations open during the `msops` step. Equivalent to
+`postprocess info --serve`. The server blocks until you press Ctrl+C and prints
+the SSH tunnel command needed to open it from your local browser (see
 [Dashboard](../guide/dashboard.md)).
 
 #### `list` / `last`
