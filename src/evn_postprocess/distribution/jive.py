@@ -7,6 +7,8 @@ the feedback-database upload). Imported only when the 'jive' backend is selected
 """
 from __future__ import annotations
 
+import re
+
 from loguru import logger
 
 from . import Distributor
@@ -14,6 +16,28 @@ from . import Distributor
 
 COMMENTS_SENTINEL = "- Notes from the post-processing review:"
 STATUS_LABELS = {'minor': ' (minor issues)', 'major': ' (could not observe)', 'success': ''}
+# The reduced-bandwidth sentence is dropped from the per-station notes: it is already
+# written once, for all affected antennas, under 'Further remarks:' by
+# process.update_piletter. Matches the wording produced in review.default_station_comments.
+_BANDWIDTH_NOTE_RE = re.compile(r"\s*Observed with reduced bandwidth\s*\([^)]*\)\.?", re.IGNORECASE)
+
+
+def _station_note(entry) -> str:
+    """The per-station note to append to the antenna line in the PI letter.
+
+    Strips the reduced-bandwidth sentence (already covered under 'Further remarks:')
+    and appends the status label. Returns '' when nothing meaningful remains.
+
+    Args:
+        entry: a StationComment (status + free-text note).
+
+    Returns:
+        The note text to append after the antenna name, or '' to skip the station.
+    """
+    note = _BANDWIDTH_NOTE_RE.sub('', entry.note).strip()
+    if not note:
+        return ''
+    return f"{note}{STATUS_LABELS.get(entry.status, '')}"
 
 
 class JiveDistributor(Distributor):
@@ -99,45 +123,65 @@ class JiveDistributor(Distributor):
         exp_toml.save()
 
     def _apply_comments_to_letter(self, exp) -> bool:
-        """Injects the review [comments] into the PI letter, after 'Further remarks:'.
+        """Injects the review [comments] into the PI letter.
 
-        Adds the general experiment note and the per-station notes (stations with a
-        note or a non-success status). Idempotent: a sentinel line guards against
-        double insertion on re-runs. A missing letter or anchor logs a warning and
-        returns False without blocking the delivery (the operator reviews the letter
-        before sending anyway).
+        Per-station notes are appended to the matching antenna line under the
+        'Remarks on individual stations' section (the antenna name, capitalised, is
+        matched the same way as process.update_piletter's "Could not observe." fill),
+        rather than being repeated as a separate list. The reduced-bandwidth sentence
+        is stripped from each note because it is already written once, for all affected
+        antennas, under 'Further remarks:'. The general experiment note is inserted
+        after the 'Further remarks:' anchor, guarded by a sentinel line.
+
+        Idempotent: the general note is guarded by the sentinel; each per-station note
+        is only appended when it is not already present on the antenna line. A missing
+        letter logs a warning and returns False without blocking the delivery (the
+        operator reviews the letter before sending anyway).
         """
         from pathlib import Path
         from ..utils import PILETTER_REMARKS_ANCHOR
         exp_toml = self._exp_toml(exp)
         comments = exp_toml.comments
-        station_lines = [f"    {name}: {entry.note}{STATUS_LABELS.get(entry.status, '')}"
-                         for name, entry in sorted(comments.stations.items())
-                         if entry.note or entry.status != 'success']
-        if not comments.general and not station_lines:
+        station_notes = {name: _station_note(entry) for name, entry in comments.stations.items()}
+        station_notes = {name: note for name, note in station_notes.items() if note}
+        if not comments.general and not station_notes:
             return True  # nothing to add
         letter = Path(f"{exp.expname.lower()}.piletter")
         if not letter.exists():
             logger.warning(f"No PI letter ({letter}) to add the review comments to.")
             return False
-        text = letter.read_text(encoding='utf-8')
-        if COMMENTS_SENTINEL in text:
-            logger.debug("Review comments already present in the PI letter; not re-inserting.")
-            return True
-        if PILETTER_REMARKS_ANCHOR not in text:
-            logger.warning(f"No '{PILETTER_REMARKS_ANCHOR}' anchor in {letter}; review "
-                           "comments not inserted (add them manually if needed).")
-            return False
-        block = [COMMENTS_SENTINEL]
-        if comments.general:
-            block.append(f"    {comments.general}")
-        block.extend(station_lines)
-        anchor_end = text.index(PILETTER_REMARKS_ANCHOR) + len(PILETTER_REMARKS_ANCHOR)
-        # find() (not index()): the anchor may be the very last line without a newline.
-        eol = text.find('\n', anchor_end)
-        eol = len(text) if eol == -1 else eol + 1
-        letter.write_text(text[:eol] + '\n' + '\n'.join(block) + '\n' + text[eol:],
-                          encoding='utf-8')
+
+        lines = letter.read_text(encoding='utf-8').splitlines(keepends=True)
+        unplaced = []
+        for name, note in sorted(station_notes.items()):
+            label = f"{name.capitalize()}:"
+            for i, line in enumerate(lines):
+                if label in line:
+                    if note not in line:
+                        stripped = line.rstrip('\n')
+                        newline = line[len(stripped):]
+                        lines[i] = f"{stripped} {note}{newline}"
+                    break
+            else:
+                unplaced.append(name)
+        if unplaced:
+            logger.warning(f"No individual-station line for {', '.join(sorted(unplaced))} in "
+                           f"{letter}; their review notes were not added.")
+
+        text = ''.join(lines)
+        if comments.general and COMMENTS_SENTINEL not in text:
+            if PILETTER_REMARKS_ANCHOR not in text:
+                logger.warning(f"No '{PILETTER_REMARKS_ANCHOR}' anchor in {letter}; the general "
+                               "review note was not inserted (add it manually if needed).")
+            else:
+                anchor_end = text.index(PILETTER_REMARKS_ANCHOR) + len(PILETTER_REMARKS_ANCHOR)
+                # find() (not index()): the anchor may be the very last line without a newline.
+                eol = text.find('\n', anchor_end)
+                eol = len(text) if eol == -1 else eol + 1
+                block = f"\n{COMMENTS_SENTINEL}\n    {comments.general}\n"
+                text = text[:eol] + block + text[eol:]
+
+        letter.write_text(text, encoding='utf-8')
         logger.info(f"Review comments inserted into {letter}.")
         return True
 
