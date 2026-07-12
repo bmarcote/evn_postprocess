@@ -1,6 +1,6 @@
 [project]
 name = "evn-postprocess"
-version = "2.0.0a6"
+version = "2.0.0a7"
 description = "Suite to run internal processing of EVN observations"
 readme = "README.md"
 authors = [

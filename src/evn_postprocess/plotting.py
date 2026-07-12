@@ -771,11 +771,14 @@ def _build_dashboard_html() -> str:
   #plot-placeholder { text-align: center; color: var(--dim); padding: 3rem; }
   .footer-note { text-align: center; color: var(--dim); font-size: 0.8rem; margin-top: 1rem; }
   /* Tabs (right panel) */
-  .tabs { display: flex; gap: 0.4rem; margin-bottom: 0.8rem; border-bottom: 1px solid var(--border); }
-  .tab { background: transparent; color: var(--dim); border: none; border-bottom: 2px solid transparent;
-         padding: 0.5rem 1rem; font-size: 1.1rem; cursor: pointer; font-family: inherit; }
-  .tab:hover { color: var(--text); }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.8rem; border-bottom: 1px solid var(--border); }
+  /* flex: 0 0 auto + white-space: nowrap keep every tab label fully visible: buttons
+     never shrink to zero width or clip their text when another tab is selected. */
+  .tab { flex: 0 0 auto; white-space: nowrap; background: transparent; color: var(--text);
+         border: none; border-bottom: 2px solid transparent; padding: 0.5rem 1rem;
+         font-size: 1.1rem; cursor: pointer; font-family: inherit; opacity: 0.6; }
+  .tab:hover { opacity: 1; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; opacity: 1; }
   .tab-view { height: calc(100% - 3rem); }
   #pipeline-frame { width: 100%; height: 100%; min-height: 75vh; border: 1px solid var(--border);
                     border-radius: 4px; background: #fff; }
@@ -791,31 +794,16 @@ def _build_dashboard_html() -> str:
     <h2>Experiment Summary</h2>
     <div id="summary-content"><p style="color:var(--dim)">Loading...</p></div>
   </div>
-  <!-- Right panel: pipeline + standard-plots tabs -->
+  <!-- Right panel: comments / standard-plots / pipeline tabs -->
   <div class="panel" id="plots-panel">
+    <!-- Tab order: Comments, Standard Plots, Pipeline. All three buttons are always
+         visible; the selected one is marked with the .active underline (see .tab CSS).
+         Standard Plots is the default; loadPipeline() switches to Pipeline once its
+         feedback page exists. -->
     <div class="tabs">
-      <button class="tab" id="tab-pipeline" onclick="showTab('pipeline')">Pipeline</button>
-      <button class="tab active" id="tab-plots" onclick="showTab('plots')">Standard Plots</button>
       <button class="tab" id="tab-comments" onclick="showTab('comments')">Comments</button>
-    </div>
-    <!-- Pipeline feedback tab (only shown once the pipeline feedback page exists) -->
-    <div class="tab-view" id="view-pipeline" style="display:none">
-      <div class="controls" id="pipeline-controls"></div>
-      <p id="pipeline-placeholder" style="display:none; text-align:center; color:var(--dim); padding:3rem">
-        The pipeline feedback page is not available yet. It is generated after the EVN pipeline runs.</p>
-      <iframe id="pipeline-frame" title="Pipeline feedback"></iframe>
-    </div>
-    <!-- Standard plots tab -->
-    <div class="tab-view" id="view-plots">
-      <div class="controls">
-        <div><label for="sel-type">Plot type:</label><br>
-          <select id="sel-type"><option value="">-- select --</option></select></div>
-        <div><label for="sel-scan">Scan:</label><br>
-          <select id="sel-scan"><option value="">all</option></select></div>
-      </div>
-      <div id="plot-area">
-        <p id="plot-placeholder">Select a plot type above to view.</p>
-      </div>
+      <button class="tab active" id="tab-plots" onclick="showTab('plots')">Standard Plots</button>
+      <button class="tab" id="tab-pipeline" onclick="showTab('pipeline')">Pipeline</button>
     </div>
     <!-- Comments tab: general experiment note + per-station notes and status,
          persisted into the experiment toml [comments] section. -->
@@ -832,6 +820,25 @@ def _build_dashboard_html() -> str:
         <button id="btn-save-comments" onclick="saveComments()">Save comments</button>
         <span id="comments-saved-msg" style="color:var(--green); display:none; margin-left:1rem">Saved.</span>
       </div>
+    </div>
+    <!-- Standard plots tab -->
+    <div class="tab-view" id="view-plots">
+      <div class="controls">
+        <div><label for="sel-type">Plot type:</label><br>
+          <select id="sel-type"><option value="">-- select --</option></select></div>
+        <div><label for="sel-scan">Scan:</label><br>
+          <select id="sel-scan"><option value="">all</option></select></div>
+      </div>
+      <div id="plot-area">
+        <p id="plot-placeholder">Select a plot type above to view.</p>
+      </div>
+    </div>
+    <!-- Pipeline feedback tab (only shown once the pipeline feedback page exists) -->
+    <div class="tab-view" id="view-pipeline" style="display:none">
+      <div class="controls" id="pipeline-controls"></div>
+      <p id="pipeline-placeholder" style="display:none; text-align:center; color:var(--dim); padding:3rem">
+        The pipeline feedback page is not available yet. It is generated after the EVN pipeline runs.</p>
+      <iframe id="pipeline-frame" title="Pipeline feedback"></iframe>
     </div>
     <div class="footer-note">Press Ctrl+C in the terminal to stop the dashboard server.</div>
   </div>

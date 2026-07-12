@@ -121,6 +121,16 @@ With [bold green]--serve[/bold green] the information is shown in a web dashboar
 instead of the terminal. Instructions on how to open it (SSH tunnel command) are printed.
 """
 
+help_dashboard = """[bold]Opens the web dashboard for the experiment.[/bold]
+
+Serves a local web dashboard with the experiment metadata, the scan overview, the
+standard plots, the review-comments editor and, once the EVN Pipeline has run, its
+feedback page. The SSH tunnel command needed to open it from your local browser is
+printed, and the server runs until you press Ctrl+C.
+
+[dim]This is the same dashboard reachable through 'postprocess info --serve'.[/dim]
+"""
+
 help_last = "[bold]Returns the last step that run successfully from post-process " \
             "in this experiment.[/bold]"
 
@@ -271,6 +281,9 @@ def main():
                              help='Open the web dashboard with the experiment info and plots '
                                   'instead of printing to the terminal. Prints the SSH tunnel '
                                   'command needed to open it from your local browser.')
+    _ = subparsers.add_parser('dashboard',
+                              help='Open the web dashboard with the experiment info and plots.',
+                              description=help_dashboard, formatter_class=parser.formatter_class)
     _ = subparsers.add_parser('list', help='Shows the different steps to be run and which ones have been run.',
                               description=help_last,
                               formatter_class=parser.formatter_class)
@@ -333,7 +346,7 @@ def main():
         rprint("[red]Please check the server configuration or specify a directory with -d/--dir[/red]")
         sys.exit(1)
 
-    if (not args.subpar) or (args.subpar in ('info', 'run')):
+    if (not args.subpar) or (args.subpar in ('info', 'run', 'dashboard')):
         try:
             cwd.mkdir(exist_ok=True)
             os.chdir(cwd)
@@ -444,20 +457,19 @@ def main():
                     rprint(f"[red]Error: {error_msg}[/red]")
                     sys.exit(1)
             workflow.run_workflow(exp, args.no_archive, debug=args.debug, from_step=from_step, to_step=to_step)
-        else:  # args.subpar == 'info'
-            if args.serve:
-                from .plotting import serve_dashboard
-                serve_dashboard(exp, exp.dirs.plots)
-            else:
-                exp.print_blessed(outputfile=None)
-                # Show the values sourced from the experiment toml, marked with
-                # their origin so they are distinguishable from vex/lis metadata.
-                toml_lines = experiment_state.summary_lines(exp.exp_toml)
-                if toml_lines:
-                    rprint(f"\n[bold]From the experiment file "
-                           f"{exp.exp_toml.path.name}:[/bold]")
-                    for line in toml_lines:
-                        print(f"  {line}")  # plain print: lines may contain [brackets]
+        elif args.subpar == 'dashboard' or (args.subpar == 'info' and args.serve):
+            from .plotting import serve_dashboard
+            serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out)
+        else:  # args.subpar == 'info' without --serve: plain terminal output
+            exp.print_blessed(outputfile=None)
+            # Show the values sourced from the experiment toml, marked with
+            # their origin so they are distinguishable from vex/lis metadata.
+            toml_lines = experiment_state.summary_lines(exp.exp_toml)
+            if toml_lines:
+                rprint(f"\n[bold]From the experiment file "
+                       f"{exp.exp_toml.path.name}:[/bold]")
+                for line in toml_lines:
+                    print(f"  {line}")  # plain print: lines may contain [brackets]
     elif args.subpar == 'list' or args.subpar == 'last':
         try:
             workflow.list_tasks(expname, print_docs=True)
