@@ -11,7 +11,9 @@ from unittest.mock import Mock, patch
 
 from concurrent.futures import ThreadPoolExecutor
 
-from evn_postprocess import lisfiles, pipeline, experiment, io, workflow, utils
+import importlib.util
+
+from evn_postprocess import lisfiles, pipeline, experiment, workflow, utils, servers
 
 
 class TestLisFileOrderingDeterministic:
@@ -135,14 +137,27 @@ class TestRunAntabEditoreEVNAssociatesOtherExperiments:
             mock_shell.assert_not_called()
 
 
-class TestParseMasterprojectsReExportedFromIO:
-    """`io.parse_masterprojects` must be the same callable as
-    `experiment.parse_masterprojects` so legacy code paths continue to work
-    after the de-duplication.
+class TestLegacyServerBootstrapRemoved:
+    """The MASTER_PROJECTS/.jexp bootstrap is gone from the core (Phase 2, Issue 4):
+    the observing date and e-EVN membership come from the vex file instead.
     """
 
-    def test_reexport_is_canonical(self):
-        assert io.parse_masterprojects is experiment.parse_masterprojects
+    def test_parse_masterprojects_removed(self):
+        assert not hasattr(experiment, "parse_masterprojects")
+        assert not hasattr(io, "parse_masterprojects")
+
+    def test_io_module_removed(self):
+        # The io module was entirely server-side transport; it is gone (its live
+        # functions moved into the JIVE retrieval backend).
+        assert importlib.util.find_spec("evn_postprocess.io") is None
+
+    def test_server_classes_moved_out_of_core(self):
+        # Server/Servers/retrieve_servers left the core data model for the dedicated
+        # servers module (Phase 2, Issue 4).
+        assert not hasattr(experiment, "Server")
+        assert not hasattr(experiment, "Servers")
+        assert not hasattr(experiment, "retrieve_servers")
+        assert hasattr(servers, "Server") and hasattr(servers, "retrieve_servers")
 
 
 class TestPipelineUvflgUnnumberedGuarded:

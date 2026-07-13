@@ -1,7 +1,7 @@
 # Batch Mode
 
 Batch mode allows running the pipeline unattended — useful for queue-based systems
-(HTCondor, Slurm, cron) or the standalone (`--retrieval none --distribution none`)
+(HTCondor, Slurm, cron) or the standalone (`--mode regular`)
 use case. Every interaction point either resolves silently from the experiment toml
 / policy, or writes a `REVIEW_REQUIRED` marker and exits cleanly (code 0) instead of
 blocking on a prompt.
@@ -72,5 +72,5 @@ batch            = true
 | MS operations decision | Terminal prompt / auto-diagnostics | Toml → policy → `REVIEW_REQUIRED` |
 | `postpipe` review pause | Rich panel + terminal prompt (approve / re-run from step / quit) | `REVIEW_REQUIRED` marker + notifier, exit 0 |
 | e-EVN barriers | Same pause/resume either way | Same pause/resume either way |
-| Missing PI info at `archive` | Interactive prompt | Fails clearly, naming the missing field |
+| Missing PI info at `distribute` | Interactive prompt | Fails clearly, naming the missing field |
 | Pipeline errors | Rich traceback | Logged, non-zero exit |

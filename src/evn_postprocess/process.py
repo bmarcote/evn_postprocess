@@ -26,6 +26,7 @@ from rich.panel import Panel
 from rich.console import Console
 from concurrent.futures import ThreadPoolExecutor
 from . import experiment, utils, mstools
+from . import servers as _servers
 from .plotting import convert_ps_to_png, serve_dashboard
 # polconvert_main kept for future use once version compatibility is resolved.
 # from .scripts.polconvert import main as polconvert_main
@@ -267,9 +268,12 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                     lag_args.append(f"fo:filter/source={','.join(cal_sources)}")
                 if not exp.eEVNname:
                     lag_args.append("fo:nosquash_source_table")
+                # Quiet: the lag MS run goes only to its log file (echo=False), so its
+                # output does not garble the foreground pass's real-time terminal stream
+                # while both run in parallel (Issue 7).
                 lag_future = pool.submit(utils.shell_command, "j2ms2", lag_args,
                     shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0,
-                    logfile=exp.dirs.logs / "j2ms2-lag.log")
+                    logfile=exp.dirs.logs / "j2ms2-lag.log", echo=False)
 
             ms_results = [f.result() for f in ms_futures]
             if lag_future is not None:
@@ -1109,7 +1113,7 @@ def tconvert(exp: experiment.Experiment) -> bool:
                                 logfile=exp.dirs.logs / "tconvert.log")
         return True
 
-    server = experiment.retrieve_servers()['eee']
+    server = _servers.retrieve_servers()['eee']
     remote = f"{server.user}@{server.host}"
     with ThreadPoolExecutor(max_workers=min(len(passes), 4)) as pool:
         futures = [pool.submit(_tconvert_pass_in_eee, exp, remote, a_pass) for a_pass in passes]

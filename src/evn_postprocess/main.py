@@ -4,7 +4,6 @@
 import os
 import sys
 import json
-import glob
 import argparse
 from loguru import logger
 from rich import print as rprint
@@ -17,36 +16,33 @@ from . import experiment
 from . import lisfiles
 
 
-__version__ = version('evn_postprocess')
-__prog__ = 'postprocess'
-usage = "%(prog)s  [-h] [options] [commands]\n"
-description = """[bold]Post-processing of EVN experiments.[/bold]\n
+__version__: str = version(distribution_name='evn_postprocess')
+__prog__: str = 'postprocess'
+usage: str = "%(prog)s  [-h] [options] [commands]\n"
+description: str = """[bold]Post-processing of EVN experiments.[/bold]\n
 
-This program runs the full post-processing for a correlated EVN experiment until distribution,
-following the steps described in the EVN Post-Processing Guide, in a semi-automatic way.
+Runs the full post-processing for a correlated EVN experiment. It takes the output from the SFXC
+correlator and finishes when the data are ready for distribution, following the steps described
+in the EVN Post-Processing Guide, in a semi-automatic way.
 
 [dim]The program would retrieve the experiment code from the current working directory,
-and the associated Support Scientist from the parent directory. Otherwise they need to be
+and the associated Support Scientist from the current user. Otherwise they need to be
 specified manually.
 
 The user can also specify to run only some of the steps or to start the process from a given step
 (for those cases when the process has partially run previously). If the post-processing already run
 in the past, it will automatically continue from the last successful step that run.
 
-[italic]If the post-processing partially run before this execution,
-it will continue from the last successful step.[/italic][/dim]
+[italic]If the post-processing partially run before this execution, it will continue from the last
+successful step.[/italic][/dim]
 """
-
-help_calsources = 'Calibrator sources to use in standardplots (comma-separated, no spaces). ' \
-                  'If not provided, it will pick the fringefinders declared in the experiment ' \
-                  'toml file (or classified heuristically).'
 
 help_run = """[bold]Runs the post-process from a given step[/bold].
 
         Three different approaches can be used:
 
         [italic]postprocess run[/italic] (no param)
-                            Runs the entire post-process (or from the last run step).
+                            Runs the entire post-process (or from the last step that finalized properly).
         [italic]postprocess run STEP1[/italic]
                             Runs from STEP1 until the end (or until manual interaction is required).
         [italic]postprocess run STEP1 STEP2[/italic]
@@ -54,12 +50,10 @@ help_run = """[bold]Runs the post-process from a given step[/bold].
 
 
         The available steps are:
-            - [bold green]initialize[/bold green] : Sets up the experiment, creates the required
-                                                    folders, locates (or retrieves) the .vix/.vex
+            - [bold green]init[/bold green] : Sets up the experiment, creates the required
+                                              folders, locates (or retrieves) the .vix/.vex
                                                     file, and derives all metadata from it and the
                                                     experiment toml.
-            - [bold green]lisfiles[/bold green] : Produces a .lis file(s) in @ccs
-                                                  and copies them to @eee.
             - [bold green]checklis[/bold green] : Checks the existing .lis files.
             - [bold green]j2ms2[/bold green] : Gets the data for all available .lis files and
                                                runs j2ms2 to produce MS files.
@@ -107,7 +101,7 @@ help_edit = """[bold]Edit some of the parameters related to the experiment[/bold
                                                   for the given source.
         - [bold green]polconvert[/bold green] : marks the antennas to be pol converted.
         - [bold green]polswap[/bold green] : marks the antennas to be pol swapped.
-        - [bold green]onebit[/bold green] :  marks the antennas to be corrected because
+        - [bold green]onebit[/old green] :  marks the antennas to be corrected because
                                              they observed with one bit.
 """
 
@@ -215,7 +209,6 @@ def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
 def main():
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
                                      formatter_class=RawTextRichHelpFormatter)
-                                     # formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-e', '--expname', type=str, default=None, \
                         help='Name of the EVN experiment (case-insensitive).' \
                         '\n[dim]By default recovered from the current working directory.[/dim]')
@@ -237,18 +230,18 @@ def main():
     parser.add_argument('--refant', type=str, nargs='+', default=None,
                         help='Reference antenna(s) to use (space-separated two-letter codes).\n'
                         'Overrides the auto-selected reference antenna after loading the experiment.')
-    parser.add_argument('--retrieval', type=str, default=None, metavar='MODE',
-                        help='How the input files are obtained: "jive" (JIVE servers; default) or '
-                             '"none" (all files already local; no server is ever contacted).\n'
-                             '[dim]Overrides the [retrieval] mode of the experiment toml.[/dim]')
-    parser.add_argument('--pipeline', type=str, default=None, metavar='MODE',
-                        help='Calibration pipeline to run: "aips" (EVN.py; default), "none", or '
-                             '"vpipe" (future).\n'
-                             '[dim]Overrides the [pipeline] mode of the experiment toml.[/dim]')
-    parser.add_argument('--distribution', type=str, default=None, metavar='MODE',
-                        help='Delivery/archiving mode: "jive" (default), "none" (nothing is '
-                             'archived), or "sweeps" (future).\n'
-                             '[dim]Overrides the [distribution] mode of the experiment toml.[/dim]')
+    parser.add_argument('--mode', type=str, default=None, choices=['supsci', 'regular', 'sweeps'],
+                        help='Operating mode. Auto-detected from the OS user/group when omitted '
+                             '("jops" or the "supsci" group -> supsci; the "sweeps" group -> '
+                             'sweeps; otherwise regular).\n'
+                             '- "supsci": JIVE support-scientist job (retrieve from the correlator, '
+                             'ANTAB from vlbeer, archive/deliver).\n'
+                             '- "regular": all inputs already local, no server contact, no archiving.\n'
+                             '- "sweeps": the automated SWEEPS system (not implemented yet).\n'
+                             '[dim]Overrides and re-persists the mode stored on the experiment.[/dim]')
+    parser.add_argument('--config', type=str, default=None, metavar='FILE',
+                        help='Path to the experiment toml used as the prepared config (sweeps mode). '
+                             'Optional: defaults to the conventional {expname}.toml in the directory.')
     parser.add_argument('--policy', type=str, default=None, metavar='FILE',
                         help='Path to a policy.toml file with the unattended decisions '
                              '(weight threshold, polswap/polconvert/onebit antennas, refant, '
@@ -308,16 +301,9 @@ def main():
                              help='Value(s) to set. If omitted, lists available options.')
     args = parser.parse_args()
 
-    # Validate the backend names before anything runs: an unknown backend (from any
-    # of the three plugin families) must abort before any step executes.
-    from . import distribution, pipelines, retrieval
-    try:
-        retrieval.set_cli_mode(args.retrieval)
-        pipelines.set_cli_mode(args.pipeline)
-        distribution.set_cli_mode(args.distribution)
-    except (retrieval.RetrievalError, pipelines.PipelineError,
-            distribution.DistributionError) as e:
-        rprint(f"[red]{e}[/red]")
+    # An explicit --config must exist if given (sweeps prepared config; optional).
+    if args.config is not None and not Path(args.config).is_file():
+        rprint(f"[red]--config file not found: {args.config}[/red]")
         sys.exit(1)
 
     _con = Console(stderr=False, highlight=False)
@@ -338,13 +324,18 @@ def main():
         rprint(f"[red]{e}[/red]")
         rprint("[red]Please specify the experiment name with -e/--expname or run from the experiment directory[/red]")
         sys.exit(1)
-    
-    try:
-        cwd = Path(args.dir if args.dir else experiment.retrieve_servers()['eee'].path / expname.upper())
-    except (FileNotFoundError, KeyError) as e:
-        rprint(f"[red]Error setting up directory: {e}[/red]")
-        rprint("[red]Please check the server configuration or specify a directory with -d/--dir[/red]")
-        sys.exit(1)
+
+    if args.dir:
+        cwd = Path(args.dir)
+    else:
+        # Default working directory: the JIVE eee location when a computers.toml is
+        # configured (supsci); otherwise the current directory, so a regular user needs
+        # no server configuration to run in their own experiment folder.
+        try:
+            from . import servers as _servers
+            cwd = Path(_servers.retrieve_servers()['eee'].path) / expname.upper()
+        except (FileNotFoundError, KeyError):
+            cwd = Path('.')
 
     if (not args.subpar) or (args.subpar in ('info', 'run', 'dashboard')):
         try:
@@ -353,11 +344,19 @@ def main():
         except (OSError, PermissionError) as e:
             rprint(f"[red]Error creating or accessing directory {cwd}: {e}[/red]")
             sys.exit(1)
-            
+
+        from . import mode as _mode
         if Path(f"{expname.lower()}.json").exists():
             rprint(f"[bold]Recovering previously-stored information for {expname}[/bold]")
             try:
                 exp = experiment.Experiment.load(expname)
+                # Resolve the mode: --mode overrides the stored one (re-persisted, with a
+                # warning on change); otherwise the stored mode is reused, or re-detected
+                # for a pre-Phase-2 checkpoint that has none.
+                resolved = _mode.resolve(cli_mode=args.mode, stored_mode=exp.mode)
+                if exp.mode != resolved:
+                    exp.mode = resolved
+                    exp.store()
                 # Just to avoid that the user deleted some folders
                 workflow.create_folder_structure()
                 # User may have changed the lis files... (exclude the auxiliary
@@ -377,7 +376,11 @@ def main():
                 if supsci == 'unknown':
                     raise ValueError("Could not determine the username. Please specify it with --supsci.")
 
-                exp = workflow.initialize_experiment(expname, supsci)
+                # A fresh experiment: resolve the mode from --mode or auto-detection, and
+                # persist it so every later invocation reuses it (no re-detection).
+                resolved = _mode.resolve(cli_mode=args.mode, stored_mode=None)
+                rprint(f"[dim]Operating mode: {resolved.value}[/dim]")
+                exp = workflow.initialize_experiment(expname, supsci, resolved)
                 # if args.j2ms2par is not None:
                 #     exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
                 exp.store()
@@ -385,21 +388,29 @@ def main():
                 rprint(f"[red]Error initializing experiment: {e}[/red]")
                 sys.exit(1)
 
-        # Attach the experiment toml ({expname}.toml) when present. Runtime-only:
-        # it is never serialized into the JSON checkpoint (see experiment_state).
+        # Attach the experiment toml as the prepared config. Runtime-only: it is never
+        # serialized into the JSON checkpoint (see experiment_state). --config names an
+        # explicit toml (sweeps); otherwise the conventional {expname}.toml is used.
         from . import experiment_state
         try:
-            experiment_state.attached_toml(exp, fresh=True)
+            if args.config is not None:
+                exp.exp_toml = experiment_state.load_toml(Path(args.config))
+            else:
+                experiment_state.attached_toml(exp, fresh=True)
         except experiment_state.ExperimentTomlError as e:
             rprint(f"[red]Error in the experiment toml file: {e}[/red]")
             sys.exit(1)
 
-        # Fail fast on an invalid/unimplemented pipeline or distribution mode: a typo
-        # in the toml must not surface only hours later at the pipeline step.
+        # Fail fast on an invalid/unimplemented backend for the resolved mode: a bad
+        # mode must not surface only hours later at the pipeline step.
+        from . import distribution, pipelines, retrieval
         try:
-            pipelines.get_pipeline(pipelines.selected_mode(exp.exp_toml))
-            distribution.get_distributor(distribution.selected_mode(exp.exp_toml))
-        except (pipelines.PipelineError, distribution.DistributionError) as e:
+            backends = _mode.backends_for(exp.mode)
+            retrieval.get_retriever(backends.retrieval)  # sweeps stubs raise here
+            pipelines.get_pipeline(backends.pipeline)
+            distribution.get_distributor(backends.distribution)
+        except (retrieval.RetrievalError, pipelines.PipelineError,
+                distribution.DistributionError) as e:
             rprint(f"[red]{e}[/red]")
             sys.exit(1)
 
@@ -456,12 +467,20 @@ def main():
                 if not valid:
                     rprint(f"[red]Error: {error_msg}[/red]")
                     sys.exit(1)
-            workflow.run_workflow(exp, args.no_archive, debug=args.debug, from_step=from_step, to_step=to_step)
+            # A step failure returns False -> exit non-zero (distinct from a clean review
+            # pause / e-EVN barrier, which returns True -> exit 0). The failed step stays
+            # the resume point for the next `postprocess run`.
+            ok = workflow.run_workflow(exp, args.no_archive, debug=args.debug,
+                                       from_step=from_step, to_step=to_step)
+            if not ok:
+                sys.exit(1)
         elif args.subpar == 'dashboard' or (args.subpar == 'info' and args.serve):
             from .plotting import serve_dashboard
             serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out)
         else:  # args.subpar == 'info' without --serve: plain terminal output
             exp.print_blessed(outputfile=None)
+            if exp.mode is not None:
+                rprint(f"[bold]Operating mode[/bold]: {exp.mode.value}")
             # Show the values sourced from the experiment toml, marked with
             # their origin so they are distinguishable from vex/lis metadata.
             toml_lines = experiment_state.summary_lines(exp.exp_toml)

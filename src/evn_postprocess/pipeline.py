@@ -19,9 +19,10 @@ from . import experiment
 from . import utils
 from . import lisfiles
 from . import comment_tasav
+from .servers import Server
 
 
-def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
+def get_files_from_vlbeer(exp, server: Server) -> bool:
     """Retrieves the antabfs, log, and flag files from vlbeer.
 
     DEPRECATED thin alias: the implementation moved to
@@ -34,23 +35,14 @@ def get_files_from_vlbeer(exp, server: experiment.Server) -> bool:
 
 
 def get_vlba_antab(exp) -> Optional[bool]:
-    """Retrieves the cal (antab) files from VLBA if needed, and copies the VLBA gains, into the archive temp folder
-    for the given experiment.
+    """Retrieves the VLBA cal (antab) files and gains into the archive temp folder.
+
+    DEPRECATED thin alias: the ssh implementation moved to
+    ``retrieval.jive.get_vlba_antab`` (all input-side server access belongs to the JIVE
+    retrieval backend). Kept so historical call sites keep working.
     """
-    rprint("[bold yellow]get_vlba_antab not implemented yet. You need to get the VLBA antab files manually.[/bold yellow]")
-    raise NotImplementedError
-    if exp.expname.lower()[0] != 'g':
-        return True
-
-    cd = f"cd /data/pipe/{exp.expname.lower()}/temp/"
-
-    utils.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@eee:/data0/tsys/vlba_gains.key ."]))
-    utils.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@ccs:/ccs/var/log2vex/logexp_date/" \
-                                                      f"{exp.expname.upper()}_{exp.obsdatetime.strftime('%Y%m%d')}" \
-                                                      f"/{exp.expname.lower()}cal.vlba ."]))
-    return True
-
-    # TODO: grep here which antennas are in the cal (e.g. grep TSYS XX) and update the values.
+    from .retrieval.jive import get_vlba_antab as _impl
+    return _impl(exp)
 
 
                 # if ext == 'log':

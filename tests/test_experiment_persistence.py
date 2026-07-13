@@ -79,6 +79,23 @@ class TestSchemaVersion:
         # A v1 file has no policy attached; the load must default to None.
         assert loaded.policy is None
 
+    def test_load_migrates_v2_to_v3_mode_absent(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        exp = _make_exp(tmp_path)
+        exp.store()
+
+        # Simulate a v2 file: it has no 'mode' key at all.
+        with open(tmp_path / "test01.json") as f:
+            data = json.load(f)
+        data["_schema_version"] = 2
+        data.pop("mode", None)
+        with open(tmp_path / "test01.json", "w") as f:
+            json.dump(data, f)
+
+        loaded = experiment.Experiment.load("TEST01")
+        # A pre-Phase-2 file leaves the mode unset (None) so the caller re-detects it.
+        assert loaded.mode is None
+
     def test_unknown_future_version_loads_with_warning(self, tmp_path: Path, monkeypatch, caplog):
         monkeypatch.chdir(tmp_path)
         exp = _make_exp(tmp_path)
@@ -114,3 +131,24 @@ class TestPolicyRoundTrip:
 
         loaded = experiment.Experiment.load("TEST01")
         assert loaded.policy is None
+
+
+class TestModeRoundTrip:
+    """The operating mode survives a store/load cycle on the experiment."""
+
+    def test_mode_persists(self, tmp_path: Path, monkeypatch):
+        from evn_postprocess.mode import Mode
+        monkeypatch.chdir(tmp_path)
+        exp = _make_exp(tmp_path, mode=Mode.supsci)
+        exp.store()
+
+        loaded = experiment.Experiment.load("TEST01")
+        assert loaded.mode is Mode.supsci
+
+    def test_absent_mode_loads_as_none(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        exp = _make_exp(tmp_path)
+        exp.store()
+
+        loaded = experiment.Experiment.load("TEST01")
+        assert loaded.mode is None

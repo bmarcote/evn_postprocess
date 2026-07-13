@@ -16,8 +16,8 @@ sibling convention `../EXPm` relative to any one of them:
 /data0/you/EXP3/
 ```
 
-EXPn (n>1) locates EXP1's vex automatically (or, in `--retrieval none` mode, you
-copy it there yourself — see [Plugin Backends](backends.md)).
+EXPn (n>1) locates EXP1's vex automatically (or, in `--mode regular` mode, you
+copy it there yourself — see [Operating Modes](modes.md)).
 
 ## The two synchronisation barriers
 

@@ -231,6 +231,7 @@ class ExperimentToml:
         self.distribution = self._parse_mode(data, 'distribution', filename)
         self.postprocess = self._parse_postprocess(data, filename)
         self.comments = self._parse_comments(data, filename)
+        self.skip_steps = self._parse_skip_steps(data, filename)
 
     # ------------------------------------------------------------------ parsing
 
@@ -315,6 +316,13 @@ class ExperimentToml:
                         f'gain_corrections.{station}', 'a number')
                 post.gain_corrections[station] = float(factor)
         return post
+
+    @staticmethod
+    def _parse_skip_steps(data: dict, filename: str) -> list[str]:
+        """Parses the top-level ``skip_steps`` list (steps to bypass; used in sweeps mode)."""
+        if 'skip_steps' not in data:
+            return []
+        return _expect_str_list(data['skip_steps'], filename, '(root)', 'skip_steps')
 
     @staticmethod
     def _parse_comments(data: dict, filename: str) -> CommentsSection:

@@ -14,7 +14,7 @@ This guide walks you through running a basic EVN post-processing session.
 
 1. The observation `.vex` file and the `.lis` file(s) of the correlated passes,
    already on disk.
-2. No server access needed at all with `--retrieval none --distribution none`.
+2. No server access needed at all with `--mode regular`.
 
 ## Basic usage
 
@@ -48,7 +48,7 @@ The pipeline will:
    PI letter, archive upload).
 
 See [Workflow Overview](../guide/workflow.md) for the full step list and
-[Plugin Backends](../guide/backends.md) for how `retrieval`/`pipeline`/
+[Operating Modes](../guide/modes.md) for how `retrieval`/`pipeline`/
 `distribution` change what actually runs at each stage.
 
 ## Resuming after interruption

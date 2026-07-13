@@ -215,7 +215,8 @@ def _apply_toml(exp: experiment.Experiment, exp_toml: experiment_state.Experimen
 def load_experiment(vexfile: str | Path, lisfiles: list[Path] | None = None,
                     tomlfile: str | Path | None = None, supsci: str | None = None,
                     expname: str | None = None,
-                    dirs: experiment.Dirs | None = None) -> experiment.Experiment:
+                    dirs: experiment.Dirs | None = None,
+                    classify: bool = True) -> experiment.Experiment:
     """Builds a populated Experiment from local .vex (+ optional .lis and .toml) files.
 
     This is the vex-only replacement of the historical MASTER_PROJECTS/.jexp/.expsum
@@ -235,6 +236,10 @@ def load_experiment(vexfile: str | Path, lisfiles: list[Path] | None = None,
         expname: The experiment name; defaults to the vex $EXPER name (for e-EVN EXPn
             pass it explicitly, since the shared vex carries EXP1's name).
         dirs: Experiment folder structure; created with the standard layout when None.
+        classify: When True (default) any source left untyped is classified heuristically
+            and the guesses recorded in the toml. Set False for a fully-prepared config
+            (sweeps mode) where no guessing is permitted: an untyped source is then a hard
+            error (see :meth:`ensure_sources_typed` in the caller) rather than a guess.
 
     Raises:
         InputsError: On missing/unparseable vex file.
@@ -262,9 +267,14 @@ def load_experiment(vexfile: str | Path, lisfiles: list[Path] | None = None,
     _apply_toml(exp, exp_toml)
     exp.exp_toml = exp_toml
     # Heuristic classification of any source left untyped (no-op when the toml is
-    # complete). Guesses are applied and recorded in the toml marked 'guessed'.
-    from . import source_classify
-    source_classify.apply_classification(exp)
+    # complete). Guesses are applied and recorded in the toml marked 'guessed'. In a
+    # fully-prepared config (sweeps mode) no guessing is permitted, so this is skipped and
+    # the caller instead errors on any source still untyped.
+    if classify:
+        from . import source_classify
+        source_classify.apply_classification(exp)
+    else:
+        logger.debug(f"{expname}: heuristic source classification disabled (prepared config).")
 
     # Correlator passes from the local .lis files (conventional discovery when the
     # caller does not name them). Absence is not an error at this stage: the lis files
@@ -279,3 +289,22 @@ def load_experiment(vexfile: str | Path, lisfiles: list[Path] | None = None,
     else:
         logger.debug(f"No local .lis files for {expname} yet; passes will be set up later.")
     return exp
+
+
+def ensure_sources_typed(exp: experiment.Experiment) -> None:
+    """Raises if any observed source is still untyped (sweeps mode: no guessing allowed).
+
+    A fully-prepared config must classify every observed source explicitly. This is the
+    hard, field-named failure the sweeps contract requires instead of a heuristic guess.
+
+    Raises:
+        InputsError: Naming every observed source left without a type.
+    """
+    observed = {scan.source for scan in exp.scans}
+    untyped = sorted(s.name for s in exp.sources
+                     if s.type == experiment.SourceType.other and s.name in observed)
+    if untyped:
+        raise InputsError(
+            f"Prepared config for {exp.expname} does not declare a type for observed "
+            f"source(s): {', '.join(untyped)}. Add them to the [sources] section of the "
+            f"config toml (mode 'sweeps' does not guess source types).")

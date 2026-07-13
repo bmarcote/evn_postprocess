@@ -1,7 +1,7 @@
 [project]
 name = "evn-postprocess"
 version = "2.0.0a7"
-description = "Suite to run internal processing of EVN observations"
+description = "Suite to run internal processing of EVN observations (from correlation to data distribution)"
 readme = "README.md"
 authors = [
     { name = "Benito Marcote", email = "marcote@jive.eu" }

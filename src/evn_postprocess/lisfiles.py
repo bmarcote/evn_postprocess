@@ -5,7 +5,6 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from . import experiment, utils
-from .experiment import Server
 
 
 # Suffix tagging the auxiliary lag-space products ({expname}-lag.lis / {expname}-lag.ms).
@@ -18,73 +17,6 @@ LAG_TAG = "-lag."
 def _pass_lisfiles(pattern: str) -> list[str]:
     """Sorted .lis files matching *pattern*, excluding the auxiliary lag-space .lis file."""
     return sorted(f for f in glob.glob(pattern) if LAG_TAG not in f)
-
-
-def lis_files_in_ccs(exp: experiment.Experiment, server: Server) -> bool:
-    """Returns if there are already lis files created in the experiment directory in ccs.
-    
-    Args:
-        exp (experiment.Experiment): Experiment object.
-        server (Server): Server object with ccs connection information.
-    
-    Returns:
-        bool: True if lis files exist in ccs, False otherwise.
-    """
-    eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
-    return utils.remote_file_exists(f"{server.user}@{server.host}",
-                                    str(Path(str(server.path).format(expname=eEVNname)) / f"{eEVNname.lower()}*.lis"))
-
-
-def get_lis_files(exp: experiment.Experiment) -> bool:
-    """Retrieves all lis files available in ccs for this experiment.
-    
-    Args:
-        exp (experiment.Experiment): Experiment object.
-    
-    Returns:
-        bool: True if lis files were retrieved successfully.
-    """
-    eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
-    server = experiment.retrieve_servers()['ccs']
-    cmds = []
-    if len(_pass_lisfiles(f"{eEVNname.lower()}*.lis")) == 0:
-        utils.scp(f"{server.user}@{server.host}:" + \
-                        str(Path(str(server.path).format(expname=eEVNname)) / f"{eEVNname.lower()}*.lis"), '.')
-
-    for a_lis in _pass_lisfiles("*.lis"):
-        split_lis_cont_line(exp, a_lis)
-
-    # In the case of e-EVN runs, a renaming of the lis files may be required:
-    if eEVNname != exp.expname:
-        for a_lis in _pass_lisfiles("*.lis"):
-            # Modify the references for eEVNname to expname inside the lis files
-            # if it has not been done yet
-            if exp.expname.lower() not in a_lis:
-                update_lis_file(a_lis, eEVNname, exp.expname)
-                cmds.append(f" Expname updated from {eEVNname} to {exp.expname} in {a_lis}.")
-
-            os.rename(a_lis, a_lis.replace(eEVNname.lower(), exp.expname.lower()))
-            cmds.append(f"mv {a_lis} {a_lis.replace(eEVNname.lower(), exp.expname.lower())}")
-
-    return True
-
-
-def create_lis_files(exp: experiment.Experiment) -> bool:
-    """Creates the lis files in ccs.
-    
-    Args:
-        exp (experiment.Experiment): Experiment object.
-    
-    Returns:
-        bool: True if lis files were created successfully.
-    """
-    eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
-    server = experiment.retrieve_servers()['ccs']
-    if not lis_files_in_ccs(exp, server):
-        logger.info("Creating lis file...")
-        utils.ssh(f"{server.user}@{server.host}", f"cd {Path(str(server.path).format(expname=eEVNname))};/ccs/bin/make_lis -e {eEVNname}")
-
-    return True
 
 
 def update_lis_file(lisfilename: str | Path, oldexp: str, newexp: str) -> None:

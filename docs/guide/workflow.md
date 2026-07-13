@@ -5,7 +5,7 @@ The post-processing pipeline is structured as a sequential list of 16 **steps**
 individually re-run (`postprocess run STEP`) or executed in isolation
 (`postprocess exec NAME`). Three groups of steps delegate to a selectable
 **plugin backend** (retrieval, pipeline, distribution — see
-[Plugin Backends](backends.md)), so the same step list runs unattended at JIVE or
+[Operating Modes](modes.md)), so the same step list runs unattended at JIVE or
 fully offline for an external user.
 
 ## Pipeline steps
@@ -27,7 +27,7 @@ fully offline for an external user.
 | `pipeline` | The pipeline backend's `run()`: runs the calibration pipeline over all correlator passes. |
 | `postpipe` | The pipeline backend's `collect()`: diagnostics, TASAV/comment files, feedback page; PI letter auto-fill. **Review pause.** |
 | `prearchive` | Appends Tsys/gain-curve info to the FITS-IDI files; records the finalisation parameters into the toml. |
-| `archive` | The distribution backend's `deliver()`: credentials, protection, archive upload, PI letter. |
+| `distribute` | The distribution backend's `deliver()`: credentials, protection, archive upload, PI letter. |
 
 See [Workflow Steps & Local Tools](../reference/steps.md) for what each step calls
 under the hood — useful if you ever need to reproduce a step by hand.
@@ -56,7 +56,7 @@ After `postpipe`, the terminal and the configured notifier both point to the
 dashboard (`postprocess info --serve`, including the new **Comments** tab — see
 [Dashboard](dashboard.md)) and the PI letter. Answering:
 
-- **Enter** — finalises: runs `prearchive` and `archive` in the same invocation.
+- **Enter** — finalises: runs `prearchive` and `distribute` in the same invocation.
 - **a step name** — re-runs the workflow from that step, returning to this same
   review point afterwards.
 - **quit** — stops here; resume any time with `postprocess run`.
