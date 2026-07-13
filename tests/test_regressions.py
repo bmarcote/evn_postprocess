@@ -144,7 +144,6 @@ class TestLegacyServerBootstrapRemoved:
 
     def test_parse_masterprojects_removed(self):
         assert not hasattr(experiment, "parse_masterprojects")
-        assert not hasattr(io, "parse_masterprojects")
 
     def test_io_module_removed(self):
         # The io module was entirely server-side transport; it is gone (its live
@@ -384,6 +383,8 @@ class TestShellCommandLogging:
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(_one, range(8)))
 
-        files = sorted(p.name for p in (tmp_path / "logs").iterdir())
+        # Count only the tconvert log files (logs/ also holds commands.sh, the replayable
+        # command log written by shell_command via evn_postprocess.reporting).
+        files = sorted(p.name for p in (tmp_path / "logs").iterdir() if p.name.startswith("tconvert"))
         assert len(files) == 8, files
         assert "tconvert.log" in files

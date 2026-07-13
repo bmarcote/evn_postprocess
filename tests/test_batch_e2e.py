@@ -35,6 +35,10 @@ def make_exp(tmp_path, expname='EB101'):
 def engine(tmp_path, monkeypatch):
     """run_workflow with every step command stubbed to succeed, in batch mode."""
     monkeypatch.chdir(tmp_path)
+    # run_workflow marks .done on the shared _WORKFLOW_STEPS Task objects; reset them so
+    # each test starts from a clean slate (these module globals persist across tests).
+    for step in workflow._WORKFLOW_STEPS:
+        step.done = False
     executed = []
 
     def stub(name):
