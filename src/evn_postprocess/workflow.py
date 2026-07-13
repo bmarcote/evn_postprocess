@@ -210,7 +210,7 @@ class Task(object):
         return cls(name=data['name'], command=data['command'], doc=data['doc'], done=data.get('done', False))
 
 
-_WORKFLOW_STEPS = [Task('init', 'initialize_experiment',
+_WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
                         "Creates the directory structure to post-process the experiment. "
                         "Locates (or retrieves) the .vex file and derives all metadata from it: "
                         "observing date, e-EVN run (from exper_description), stations, sources, and "
@@ -1493,7 +1493,7 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
 
     from_step = _resolve_step_alias(from_step)
     to_step = _resolve_step_alias(to_step)
-    all_steps = [s for s in _WORKFLOW_STEPS if (archive or s.name != 'distribute') and s.name != 'init']
+    all_steps = [s for s in _WORKFLOW_STEPS if (archive or s.name != 'distribute') and s.name != 'initialize']
     # skip_steps from the prepared config (used in sweeps mode): bypass the named steps.
     skip = set(getattr(_exp_toml(exp), 'skip_steps', []) or [])
     if skip:
