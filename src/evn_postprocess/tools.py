@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence
 from loguru import logger
 
-from . import experiment
+from . import servers as _servers
 
 
 class ToolMissingError(RuntimeError):
@@ -64,7 +64,7 @@ def resolve(name: str, *, env_var: str | None = None, default: str | None = None
         return value
 
     try:
-        servers = experiment.retrieve_servers()
+        servers = _servers.retrieve_servers()
         if name in servers.names():
             return str(servers[name].path)
     except (FileNotFoundError, KeyError):

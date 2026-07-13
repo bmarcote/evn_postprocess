@@ -34,19 +34,20 @@ postprocess exec flag_weights
 
 Use `postprocess exec` without arguments to list all available commands.
 
-## Selecting backends
+## Selecting the mode
 
 ```bash
-# Run fully offline: no server contacted, calibration and archiving skipped:
-postprocess --retrieval none --pipeline none --distribution none run
+# Run fully local: no server contacted, nothing archived (auto-detected for a
+# non-jops user, or forced explicitly):
+postprocess --mode regular run
 
-# Override just the delivery target for a test run:
-postprocess --distribution none run
+# Force the JIVE support-scientist job:
+postprocess --mode supsci run
 ```
 
-See [Plugin Backends](backends.md). CLI flags override whatever the experiment
-toml's `[retrieval]`/`[pipeline]`/`[distribution]` sections say; an unknown backend
-name is rejected before anything runs.
+See [Operating Modes](modes.md). The mode is auto-detected from the OS when `--mode`
+is omitted, persisted on the experiment, and reused on resume; an unknown `--mode`
+value is rejected before anything runs.
 
 ## Overriding the reference antenna
 
@@ -62,7 +63,8 @@ immediately (JSON state), before any step runs.
 | Flag | Effect |
 | --- | --- |
 | `--no-lag` | Skip building the auxiliary lag-space MS and its per-scan antenna SNR (scan overview then only reports presence/absence, no SNR comparison). Sticky once set. |
-| `--no-archive` / `-a` | Skip the final `archive` step. |
+| `--no-archive` / `-a` | Skip the final `distribute` step. |
+| `--mode {supsci,regular,sweeps}` | Operating mode; auto-detected from the OS when omitted (see [Operating Modes](modes.md)). |
 | `--policy FILE` | Batch-mode decisions (see [Batch Mode](batch-mode.md)). |
 | `--comms FILE` | Notification settings (see [Communications](comms.md)). |
 | `--tConvert-in-eee` / `--no-tConvert-in-eee` | Run `tConvert`/PolConvert on `eee` (default; workaround for a broken local install) or locally. |
@@ -70,24 +72,26 @@ immediately (JSON state), before any step runs.
 
 ## Directory resolution
 
-By default, `postprocess` expects to run from (or creates) a directory at:
-
-```text
-/data0/{supsci}/{EXPNAME}
-```
-
-Override with:
+By default, `postprocess` runs in the JIVE `eee` location for the experiment when a
+`computers.toml` is configured, otherwise in the **current directory** (so a standalone
+user needs no server configuration). Override with:
 
 ```bash
 postprocess -d /custom/path -e EXPNAME run
 ```
 
-## Logging
+## Logging (three channels)
 
-- **Terminal output** — Controlled by `--debug` (verbose) or default (INFO level).
-- **Log file** — `post_processing.log` (on `eee` when a `computers.toml` server is
-  configured, otherwise the current working directory).
-- **Debug log** — `logs/post_process.log` with full DEBUG output.
+Each step speaks on three independent channels (see [reporting](../api/review.md) —
+implemented in `evn_postprocess.reporting`):
+
+- **Terminal** — a concise, colourful per-step status for the operator (`--debug` makes
+  it verbose).
+- **`logs/logging_messages.log`** — the verbose loguru debug record, kept out of the
+  terminal.
+- **`logs/commands.sh`** — a replayable log of the exact local command(s) each step ran
+  (one shell-runnable line per command, with a per-step header), so any step can be
+  reproduced by hand.
 
 ## Exit codes
 

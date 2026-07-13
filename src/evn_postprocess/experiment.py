@@ -23,138 +23,8 @@ from rich import print as rprint
 import blessed
 from . import vex
 from . import mstools
+from .mode import Mode
 
-
-
-@dataclass
-class Server:
-    name: str
-    user: str
-    host: str
-    path: Path
-
-    def to_dict(self) -> dict:
-        return {'name': self.name, 'user': self.user, 'host': self.host, 'path': str(self.path)}
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'Server':
-        return cls(name=data['name'], user=data['user'], host=data['host'], path=Path(data['path']))
-
-
-class Servers(list[Server]):
-    """A list of Server objects with additional helper methods."""
-
-    def names(self) -> list[str]:
-        """Returns a list of all server names."""
-        return [server.name for server in self]
-
-    def __getitem__(self, key: int | str) -> Server:
-        """Get a server by index (int) or by name (str)."""
-        if isinstance(key, int):
-            return super().__getitem__(key)
-        elif isinstance(key, str):
-            for server in self:
-                if server.name == key:
-                    return server
-            raise KeyError(f"Server '{key}' not found")
-        else:
-            raise TypeError(f"Index must be int or str, not {type(key).__name__}")
-
-    def to_dict(self) -> list[dict]:
-        return [s.to_dict() for s in self]
-
-    @classmethod
-    def from_dict(cls, data: list[dict]) -> 'Servers':
-        return cls([Server.from_dict(s) for s in data])
-
-
-def retrieve_servers() -> Servers:
-    """Retrieves the servers configuration from the environment.
-    It will first search under the $XDG_CONFIG_HOME, $HOME/.config, or ~jops/.config directories.
-    It should try to find the evnpostpro/computers.toml file. Raising an exception if it cannot be found.
-
-    Returns:
-        Servers: A list of Server objects
-
-    Raises:
-        FileNotFoundError: If the computers.toml file cannot be found.
-    """
-    if (configpath := (Path(os.getenv('XDG_CONFIG_HOME', Path.home())) / 'evn')).exists():
-        pass
-    elif (configpath := (Path(os.path.expanduser('~jops')) / '.config/evn')).exists():
-        pass
-    else:
-        raise FileNotFoundError("No such file or directory: .config/evn/computers.toml neither "
-                                "in local user nor jops")
-
-    with open(configpath / 'computers.toml', 'rb') as f:
-        servers = tomllib.load(f)
-
-    return Servers([Server(name=s, user=servers[s]['user'], host=servers[s]['host'],
-                           path=Path(servers[s]['path'])) for s in servers])
-
-
-def parse_masterprojects(expname: str, server: Server) -> tuple[str, str | None]:
-        """Obtains the observing epoch from the file in the server (traditionally MASTER_PROJECTS.LIS).
-        In case of being an e-EVN experiment, it will add that information.
-
-        The expected file should be a text file with one line per experiment, with expname (capital case) in the first
-        column, followed by the observing epoch (YYMMDD format, or the 4-digit-year YYYYMMDD variant) in the second
-        column.
-        If the entry refers to an e-EVN observation (with multiple experiments in the same run), then it will have
-        extra columns indicating all experiments within the run.
-
-        Each of the extra columns will have the experiment name in the first column in a different line,
-        followed again by the observing epoch.
-
-        Args:
-            expname (str): Experiment name to search for.
-            server (Server): Server object with MASTER_PROJECTS.LIS location.
-
-        Returns:
-            tuple[str, str | None]:
-                - The observing epoch of the experiment (YYMMDD format, or the 4-digit-year YYYYMMDD variant).
-                - The e-EVN name if it is an e-EVN experiment, None otherwise.
-        """
-        logger.debug(f"Trying to read the experiment {expname} from {server.user}@{server.host}:{server.path}")
-        process = subprocess.run(['ssh', f"{server.user}@{server.host}", f"grep {expname} {server.path}"],
-                                 capture_output=True)
-        if process.returncode == 1:
-            raise ValueError(f"Errorcode 1 when reading {server.path} in {server.host}."
-                             + f"\n{expname} was not found not in the EVN database.")
-        elif process.returncode == 2:
-            raise ValueError(f"Errorcode 2 when reading {server.path} in {server.host}."
-                             + "\nCould not access the remote file.")
-        elif process.returncode > 2:
-            raise ValueError(f"Errorcode {process.returncode} when reading MASTER_PROJECTS.LIS.")
-
-        output = [s for s in process.stdout.decode('utf-8').split('\n') if s]
-        logger.debug(f"Entry in the database: {', '.join(output)}")
-
-        if len(output) == 2:
-            logger.debug(f"{expname} is an e-EVN experiment")
-            # It is an e-EVN experiment!
-            # One line will have EXP EPOCH.
-            # The other one eEXP EPOCH EXP1 EXP2..
-            entry_full, entry_exp = (0, 1) if len(output[0]) > len(output[1]) else (1, 0)
-            obsdate = output[entry_exp].split()[1]
-            eEVNname = output[entry_full].split()[0]
-            logger.debug(f"From the e-EVN run {eEVNname} observed on {obsdate}.")
-        elif len(output) == 1:
-            expline = output[0].split()
-            if len(expline) > 2:
-                # This is an e-EVN, this experiment was the first one (so e-EVN is called the same)
-                eEVNname = expline[0]
-                obsdate = expline[1]
-                logger.debug(f"{expname} is an e-EVN experiment (run with the same name on {obsdate})")
-            else:
-                eEVNname = None
-                obsdate = expline[1]
-                logger.debug(f"{expname} is an regular EVN experiment observed on {obsdate}")
-        else:
-            raise ValueError(f"{expname} not found in {server.host}:{server.path}, or server not reachable.")
-
-        return obsdate, eEVNname
 
 
 def retrieve_expname() -> str:
@@ -662,6 +532,8 @@ def _migrate_experiment_dict(data: dict) -> dict:
       - v1 (implicit): no ``_schema_version`` key. Same shape as v2 except the
         ``policy`` and ``_schema_version`` keys are absent.
       - v2: introduces ``_schema_version`` and an optional ``policy`` block.
+      - v3: introduces the ``mode`` field (Phase 2). Absent in older files, in which
+        case it stays None and the caller re-detects the mode.
     """
     version = int(data.get('_schema_version', 1))
     if version > Experiment.SCHEMA_VERSION:
@@ -674,6 +546,10 @@ def _migrate_experiment_dict(data: dict) -> dict:
         # v1 -> v2: add the policy slot (always None on the way up).
         data.setdefault('policy', None)
         data['_schema_version'] = 2
+    if version < 3:
+        # v2 -> v3: add the mode slot (None means "re-detect", see evn_postprocess.mode).
+        data.setdefault('mode', None)
+        data['_schema_version'] = 3
     return data
 
 
@@ -690,7 +566,8 @@ class Experiment:
                  lag_bandpass: dict | None = None,
                  pol_diagnostics: dict | None = None,
                  no_lag: bool = False,
-                 policy=None):
+                 policy=None,
+                 mode=None):
         self.expname = expname
         self.obsdate = obsdate
         self.supsci = supsci
@@ -737,6 +614,11 @@ class Experiment:
         # dataclass lives in evn_postprocess.policy and is loaded on demand to avoid
         # a circular import at module-load time.
         self.policy = policy
+        # Operating mode (supsci | regular | sweeps), resolved once at initialization
+        # and persisted so a resume never silently switches mode (see evn_postprocess.mode).
+        # None means "not resolved yet" (a pre-Phase-2 state file, or a fresh object before
+        # the CLI resolves it); callers re-detect in that case.
+        self.mode: Mode | None = Mode(mode) if mode is not None else None
 
     @property
     def spectral_line(self) -> bool:
@@ -964,14 +846,6 @@ class Experiment:
 
 
     @property
-    def expsumfile(self) -> Path:
-        """Returns the (Path object) to the .expsum file related to the experimet.
-        If the files does not exist in the experiment dir (in eee), is retrieved from archive.
-        """
-        return Path(f"{self.expname.lower()}.expsum")
-
-
-    @property
     def piletter(self) -> Path:
         """Returns the (Path object) to the .piletter file related to the experimet.
         If the files does not exist in the experiment dir (in eee), is retrieved from archive.
@@ -1021,7 +895,7 @@ class Experiment:
     # JSON schema version. Bump every time to_dict / from_dict change shape in
     # an incompatible way. Always store it under the "_schema_version" key. The
     # loader migrates older files in-place.
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def to_dict(self) -> dict:
         """Converts the Experiment to a plain dictionary for JSON serialization."""
@@ -1043,7 +917,8 @@ class Experiment:
                 '_timerange': [t.isoformat() for t in self._timerange] if self._timerange else None,
                 'lag_snr': self.lag_snr,
                 'lag_bandpass': self.lag_bandpass,
-                'pol_diagnostics': self.pol_diagnostics}
+                'pol_diagnostics': self.pol_diagnostics,
+                'mode': self.mode.value if self.mode is not None else None}
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Experiment':
@@ -1066,6 +941,7 @@ class Experiment:
             exp._timerange = [dt.datetime.fromisoformat(t) for t in data['_timerange']]
         exp.lag_snr = data.get('lag_snr', {})
         exp.lag_bandpass = data.get('lag_bandpass', {})
+        exp.mode = Mode(data['mode']) if data.get('mode') is not None else None
         # Policy is attached lazily because the Policy dataclass lives in a sibling module
         # imported only when the policy feature is actually used.
         if data.get('policy') is not None:

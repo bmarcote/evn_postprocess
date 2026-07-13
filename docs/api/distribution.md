@@ -1,7 +1,7 @@
 # distribution
 
 Distribution backends: how the finished experiment is delivered (`jive`, `none`,
-`sweeps`). See [Plugin Backends](../guide/backends.md) for the user-facing overview.
+`sweeps`). See [Operating Modes](../guide/modes.md) for the user-facing overview.
 
 ## Interface & registry
 

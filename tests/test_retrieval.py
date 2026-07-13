@@ -31,15 +31,17 @@ def test_get_retriever_none():
 
 def test_unknown_backend_fails_at_selection():
     with pytest.raises(retrieval.RetrievalError) as excinfo:
-        retrieval.get_retriever('sweeps')
-    assert 'sweeps' in str(excinfo.value)
+        retrieval.get_retriever('ftp')
+    assert 'ftp' in str(excinfo.value)
     assert 'none' in str(excinfo.value)  # registered names listed
 
 
-def test_set_cli_mode_validates():
-    with pytest.raises(retrieval.RetrievalError):
-        retrieval.set_cli_mode('nonsense')
-    retrieval.set_cli_mode(None)  # cleanup
+def test_sweeps_retrieval_not_implemented():
+    # 'sweeps' is registered but a stub; selecting it fails explicitly.
+    assert 'sweeps' in retrieval.available_backends()
+    with pytest.raises(retrieval.RetrievalError) as excinfo:
+        retrieval.get_retriever('sweeps')
+    assert 'not implemented' in str(excinfo.value)
 
 
 def test_third_party_registration():
@@ -56,24 +58,6 @@ def test_third_party_registration():
         assert isinstance(retrieval.get_retriever('dummy'), Dummy)
     finally:
         retrieval._REGISTRY.unregister('dummy')
-
-
-# ------------------------------------------------------------- mode selection
-
-class TomlStub:
-    def __init__(self, mode):
-        self.retrieval = mode
-
-
-def test_selected_mode_precedence():
-    retrieval.set_cli_mode(None)
-    assert retrieval.selected_mode(None) == 'jive'                    # default
-    assert retrieval.selected_mode(TomlStub('none')) == 'none'        # toml wins default
-    retrieval.set_cli_mode('jive')
-    try:
-        assert retrieval.selected_mode(TomlStub('none')) == 'jive'    # CLI wins toml
-    finally:
-        retrieval.set_cli_mode(None)
 
 
 # --------------------------------------------------------------- NoneRetriever

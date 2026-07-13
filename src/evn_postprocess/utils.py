@@ -304,7 +304,8 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
                   bufsize: int = -1, stdout: Optional[int] = subprocess.PIPE,
                   stderr: Optional[int] = subprocess.PIPE,
                   stderr_warn_re: Optional[re.Pattern] = None,
-                  logfile: Optional[Union[str, Path]] = None) -> str:
+                  logfile: Optional[Union[str, Path]] = None,
+                  echo: bool = True) -> str:
     """Runs the provided command in the shell and streams its output live.
 
     Both stdout and stderr are captured and echoed to the terminal as the command runs:
@@ -328,6 +329,10 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
             An existing file is never overwritten: a numbered sibling is used instead (see
             :func:`open_unique_log`), so each run gets its own file. Failure to open the log
             is non-fatal — a warning is emitted and the command still runs.
+        echo (bool): When True (default) the output is streamed live to the terminal. Set
+            False to run quietly: output is still captured and teed to ``logfile``, but not
+            echoed to stdout/stderr. Use for background/parallel runs (e.g. the auxiliary
+            lag-space MS) so they do not garble the foreground command's real-time output.
 
     Returns:
         str: Concatenated stdout from the command (UTF-8).
@@ -344,6 +349,10 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
 
     cmd_str = ' '.join(full_shell_command)
     logger.info(f"[bold]> {cmd_str}[/bold]")
+    # Record the exact command into logs/commands.sh so a step can be replayed by hand
+    # (see evn_postprocess.reporting). Lazy import keeps utils free of package cycles.
+    from . import reporting
+    reporting.record_command(cmd_str)
 
     # Optionally tee the combined stdout/stderr to a log file. Both pump threads
     # write to the same handle, so a lock keeps their lines from interleaving
@@ -383,6 +392,8 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
                     with log_lock:
                         log_fh.write(text)
                         log_fh.flush()
+                if not echo:
+                    continue  # quiet run: captured + logged above, but not streamed to terminal
                 if red and warn_re is not None and warn_re.search(text):
                     out_stream.write(f"\033[33m{text}\033[0m")  # yellow: recognised warning
                 elif red:

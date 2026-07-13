@@ -9,7 +9,8 @@ Encapsulates everything delivery-specific behind :class:`Distributor` (PRD
     completes with the data left in place.
   - ``sweeps``: registered name for the future SWEEPS delivery; not implemented.
 
-Selection precedence: experiment toml ``[distribution] mode`` > ``"jive"``. Unknown or
+The backend name is chosen by the operating mode (see :mod:`evn_postprocess.mode`):
+``supsci`` -> ``jive``, ``regular`` -> ``none``, ``sweeps`` -> ``sweeps``. Unknown or
 unimplemented backends fail with an explicit error at selection time.
 """
 from __future__ import annotations
@@ -18,12 +19,6 @@ from abc import ABC, abstractmethod
 from typing import Callable
 
 from loguru import logger
-
-
-DEFAULT_MODE = 'jive'
-
-# Module-level CLI override (set from main via set_cli_mode); None means "not given".
-_CLI_MODE: str | None = None
 
 
 class DistributionError(RuntimeError):
@@ -71,35 +66,41 @@ def get_distributor(name: str) -> Distributor:
     return _REGISTRY.get(name)
 
 
-def set_cli_mode(name: str | None) -> None:
-    """Sets (and validates) the CLI-provided distribution mode override.
-
-    Raises:
-        DistributionError: If *name* is not a registered backend.
-    """
-    global _CLI_MODE
-    if name is not None and name not in _REGISTRY:
-        raise DistributionError(f"Unknown distribution backend '{name}'. "
-                                f"Registered backends: {', '.join(available_backends())}.")
-    _CLI_MODE = name
-
-
-def selected_mode(exp_toml=None) -> str:
-    """Returns the effective distribution mode: CLI > experiment toml [distribution] mode > default."""
-    if _CLI_MODE is not None:
-        return _CLI_MODE
-    if exp_toml is not None and exp_toml.distribution:
-        return exp_toml.distribution
-    return DEFAULT_MODE
-
-
 class NoneDistributor(Distributor):
-    """No-op backend: nothing is archived, no server is contacted, data stay in place."""
+    """Non-supsci delivery: no archiving, no server contact, no PI letter.
+
+    Instead of delivering anywhere, it verifies the run ended in a known-good state: the
+    expected FITS-IDI files exist for every correlator pass. It reports a clear "ready" on
+    success or returns False after naming exactly what is missing (PRD story 31). The
+    ANTAB Tsys/gain-curve information is attached by the earlier prearchive step; its
+    presence is reported best-effort.
+    """
     name = 'none'
 
     def deliver(self, exp) -> bool:
-        logger.info(f"Distribution mode 'none': {exp.expname} is NOT archived; the data "
-                    "remain in the experiment directory.")
+        from pathlib import Path
+        import glob
+        passes = getattr(exp, 'correlator_passes', None) or []
+        if not passes:
+            logger.error(f"Distribution mode 'none': no correlator passes are set up for "
+                         f"{exp.expname}; nothing to verify. Run the earlier steps first.")
+            return False
+        missing = []
+        for a_pass in passes:
+            basename = str(a_pass.fitsidifile)
+            if not basename or not glob.glob(f"{basename}*"):
+                missing.append(basename or f"(pass {a_pass.msfile})")
+        if missing:
+            logger.error(f"Distribution mode 'none': the final FITS-IDI files are not in "
+                         f"order for {exp.expname}. Missing for pass(es): {', '.join(missing)}. "
+                         "Produce them (tconvert/polconvert) before distributing.")
+            return False
+        # Best-effort note on the ANTAB attachment (done by prearchive/append_antab).
+        if not any(Path('.').glob('*.antab')):
+            logger.warning(f"No .antab file found for {exp.expname}: verify the Tsys/gain-curve "
+                           "information was appended to the FITS-IDI files (prearchive step).")
+        logger.info(f"Distribution mode 'none': {exp.expname} is ready — FITS-IDI files present "
+                    f"for all {len(passes)} correlator pass(es); nothing archived, data left in place.")
         return True
 
 

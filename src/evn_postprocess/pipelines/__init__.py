@@ -8,11 +8,11 @@ Encapsulates everything pipeline-specific behind :class:`PipelineBackend`
   - ``run(exp)``: execute the pipeline for all correlator passes.
   - ``collect(exp)``: gather diagnostics/outputs after the run.
 
-Built-in backends: ``aips`` (default; the EVN.py AIPS pipeline, wrapping the
-historical pipeline module), ``none`` (no-op that still satisfies downstream steps),
-and ``vpipe`` (registered name, not implemented yet). Selection precedence:
-experiment toml ``[pipeline] mode`` > ``"aips"``. Unknown or unimplemented backends
-fail with an explicit error at selection time.
+Built-in backends: ``aips`` (the EVN.py AIPS pipeline, wrapping the historical pipeline
+module), ``none`` (no-op that still satisfies downstream steps), and ``vpipe``
+(registered name, not implemented yet). Every operating mode currently runs the ``aips``
+pipeline (see :mod:`evn_postprocess.mode`). Unknown or unimplemented backends fail with
+an explicit error at selection time.
 """
 from __future__ import annotations
 
@@ -22,10 +22,6 @@ from typing import Callable
 from loguru import logger
 
 
-DEFAULT_MODE = 'aips'
-
-# Module-level CLI override (set from main via set_cli_mode); None means "not given".
-_CLI_MODE: str | None = None
 
 
 class PipelineError(RuntimeError):
@@ -75,28 +71,6 @@ def get_pipeline(name: str) -> PipelineBackend:
             registered-but-unimplemented backend (e.g. vpipe).
     """
     return _REGISTRY.get(name)
-
-
-def set_cli_mode(name: str | None) -> None:
-    """Sets (and validates) the CLI-provided pipeline mode override.
-
-    Raises:
-        PipelineError: If *name* is not a registered backend.
-    """
-    global _CLI_MODE
-    if name is not None and name not in _REGISTRY:
-        raise PipelineError(f"Unknown pipeline backend '{name}'. "
-                            f"Registered backends: {', '.join(available_backends())}.")
-    _CLI_MODE = name
-
-
-def selected_mode(exp_toml=None) -> str:
-    """Returns the effective pipeline mode: CLI > experiment toml [pipeline] mode > default."""
-    if _CLI_MODE is not None:
-        return _CLI_MODE
-    if exp_toml is not None and exp_toml.pipeline:
-        return exp_toml.pipeline
-    return DEFAULT_MODE
 
 
 class NonePipeline(PipelineBackend):

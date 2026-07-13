@@ -41,7 +41,7 @@ nav:
     - Configuration: getting-started/configuration.md
   - User Guide:
     - Workflow Overview: guide/workflow.md
-    - Plugin Backends: guide/backends.md
+    - Operating Modes: guide/modes.md
     - Running the Pipeline: guide/running.md
     - Batch Mode: guide/batch-mode.md
     - Communications: guide/comms.md
@@ -59,6 +59,7 @@ nav:
     - Environment Variables: reference/env-vars.md
   - API:
     - Core:
+      - mode: api/mode.md
       - experiment: api/experiment.md
       - experiment_state: api/experiment_state.md
       - inputs: api/inputs.md
@@ -72,6 +73,8 @@ nav:
       - review: api/review.md
       - eevn: api/eevn.md
     - Support:
+      - reporting: api/reporting.md
+      - servers: api/servers.md
       - comms: api/comms.md
       - dialog: api/dialog.md
       - plotting: api/plotting.md
@@ -79,7 +82,6 @@ nav:
       - pipeline: api/pipeline.md
       - policy: api/policy.md
       - tools: api/tools.md
-      - io: api/io.md
       - lisfiles: api/lisfiles.md
       - vex: api/vex.md
       - feedback: api/feedback.md

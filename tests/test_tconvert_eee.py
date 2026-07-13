@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from evn_postprocess import experiment, process
+from evn_postprocess import experiment, process, servers
 
 
 def _exp(tmp_path: Path, in_eee: bool = True) -> experiment.Experiment:
@@ -43,9 +43,9 @@ def fake_remote(monkeypatch):
 
     monkeypatch.setattr(process.utils, "rsync", fake_rsync)
     monkeypatch.setattr(process.utils, "ssh", fake_ssh)
-    monkeypatch.setattr(process.experiment, "retrieve_servers",
-                        lambda: experiment.Servers([experiment.Server("eee", "jops", "eee",
-                                                                      Path("/data0"))]))
+    monkeypatch.setattr(process._servers, "retrieve_servers",
+                        lambda: servers.Servers([servers.Server("eee", "jops", "eee",
+                                                                Path("/data0"))]))
     # Small MS -> chunk_size=4GB, and no FITS-IDI present yet so every pass runs.
     monkeypatch.setattr(process, "_du_kbytes", lambda _p: 1000)
     monkeypatch.setattr(process.glob, "glob", lambda _pat: [])

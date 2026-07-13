@@ -140,15 +140,16 @@ def parse_setup(exp_base: str, type_exp: str, freq, datarate, number_ifs, bandwi
         exp_base : str  Experiment base name without pass suffix (e.g. 'n18l2').
         type_exp : str  'cont' or 'line'.
     """
-    date = subprocess.getoutput(
-        'ssh jops@ccs grep {} /ccs/var/log2vex/MASTER_PROJECTS.LIS | cut -d " " -f 3'.format(exp_base.upper()))
-    if (date == '') or (date == '\n'):
-        date = subprocess.getoutput(
-            'ssh jops@ccs grep {} /ccs/var/log2vex/MASTER_PROJECTS.LIS | cut -d " " -f 4'.format(exp_base.upper()))
-    if '\n' in date:
-        date = date.replace('\n', '').strip()
-
-    obsdate = dt.strptime(date[-8:], '%Y%m%d')
+    # Observing date from the LOCAL vex file (no server contact): the vex is already on
+    # disk after initialization. Replaces the historical `ssh jops@ccs grep MASTER_PROJECTS.LIS`
+    # lookup so this module makes no outbound server call (server-agnostic core).
+    from . import inputs, vex
+    vexfile = inputs.find_local_vex(exp_base)
+    if vexfile is None:
+        raise FileNotFoundError(
+            f"No local vex file for {exp_base.upper()} to read the observing date from "
+            f"(expected {exp_base.upper()}.vix in the current directory).")
+    obsdate = dt.combine(inputs.parse_obsdate(vex.Vex(vexfile), vexfile), dt.min.time())
 
     if freq < 0.6:
         band = 'P'

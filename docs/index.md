@@ -14,13 +14,14 @@ and correlated data on disk.
 ## Features
 
 - **Semi-automatic workflow** — Runs the full post-correlation pipeline
-  (16 steps, `initialize` → `archive`) with minimal user intervention.
-- **Plugin backends** — Retrieval, calibration pipeline, and delivery are each
-  swappable (`jive`/`none`/…) via CLI flag or the experiment toml, so the same
-  core runs at JIVE or fully standalone. See [Plugin Backends](guide/backends.md).
+  (16 steps, `initialize` → `distribute`) with minimal user intervention.
+- **Operating modes** — A single `--mode` (auto-detected from the OS user/group)
+  selects `supsci` (the JIVE support-scientist job), `regular` (all local, no server
+  contact, nothing archived), or `sweeps` (future), so the same core runs at JIVE or
+  fully standalone. See [Operating Modes](guide/modes.md).
 - **Experiment TOML** — One `{expname}.toml` per experiment records source types,
-  PI contacts, backend choices, and every resolved processing parameter, so a
-  re-run is silent and fully reproducible. See [Experiment TOML Schema](reference/experiment-toml.md).
+  PI contacts, and every resolved processing parameter, so a re-run is silent and
+  fully reproducible. See [Experiment TOML Schema](reference/experiment-toml.md).
 - **Heuristic source classification** — Target/calibrator/fringe-finder guessed
   from the schedule and an optional RFC-catalogue lookup when not declared. See
   [Source Classification](guide/source-classification.md).
@@ -57,7 +58,7 @@ postprocess run pipeline
 postprocess --batch --policy policy.toml run
 
 # Run fully standalone, no JIVE server ever contacted:
-postprocess --retrieval none --pipeline none --distribution none run
+postprocess --mode regular run
 ```
 
 ---
@@ -66,16 +67,19 @@ postprocess --retrieval none --pipeline none --distribution none run
 
 ```text
 postprocess (CLI)
-  └── main.py            → argument parsing, backend selection, experiment loading
+  └── main.py            → argument parsing, mode resolution, experiment loading
+       ├── mode.py        → detect/resolve/persist the operating mode; mode → backends
        └── workflow.py    → step orchestration (16-step Task list, e-EVN barriers)
             ├── inputs.py            → vex/lis/toml → Experiment (no server contact)
             ├── experiment_state.py  → {expname}.toml load/resolve/write-back
             ├── source_classify.py  → heuristic target/calibrator/fringefinder
-            ├── retrieval/           → jive | none  (input-file acquisition)
+            ├── retrieval/           → jive | none | sweeps  (input acquisition; jive owns all ssh/scp)
             ├── pipelines/           → aips | none | vpipe  (calibration)
             ├── distribution/        → jive | none | sweeps  (delivery)
             ├── review.py            → station summary, dashboard Comments defaults
             ├── eevn.py              → sibling conventions, sync barriers
+            ├── reporting.py         → 3 channels: terminal / logs/logging_messages.log / logs/commands.sh
+            ├── servers.py           → computers.toml server config (jive backends only)
             ├── process.py           → MS operations, standardplots, tConvert
             ├── pipeline.py          → EVN.py pipeline glue (used by pipelines.aips)
             ├── dialog.py            → user interaction (Terminal / PolicyDriven)
@@ -95,7 +99,7 @@ design patterns (registry, toml precedence, e-EVN barriers).
 - :material-download: **[Installation](getting-started/installation.md)** — Set up the package
 - :material-rocket-launch: **[Quick Start](getting-started/quickstart.md)** — Run your first experiment
 - :material-book-open-variant: **[User Guide](guide/workflow.md)** — In-depth usage
-- :material-puzzle: **[Plugin Backends](guide/backends.md)** — Retrieval, pipeline, distribution
+- :material-puzzle: **[Operating Modes](guide/modes.md)** — Retrieval, pipeline, distribution
 - :material-api: **[API Reference](api/experiment.md)** — Module documentation
 - :material-source-branch: **[Development](development/architecture.md)** — Internals & contributing
 

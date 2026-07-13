@@ -1,7 +1,7 @@
 # retrieval
 
 Retrieval backends: how the input files of an experiment are obtained. See
-[Plugin Backends](../guide/backends.md) for the user-facing overview.
+[Operating Modes](../guide/modes.md) for the user-facing overview.
 
 ## Interface & registry
 

@@ -15,7 +15,7 @@ warning), asked interactively, or resolved from `policy.toml` in batch mode — 
 
 | Section | Owner | Rewritten by the program? |
 | --- | --- | --- |
-| `[observation]`, `[[pi]]`, `[sources]`, `[retrieval]`, `[pipeline]`, `[distribution]` | You (or the retrieval module) | No — except heuristic source guesses (see below) |
+| `[observation]`, `[[pi]]`, `[sources]`, `skip_steps` | You (or the retrieval module) | No — except heuristic source guesses (see below) |
 | `[postprocess]` | Program | Yes, via `record_parameters` |
 | `[comments]` | Program (dashboard) | Yes, via `record_comments` |
 
@@ -56,20 +56,22 @@ Source names containing `+`, `-`, or `.` must be quoted (TOML bare-key rule), e.
 | `protected` | bool | Archive credentials required to download this source's data. |
 | `guessed` | bool | `true` marks a program-made heuristic classification (see [Source Classification](../guide/source-classification.md)) — freely editable. |
 
-## Backend selection: `[retrieval]` / `[pipeline]` / `[distribution]`
+## Backend selection is by mode, not by the toml
 
-Each section has a single `mode` key; see [Plugin Backends](../guide/backends.md)
-for the available values and defaults, and note the CLI flags (`--retrieval`,
-`--pipeline`, `--distribution`) override whatever is set here.
+Input acquisition, the pipeline, and delivery are chosen by the [operating
+mode](../guide/modes.md) (`--mode`, or auto-detected from the OS user/group), **not**
+by the toml. There is no `[retrieval]`/`[pipeline]`/`[distribution]` selection key in
+Phase 2 — the mode picks all three ends together.
+
+## `skip_steps` (top-level)
+
+An optional top-level list of workflow step names to bypass, used by `sweeps` mode:
 
 ```toml
-[retrieval]
-mode = "jive"
-[pipeline]
-mode = "aips"
-[distribution]
-mode = "jive"
+skip_steps = ["standardplots", "polconvert"]
 ```
+
+The runner logs which steps it skips and runs the rest normally.
 
 ## `[postprocess]` (program-written)
 

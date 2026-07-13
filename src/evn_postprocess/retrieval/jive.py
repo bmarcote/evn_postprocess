@@ -1,13 +1,16 @@
 """The 'jive' retrieval backend: fetch input files from the JIVE servers.
 
-Owns ALL JIVE-server knowledge for input acquisition (ccs for vex/lis, vlbeer for the
-station .log/.antabfs files, per the decision recorded in docs/issues-refactor.md).
-Imported only when the 'jive' backend is selected. Delegation to the historical io/
-lisfiles helpers remains for the vex/lis transport; the vlbeer fetch lives here.
+Owns ALL JIVE-server knowledge for input acquisition and every outbound ssh/scp for it
+(ccs for the vex and .lis files, the piletters host for the .piletter, vlbeer for the
+station .log/.antabfs and the .key/.sum schedule files, and the VLBA cal fetch). No other
+module in the package performs input-side server access -- the server-agnostic core and
+the ``none``/``sweeps`` modes never import this file. Imported only when the 'jive'
+backend is selected.
 """
 from __future__ import annotations
 
 import glob
+import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,7 +20,156 @@ from rich import print as rprint
 
 from . import InputSet, RetrievalError, Retriever
 from .. import experiment_state
+from .. import utils
 from ..lisfiles import LAG_TAG
+
+
+# --------------------------------------------------------------------------------------
+# Server-touching transport functions. Relocated here (Phase 2, Issue 4) so that every
+# outbound ssh/scp for input acquisition lives inside the JIVE retrieval backend, out of
+# the shared core modules. Logic is unchanged from the historical io/lisfiles/pipeline.
+# --------------------------------------------------------------------------------------
+
+def get_init_files(expname: str, servers, eEVNname: str | None = None) -> bool:
+    """Retrieves the .vix (or .vox) vex file of the experiment, plus the .piletter.
+
+    The vex file is the only hard requirement (all experiment metadata derives from it);
+    the .piletter is best-effort for the later distribution stage and its absence only
+    logs a warning.
+
+    Returns:
+        bool: True if the vex file is present locally after the call.
+    """
+    eEVNname = expname if eEVNname is None else eEVNname
+    piletter_server = servers['piletters']
+    piletter_path = Path(f"{expname.lower()}.piletter")
+    main_vex = Path(f"{expname.upper()}.vix")
+
+    def fetch_piletter():
+        if not piletter_path.exists():
+            utils.scp(f"{piletter_server.user}@{piletter_server.host}:{piletter_server.path / piletter_path}", '.')
+            logger.debug(f"{piletter_path.name} was not found. Retrieved from {piletter_server.host}.")
+        else:
+            logger.debug(f"{piletter_path.name} already exists")
+
+    def fetch_vix_or_vox():
+        ccs_server = servers['ccs']
+        base_path = Path(str(ccs_server.path).format(expname=eEVNname))
+        remote_host = f"{ccs_server.user}@{ccs_server.host}"
+        if main_vex.exists():
+            logger.debug(f"{expname.upper()}.vix already exists.")
+            return True
+
+        for ext in ['vox', 'vix']:
+            file_path = Path(f"{eEVNname.lower()}.{ext}")
+            if not file_path.exists():
+                if utils.remote_file_exists(remote_host, base_path / file_path):
+                    utils.scp(f"{remote_host}:{base_path / file_path}", '.')
+                    logger.debug(f"{file_path} was not found. Retrieved from {remote_host}.")
+                else:
+                    continue
+            try:
+                main_vex.symlink_to(file_path)
+                logger.debug(f"Symlink {file_path} -> {main_vex} created.")
+            except FileExistsError:
+                logger.error(f"{expname.lower()} vix/vox file not found in {remote_host}. "
+                             "It may have a non-standard name.")
+                return False
+            return True
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {'piletter': executor.submit(fetch_piletter),
+                   'vex': executor.submit(fetch_vix_or_vox)}
+        try:
+            futures['piletter'].result()
+        except Exception as e:  # best-effort: only needed at distribution time
+            logger.warning(f"Could not retrieve {piletter_path.name} (continuing): {e}")
+        futures['vex'].result()
+
+    return main_vex.exists()
+
+
+def get_vlbeer_sched_files(expname: str, obsdate, server) -> bool:
+    """Retrieves the .key and .sum observing files from vlbeer (best-effort)."""
+    files = [Path(f"{expname.lower()}.key"), Path(f"{expname.lower()}.sum")]
+
+    def fetch_file(a_file: Path):
+        if a_file.exists():
+            logger.debug(f"{a_file.name} already exists.")
+            return
+        try:
+            s_formatted = utils.format_remote_path(str(server.path), obsdate=obsdate)
+            utils.scp(f"{server.user}@{server.host}:{Path(s_formatted) / a_file}", ".", timeout=120)
+            logger.debug(f"Retrieved {a_file.name} from vlbeer")
+        except subprocess.TimeoutExpired:
+            rprint(f"[bold yellow]Could not retrieve {a_file.name} from vlbeer.[/bold yellow]")
+            a_file.unlink(missing_ok=True)
+            logger.warning(f"Could not retrieve {a_file.name} from vlbeer (timeout)")
+        except ValueError:
+            rprint(f"[bold yellow]Could not find {a_file.name} in vlbeer.[/bold yellow]")
+            a_file.unlink(missing_ok=True)
+            logger.warning(f"Could not find {a_file.name} in vlbeer")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        for future in [executor.submit(fetch_file, a_file) for a_file in files]:
+            future.result()
+    return all([p.exists() for p in files])
+
+
+def lis_files_in_ccs(exp, server) -> bool:
+    """Returns whether .lis files already exist in the experiment directory in ccs."""
+    eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
+    return utils.remote_file_exists(f"{server.user}@{server.host}",
+                                    str(Path(str(server.path).format(expname=eEVNname)) / f"{eEVNname.lower()}*.lis"))
+
+
+def create_lis_files(exp) -> bool:
+    """Creates the .lis files remotely on ccs (make_lis)."""
+    from .. import servers as _servers
+    eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
+    server = _servers.retrieve_servers()['ccs']
+    if not lis_files_in_ccs(exp, server):
+        logger.info("Creating lis file...")
+        utils.ssh(f"{server.user}@{server.host}",
+                  f"cd {Path(str(server.path).format(expname=eEVNname))};/ccs/bin/make_lis -e {eEVNname}")
+    return True
+
+
+def get_lis_files(exp) -> bool:
+    """Copies the .lis files from ccs and normalises them for this experiment."""
+    from .. import servers as _servers
+    from .. import lisfiles as _lisfiles
+    eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
+    server = _servers.retrieve_servers()['ccs']
+    if len(_lisfiles._pass_lisfiles(f"{eEVNname.lower()}*.lis")) == 0:
+        utils.scp(f"{server.user}@{server.host}:"
+                  + str(Path(str(server.path).format(expname=eEVNname)) / f"{eEVNname.lower()}*.lis"), '.')
+
+    for a_lis in _lisfiles._pass_lisfiles("*.lis"):
+        _lisfiles.split_lis_cont_line(exp, a_lis)
+
+    # e-EVN runs may need the lis files renamed to this experiment.
+    if eEVNname != exp.expname:
+        for a_lis in _lisfiles._pass_lisfiles("*.lis"):
+            if exp.expname.lower() not in a_lis:
+                _lisfiles.update_lis_file(a_lis, eEVNname, exp.expname)
+            os.rename(a_lis, a_lis.replace(eEVNname.lower(), exp.expname.lower()))
+    return True
+
+
+def get_vlba_antab(exp):
+    """Retrieves the VLBA cal (antab) files and gains into the archive temp folder."""
+    rprint("[bold yellow]get_vlba_antab not implemented yet. You need to get the VLBA "
+           "antab files manually.[/bold yellow]")
+    raise NotImplementedError
+    if exp.expname.lower()[0] != 'g':
+        return True
+    cd = f"cd /data/pipe/{exp.expname.lower()}/temp/"
+    utils.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@eee:/data0/tsys/vlba_gains.key ."]))
+    utils.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@ccs:/ccs/var/log2vex/logexp_date/"
+                                                f"{exp.expname.upper()}_{exp.obsdate.strftime('%Y%m%d')}"
+                                                f"/{exp.expname.lower()}cal.vlba ."]))
+    return True
 
 
 def fetch_from_vlbeer(exp, server) -> bool:
@@ -110,9 +262,9 @@ class JiveRetriever(Retriever):
 
     @staticmethod
     def _servers():
-        from .. import experiment
+        from .. import servers
         try:
-            return experiment.retrieve_servers()
+            return servers.retrieve_servers()
         except FileNotFoundError as e:
             raise RetrievalError(
                 "Retrieval mode 'jive' requires the computers.toml server configuration "
@@ -129,12 +281,11 @@ class JiveRetriever(Retriever):
             RetrievalError: When the vex file cannot be obtained.
         """
         workdir = Path(workdir)
-        from .. import io
         from ..inputs import find_local_vex
         vexfile = find_local_vex(expname, workdir)
         if vexfile is None:
             servers = self._servers()
-            if not io.get_init_files(expname, servers):
+            if not get_init_files(expname, servers):
                 raise RetrievalError(
                     f"Could not retrieve the vex file for {expname} from the correlator "
                     f"server ({servers['ccs'].host}). For e-EVN experiments, copy the vex "
@@ -174,11 +325,10 @@ class JiveRetriever(Retriever):
         Raises:
             RetrievalError: When the remote creation or the copy fails.
         """
-        from .. import lisfiles as _lisfiles
-        if not _lisfiles.create_lis_files(exp):
+        if not create_lis_files(exp):
             raise RetrievalError(f"Could not create the .lis files for {exp.expname} on the "
                                  "correlator server (ccs).")
-        if not _lisfiles.get_lis_files(exp):
+        if not get_lis_files(exp):
             raise RetrievalError(f"Could not copy the .lis files for {exp.expname} from the "
                                  "correlator server (ccs).")
         return True
@@ -195,3 +345,17 @@ class JiveRetriever(Retriever):
         except KeyError as e:
             raise RetrievalError(f"Server 'vlbeer' missing from computers.toml: {e}") from e
         return fetch_from_vlbeer(exp, vlbeer)
+
+    def fetch_schedule_files(self, exp) -> None:
+        """Best-effort fetch of the .key/.sum schedule files from vlbeer (JIVE nicety).
+
+        Their absence must never block a run, so every failure (no computers.toml, server
+        unreachable, files missing) is logged and swallowed. This keeps the only place that
+        knows about vlbeer for schedule files inside the JIVE retrieval backend.
+        """
+        try:
+            servers = self._servers()
+            get_vlbeer_sched_files(exp.expname if exp.eEVNname is None else exp.eEVNname,
+                                   exp.obsdate, servers['vlbeer'])
+        except (RetrievalError, FileNotFoundError, KeyError, ValueError, RuntimeError) as e:
+            logger.warning(f"Could not retrieve the .key/.sum files from vlbeer (continuing): {e}")

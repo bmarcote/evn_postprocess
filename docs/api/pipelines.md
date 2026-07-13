@@ -1,7 +1,7 @@
 # pipelines
 
 Calibration pipeline backends (`aips`, `none`, `vpipe`). See
-[Plugin Backends](../guide/backends.md) for the user-facing overview.
+[Operating Modes](../guide/modes.md) for the user-facing overview.
 
 ## Interface & registry
 

@@ -5,7 +5,7 @@
 ```text
 postprocess [-h] [-e EXPNAME] [-jss SUPSCI] [-d DIR] [-a] [--no-lag] [--debug]
             [--refant REFANT [REFANT ...]]
-            [--retrieval MODE] [--pipeline MODE] [--distribution MODE]
+            [--mode {supsci,regular,sweeps}] [--config FILE]
             [--policy FILE] [--tConvert-in-eee | --no-tConvert-in-eee]
             [--batch] [--comms FILE] [-v]
             {info,dashboard,list,last,run,exec,edit} ...
@@ -17,22 +17,29 @@ postprocess [-h] [-e EXPNAME] [-jss SUPSCI] [-d DIR] [-a] [--no-lag] [--debug]
 | --- | --- |
 | `-e`, `--expname` | Experiment name (case-insensitive). Default: from cwd. |
 | `-jss`, `--supsci` | Support Scientist surname. Default: current user. |
-| `-d`, `--dir` | Working directory. Default: `/data/exp/<EXPNAME>`. |
-| `-a`, `--no-archive` | Skip the final `archive` step. |
+| `-d`, `--dir` | Working directory. Default: the JIVE `eee` location when `computers.toml` is configured, otherwise the current directory. |
+| `-a`, `--no-archive` | Skip the final `distribute` step. |
 | `--no-lag` | Skip building the lag-space MS / per-scan antenna SNR. Sticky across re-runs once set. |
 | `--debug` | Enable verbose debug logging. |
 | `--refant` | Override reference antenna(s) (space-separated). |
-| `--retrieval MODE` | How input files are obtained: `jive` (default) or `none`. Overrides `[retrieval] mode` in the experiment toml. |
-| `--pipeline MODE` | Calibration pipeline: `aips` (default), `none`, or `vpipe` (not implemented). Overrides `[pipeline] mode`. |
-| `--distribution MODE` | Delivery/archiving: `jive` (default), `none`, or `sweeps` (not implemented). Overrides `[distribution] mode`. |
+| `--mode {supsci,regular,sweeps}` | Operating mode. Auto-detected from the OS when omitted (see below); overrides and re-persists the mode stored on the experiment. |
+| `--config FILE` | Experiment toml used as the prepared config (sweeps mode). Optional: defaults to the conventional `{expname}.toml`. |
 | `--policy FILE` | Path to `policy.toml` for unattended decisions. |
 | `--tConvert-in-eee` / `--no-tConvert-in-eee` | Run `tConvert`/PolConvert on `eee` (default) or locally. |
 | `--batch` | Run unattended; write `REVIEW_REQUIRED` instead of blocking. |
 | `--comms FILE` | Path to `comms.toml` for notifications. Auto-searches if not given. |
 | `-v`, `--version` | Print version and exit. |
 
-An unknown `--retrieval`/`--pipeline`/`--distribution` name is rejected
-immediately, before any step runs.
+### Operating mode
+
+A single `--mode` replaces the former `--retrieval`/`--pipeline`/`--distribution`
+flags — see [Operating Modes](../guide/modes.md). When omitted it is **auto-detected**
+from the OS user/group: `jops` or the `supsci` group → `supsci`; the `sweeps` group →
+`sweeps`; otherwise `regular`. The resolved mode is persisted on the experiment and
+reused on every later invocation (a plain resume never silently switches mode; passing
+a different `--mode` overrides and re-persists it, with a warning). An unknown `--mode`
+value is rejected at parse time, and a mode whose backends are unavailable/unimplemented
+fails immediately, before any step runs.
 
 ### Subcommands
 
@@ -44,7 +51,8 @@ postprocess run [STEP1 [STEP2]]
 
 Runs the pipeline. Without arguments: from last successful step. With one step:
 from that step to the end. With two steps: from STEP1 to STEP2 (inclusive). See
-[Workflow Steps & Local Tools](steps.md) for the 16 step names.
+[Workflow Steps & Local Tools](steps.md) for the 16 step names. The final step is
+`distribute` (the deprecated name `archive` still works as an alias).
 
 #### `info`
 

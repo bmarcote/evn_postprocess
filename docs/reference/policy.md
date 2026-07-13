@@ -23,7 +23,7 @@ refant = ["Ef"]
 # Default: ["postpipe"]
 pause_after = ["postpipe"]
 
-# Whether to skip the archive step entirely.
+# Whether to skip the distribute step entirely.
 skip_archive = false
 
 # Mark this as a batch run (enables PolicyDriven dialog).
@@ -40,7 +40,7 @@ batch = true
 | `onebit` | list[str] | Yes | Antennas that recorded with 1-bit sampling. |
 | `refant` | list[str] | No | Override reference antenna selection. |
 | `pause_after` | list[str] | No | Step names that trigger a review pause. |
-| `skip_archive` | bool | No | If true, skip the final archive step. |
+| `skip_archive` | bool | No | If true, skip the final distribute step. |
 | `batch` | bool | No | Marks this as a batch-mode policy. |
 
 ## Loading

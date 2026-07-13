@@ -20,7 +20,6 @@ from rich.console import Console
 from . import experiment
 from . import experiment_state
 from . import inputs
-from . import io
 from . import distribution
 from . import eevn
 from . import pipelines
@@ -32,6 +31,30 @@ from . import lisfiles
 from . import dialog
 from . import utils
 from . import comms as _comms
+from . import mode as _mode
+from . import reporting
+from .mode import Mode
+
+
+def _jive_backend():
+    """Lazily imports the JIVE retrieval backend module (holds the ccs/vlbeer transport).
+
+    Kept lazy so a non-jive run never imports the JIVE server machinery; used by the
+    granular `postprocess exec makelis/getlis` power-user commands.
+    """
+    from .retrieval import jive
+    return jive
+
+
+def _backends(exp: experiment.Experiment) -> _mode.Backends:
+    """Returns the retrieval/pipeline/distribution backend names for *exp*'s mode.
+
+    The mode is normally resolved and persisted by the CLI at initialization; if it is
+    somehow absent (a step reached directly on a pre-Phase-2 checkpoint), it is
+    re-detected from the OS so selection never fails for lack of a stored value.
+    """
+    m = exp.mode if getattr(exp, 'mode', None) is not None else _mode.detect()
+    return _mode.backends_for(m)
 
 _RICH_TAG_RE = re.compile(r'\[/?[\w\s#.,;:!?=-]+\]')
 _stdout_console = Console(highlight=False)
@@ -117,6 +140,24 @@ def _clear_review_flag(exp: experiment.Experiment) -> None:
     _review_flag_path(exp).unlink(missing_ok=True)
 
 
+def _notify_step_failure(exp: experiment.Experiment, step: str, reason: str) -> None:
+    """Announces a hard step failure: terminal + configured comms, resumable state kept.
+
+    A failure is deliberately distinct from the clean review-pause (which writes a marker
+    and exits 0): the step is NOT marked done, so re-running `postprocess run` resumes from
+    it, and the caller returns False so the process exits non-zero (PRD stories 35-36).
+    """
+    logger.error(f"Step {step} failed: {reason}.")
+    reporting.announce(f"Step '{step}' failed: {reason}. "
+                       f"Fix the cause and re-run `postprocess run` to resume from here.",
+                       style='bold red')
+    utils.notify(f"{exp.expname} post-processing", f"FAILED at step {step}: {reason}")
+    if _NOTIFIER is not None:
+        _comms.notify_operator(exp, f"post-processing FAILED at step {step}",
+                               f"{reason}. The run stopped; re-run `postprocess run` to resume "
+                               f"from '{step}' once fixed.", _NOTIFIER)
+
+
 def _signal_pause(exp: experiment.Experiment, step: str) -> None:
     """Signals a "stop and review" condition after a successful step.
 
@@ -169,7 +210,7 @@ class Task(object):
         return cls(name=data['name'], command=data['command'], doc=data['doc'], done=data.get('done', False))
 
 
-_WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
+_WORKFLOW_STEPS = [Task('init', 'initialize_experiment',
                         "Creates the directory structure to post-process the experiment. "
                         "Locates (or retrieves) the .vex file and derives all metadata from it: "
                         "observing date, e-EVN run (from exper_description), stations, sources, and "
@@ -203,8 +244,21 @@ _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
                    Task('postpipe', 'pipeline_diagnostics', 'Runs diagnostics on the pipeline outputs.'),
                    Task('prearchive', 'pre_archive', "Prepares the experiment for archiving. Attaches the Tsys "
                         "information to the FITS-IDI files."),
-                   Task('archive', 'archive', "Sets the credentials, protechs the files, and archives the "
-                        "experiment. In case of an NME, it will prepare the .tex file for the NME feedback.")]
+                   Task('distribute', 'archive', "Delivers the experiment through the mode's "
+                        "distribution backend (supsci: credentials, PI letter, archive; regular: "
+                        "verify the FITS-IDI files are in order). Deprecated alias: 'archive'.")]
+
+# Deprecated step-name aliases: {old: current}. 'archive' -> 'distribute' (renamed in Phase 2).
+_STEP_ALIASES = {'archive': 'distribute'}
+
+
+def _resolve_step_alias(name: str | None) -> str | None:
+    """Maps a deprecated step name to its current name (warns once), passing others through."""
+    if name in _STEP_ALIASES:
+        current = _STEP_ALIASES[name]
+        logger.warning(f"Step name '{name}' is deprecated; use '{current}'.")
+        return current
+    return name
 
 
 def create_folder_structure() -> experiment.Dirs:
@@ -217,7 +271,7 @@ def create_folder_structure() -> experiment.Dirs:
 
 
 
-def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
+def initialize_experiment(expname: str, supsci: str, mode: Mode) -> experiment.Experiment:
     """Initializes an experiment object with all the metadata derived from the .vex file.
 
     Vex-only bootstrap (no MASTER_PROJECTS.LIS, .jexp, or .expsum): the observing date
@@ -225,49 +279,47 @@ def initialize_experiment(expname: str, supsci: str) -> experiment.Experiment:
     stations/sources/scans from the vex sections. Source types, PI contacts, and the
     support scientist may be complemented by the experiment toml ({expname}.toml).
 
-    When no vex file is present locally, it is fetched from the correlator server
-    (requires computers.toml; this fallback moves into the JIVE retrieval backend in a
-    later phase). Fully offline runs just need the vex file already in the directory.
+    The *mode* (resolved and persisted by the CLI) picks the retrieval backend: ``supsci``
+    fetches the vex/lis from the correlator server, ``regular`` expects them already local,
+    ``sweeps`` is not implemented yet.
 
     Args:
         expname (str): Experiment name.
         supsci (str): Support scientist name assigned to this experiment.
+        mode (Mode): The resolved operating mode.
 
     Returns:
         experiment.Experiment: The initialized experiment.
     """
-    logger.debug(f"Initializing experiment {expname}")
+    logger.debug(f"Initializing experiment {expname} in mode '{mode.value}'")
     dirs = create_folder_structure()
 
-    # Backend selection: CLI --retrieval > experiment toml [retrieval] mode > 'jive'.
-    exp_toml = experiment_state.load_toml(experiment_state.toml_path_for(expname))
-    mode = retrieval.selected_mode(exp_toml)
+    retrieval_backend = _mode.backends_for(mode).retrieval
     try:
-        retriever = retrieval.get_retriever(mode)
+        retriever = retrieval.get_retriever(retrieval_backend)
         inputset = retriever.fetch(Path('.'), expname)
     except retrieval.RetrievalError as e:
-        logger.error(f"Retrieval ({mode}) failed for {expname}: {e}")
+        logger.error(f"Retrieval ({retrieval_backend}) failed for {expname}: {e}")
         rprint(f"[red]{e}[/red]")
         sys.exit(1)
 
+    # In sweeps mode the config must be fully prepared: no heuristic classification runs,
+    # and any observed source still untyped is a hard, field-named error.
+    classify = mode != Mode.sweeps
     try:
         exp = inputs.load_experiment(inputset.vexfile, lisfiles=inputset.lisfiles or None,
-                                     supsci=supsci, dirs=dirs, expname=expname)
+                                     supsci=supsci, dirs=dirs, expname=expname, classify=classify)
+        if mode == Mode.sweeps:
+            inputs.ensure_sources_typed(exp)
     except inputs.InputsError as e:
         logger.error(f"Could not initialize {expname} from {inputset.vexfile}: {e}")
         rprint(f"[red]{e}[/red]")
         sys.exit(1)
-    exp.retrieval_mode = mode
+    exp.mode = mode
 
-    if mode == 'jive':
-        # Observing schedule files (.key/.sum) from vlbeer: best-effort, JIVE-only
-        # nicety. Their absence must never block a run.
-        try:
-            servers = experiment.retrieve_servers()
-            io.get_vlbeer_sched_files(exp.expname if exp.eEVNname is None else exp.eEVNname,
-                                      exp.obsdate, servers['vlbeer'])
-        except (FileNotFoundError, KeyError, ValueError, RuntimeError) as e:
-            logger.warning(f"Could not retrieve the .key/.sum files from vlbeer (continuing): {e}")
+    # The best-effort .key/.sum schedule fetch is a supsci-only, server-touching nicety;
+    # it lives in the JIVE retrieval backend, not here, so the engine stays server-agnostic.
+    retriever.fetch_schedule_files(exp)
 
     exp.store()
     return exp
@@ -278,20 +330,19 @@ def retrieve_lisfiles(exp: experiment.Experiment) -> bool:
 
     Args:
         exp (experiment.Experiment): Experiment object.
-        server (experiment.Server): Server object with ccs connection information.
 
     Returns:
         bool: True if lis files were retrieved and processed successfully.
     """
     try:
         if len(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")) == 0:
-            # No local .lis files: the selected retrieval backend obtains them
+            # No local .lis files: the mode's retrieval backend obtains them
             # (jive: create on ccs + copy; none: explicit error, nothing creates them).
-            mode = retrieval.selected_mode(getattr(exp, 'exp_toml', None))
+            backend = _backends(exp).retrieval
             try:
-                retrieval.get_retriever(mode).fetch_lisfiles(exp)
+                retrieval.get_retriever(backend).fetch_lisfiles(exp)
             except retrieval.RetrievalError as e:
-                logger.error(f"Could not obtain the .lis files ({mode}): {e}")
+                logger.error(f"Could not obtain the .lis files ({backend}): {e}")
                 rprint(f"[red]{e}[/red]")
                 return False
         else:
@@ -324,7 +375,7 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
             if not lisfiles.get_passes_from_lisfiles(exp):
                 logger.error("Failed to extract passes from .lis files")
                 return False
-            
+
         if all(p.msfile.exists() for p in exp.correlator_passes):
             logger.debug("MS files already exist. Skipping checklis.")
             return True
@@ -366,7 +417,7 @@ def create_msfile(exp: experiment.Experiment) -> bool:
 
             if not process.j2ms2(exp):
                 logger.error("Failed to run j2ms2")
-                return False 
+                return False
 
             process.update_ms_expname(exp)
         else:
@@ -534,13 +585,13 @@ def _ask_review_confirmation() -> str | None:
 
 
 def _pipeline_backend(exp: experiment.Experiment):
-    """Returns the selected pipeline backend (CLI > experiment toml > 'aips').
+    """Returns the pipeline backend for the experiment's mode (currently always 'aips').
 
     An unknown/unimplemented backend raises pipelines.PipelineError at selection time
-    (main already validates at startup; this re-check covers `postprocess exec` and
-    toml edits made mid-run). Callers turn it into a clean step failure.
+    (main already validates at startup; this re-check covers `postprocess exec` and a
+    checkpoint reached with no stored mode). Callers turn it into a clean step failure.
     """
-    return pipelines.get_pipeline(pipelines.selected_mode(_exp_toml(exp)))
+    return pipelines.get_pipeline(_backends(exp).pipeline)
 
 
 def _run_pipeline_stage(exp: experiment.Experiment, stage: str) -> bool:
@@ -817,13 +868,13 @@ def antfiles(exp: experiment.Experiment) -> bool:
                     _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
                 raise StepPaused(reason)
 
-        # Station .log/.antabfs files come from the selected retrieval backend
+        # Station .log/.antabfs files come from the mode's retrieval backend
         # (jive: vlbeer download; none: validate they are already local).
         try:
-            mode = retrieval.selected_mode(getattr(exp, 'exp_toml', None))
-            retrieval.get_retriever(mode).fetch_station_files(exp)
+            backend = _backends(exp).retrieval
+            retrieval.get_retriever(backend).fetch_station_files(exp)
         except retrieval.RetrievalError as e:
-            logger.error(f"Could not obtain the station files ({mode}): {e}")
+            logger.error(f"Could not obtain the station files ({backend}): {e}")
             rprint(f"[red]{e}[/red]")
             return False
         if any(s.lower() in ('br', 'kp', 'la', 'yy', 'mk') for s in exp.antennas.names):
@@ -970,14 +1021,15 @@ def _record_final_in_toml(exp: experiment.Experiment) -> None:
 
 
 def archive(exp: experiment.Experiment) -> bool:
-    """Delivers the experiment through the selected distribution backend.
+    """Delivers the experiment through the mode's distribution backend.
 
-    Backend selection: experiment toml [distribution] mode > 'jive' (the historical
-    EVN-archive delivery). Mode 'none' completes without archiving anything.
+    Backend selection follows the mode: ``supsci`` -> ``jive`` (the historical EVN-archive
+    delivery), ``regular`` -> ``none`` (completes without archiving anything), ``sweeps`` ->
+    ``sweeps`` (not implemented yet).
     """
     try:
-        mode = distribution.selected_mode(_exp_toml(exp))
-        return distribution.get_distributor(mode).deliver(exp)
+        backend = _backends(exp).distribution
+        return distribution.get_distributor(backend).deliver(exp)
     except distribution.DistributionError as e:
         logger.error(f"Distribution failed: {e}")
         rprint(f"[red]{e}[/red]")
@@ -999,8 +1051,12 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
     """
     return {
         # -- directory / setup --
-        'makelis':       ExecCommand(lisfiles.create_lis_files, "Create the .lis files in ccs."),
-        'getlis':        ExecCommand(lisfiles.get_lis_files, "Copy the .lis files from ccs to eee."),
+        # makelis/getlis are supsci-only ccs operations; their ssh bodies live in the JIVE
+        # retrieval backend (lazy import keeps jive machinery out of non-jive runs).
+        'makelis':       ExecCommand(lambda exp: _jive_backend().create_lis_files(exp),
+                                     "Create the .lis files in ccs (JIVE retrieval backend)."),
+        'getlis':        ExecCommand(lambda exp: _jive_backend().get_lis_files(exp),
+                                     "Copy the .lis files from ccs to eee (JIVE retrieval backend)."),
         'modlis':        ExecCommand(lisfiles.get_passes_from_lisfiles,
                                      "Read correlator passes from the .lis files and update the header."),
         'checklis':      ExecCommand(lisfiles.check_lisfiles, "Run checklis on all .lis files."),
@@ -1047,10 +1103,10 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
                                      "Prepare .antab and run antab_editor.py."),
         'uvflg':         ExecCommand(pipeline.create_uvflg, "Create .uvflg from all log files."),
         'vlbeer':        ExecCommand(lambda exp: retrieval.get_retriever(
-                                         retrieval.selected_mode(getattr(exp, 'exp_toml', None))
+                                         _backends(exp).retrieval
                                      ).fetch_station_files(exp),
                                      "Obtain the station antabfs/log/flag files (through the "
-                                     "selected retrieval backend)."),
+                                     "mode's retrieval backend)."),
         'pyinput':       ExecCommand(pipeline.create_input_file,
                                      "Create the input file for the EVN pipeline."),
         'pipe':          ExecCommand(pipeline.run_pipeline, "Run the EVN Pipeline."),
@@ -1162,12 +1218,15 @@ def validate_steps(from_step: str, to_step: str | None = None) -> tuple[bool, st
     """
     if not _WORKFLOW_STEPS:
         return False, "No workflow steps defined"
-    
+
     step_names = [s.name for s in _WORKFLOW_STEPS]
+    # Accept deprecated aliases (e.g. 'archive' -> 'distribute').
+    from_step = _resolve_step_alias(from_step)
+    to_step = _resolve_step_alias(to_step)
 
     if not from_step:
         return False, "Starting step cannot be empty"
-    
+
     if from_step not in step_names:
         return False, f"Step '{from_step}' not found. Available steps: {', '.join(step_names)}"
 
@@ -1346,17 +1405,14 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
 
 
 def _log_file_path(exp: experiment.Experiment) -> Path:
-    """Returns the post_processing.log path: the JIVE eee location when configured,
-    otherwise the current working directory (standalone runs need no computers.toml)."""
-    try:
-        return Path(experiment.retrieve_servers()['eee'].path) / exp.expname.upper() \
-            / "post_processing.log"
-    except (FileNotFoundError, KeyError):
-        return Path("post_processing.log")
+    """Returns the loguru debug-log path: ``logs/logging_messages.log`` in the working
+    directory (see evn_postprocess.reporting; the replayable command log is a separate
+    file, ``logs/commands.sh``)."""
+    return reporting.debug_log_path()
 
 
 def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
-    """Configure loguru file sink for the debug log (post_process.log).
+    """Configure the loguru file sink for the debug log (logs/logging_messages.log).
 
     Args:
         exp: Experiment object (provides dirs.logs).
@@ -1435,7 +1491,16 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
     if not archive:
         logger.debug("The data will not be stored in the EVN archive.")
 
-    all_steps = [s for s in _WORKFLOW_STEPS if (archive or s.name != 'archive') and s.name != 'initialize']
+    from_step = _resolve_step_alias(from_step)
+    to_step = _resolve_step_alias(to_step)
+    all_steps = [s for s in _WORKFLOW_STEPS if (archive or s.name != 'distribute') and s.name != 'init']
+    # skip_steps from the prepared config (used in sweeps mode): bypass the named steps.
+    skip = set(getattr(_exp_toml(exp), 'skip_steps', []) or [])
+    if skip:
+        skipped = [s.name for s in all_steps if s.name in skip]
+        if skipped:
+            logger.info(f"Skipping steps from the config skip_steps: {', '.join(skipped)}.")
+        all_steps = [s for s in all_steps if s.name not in skip]
     step_names = [s.name for s in all_steps]
 
     # Deserialize stored steps from JSON dicts into Task objects if needed
@@ -1471,16 +1536,18 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
     rprint(f"[green]Running steps: {', '.join(s.name for s in steps_to_run)}[/green]")
 
     for step in steps_to_run:
-        rprint(f"[bold]-- {step.name}[/bold]")
+        # Three channels (see evn_postprocess.reporting): a concise terminal line for the
+        # operator, verbose detail to the loguru debug file, and the exact commands this
+        # step runs appended (headed by its name) to logs/commands.sh.
+        reporting.set_current_step(step.name)
+        reporting.announce(f"-- {step.name}")
         try:
             if step.command not in globals():
-                logger.error(f"Command '{step.command}' not found for step '{step.name}'")
-                utils.notify(f"{exp.expname} post-processing", f"Step {step.name} failed (command not found)")
+                _notify_step_failure(exp, step.name, "internal error: command not found")
                 return False
 
             if not globals()[step.command](exp):
-                logger.error(f"Step {step.name} failed.")
-                utils.notify(f"{exp.expname} post-processing", f"Step {step.name} failed")
+                _notify_step_failure(exp, step.name, "the step reported a failure")
                 return False
 
             step.done = True
@@ -1489,14 +1556,14 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
         except StepPaused as pause:
             # A clean wait state (e.g. an e-EVN barrier), NOT a failure: log and
             # notify as "paused" so failure notifications stay trustworthy, and exit
-            # cleanly for the scheduler. The step stays pending and re-runs on resume.
+            # cleanly (return True -> exit code 0) for the scheduler. The step stays
+            # pending and re-runs on resume.
             logger.info(f"Step {step.name} paused: {pause}")
             utils.notify(f"{exp.expname} post-processing", f"Paused at {step.name}: {pause}")
             return True
         except Exception as e:
-            logger.error(f"Unexpected error in step {step.name}: {e}")
             traceback.print_exc()
-            utils.notify(f"{exp.expname} post-processing", f"Crashed at step {step.name}: {e}")
+            _notify_step_failure(exp, step.name, f"unexpected error: {e}")
             return False
 
         # After postpipe, ask the user to review the dashboard before archiving

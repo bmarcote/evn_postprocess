@@ -5,37 +5,39 @@
 ```text
 src/evn_postprocess/
 ├── __init__.py
-├── main.py              # CLI entry point (argparse, backend CLI-mode validation)
+├── main.py              # CLI entry point (argparse, mode resolution, fail-fast validation)
+├── mode.py               # Detect/resolve/persist the operating mode; mode -> backend names
 ├── workflow.py          # Step orchestration (Task list, run_workflow, e-EVN barriers)
 ├── experiment.py         # Core data model (Experiment, Antennas, Sources, Scans, etc.)
-├── experiment_state.py   # {expname}.toml load/resolve/write-back, precedence rule
+├── experiment_state.py   # {expname}.toml load/resolve/write-back, precedence rule, skip_steps
 ├── inputs.py             # vex/lis/toml -> Experiment (no server contact)
 ├── source_classify.py    # Heuristic target/calibrator/fringefinder classification
 ├── review.py             # Station summary, dashboard Comments defaults, feedback-DB lookup
 ├── eevn.py               # e-EVN sibling conventions and synchronisation barriers
-├── registry.py           # Shared name -> factory registry used by the 3 plugin families
-├── retrieval/            # Input-file acquisition backends
-│   ├── __init__.py       #   Retriever ABC, registry, selected_mode (CLI > toml > default)
-│   ├── jive.py            #   copy vex from ccs, create .lis remotely, fetch from vlbeer
+├── reporting.py          # 3 channels: terminal / logs/logging_messages.log / logs/commands.sh
+├── servers.py            # computers.toml server config (imported only by the jive backends + tools)
+├── registry.py           # Shared name -> factory registry used by the 3 backend families
+├── retrieval/            # Input-file acquisition (chosen by mode)
+│   ├── __init__.py       #   Retriever ABC, registry (jive/none/sweeps-stub)
+│   ├── jive.py            #   ALL ccs/vlbeer/piletters ssh/scp for input acquisition lives here
 │   └── local.py           #   'none': validates everything is already on disk
 ├── pipelines/             # Calibration-pipeline backends
 │   ├── __init__.py       #   PipelineBackend ABC, registry, NonePipeline
 │   └── aips.py             #   wraps the historical EVN.py flow (pipeline.py)
 ├── distribution/          # Delivery backends
-│   ├── __init__.py       #   Distributor ABC, registry, NoneDistributor
+│   ├── __init__.py       #   Distributor ABC, registry, NoneDistributor (verifies FITS-IDI)
 │   └── jive.py             #   credentials, PI letter (+ review comments), archive, upload_feedback stub
-├── process.py            # MS operations, standardplots, tConvert, archiving glue
+├── process.py            # MS operations, standardplots, tConvert (incl. sanctioned tConvert-in-eee ssh)
 ├── pipeline.py            # Historical EVN.py / antab / feedback glue (wrapped by pipelines.aips)
 ├── plotting.py            # Jplot wrapper, PS->PNG, web dashboard (incl. Comments tab)
 ├── dialog.py               # User interaction (Terminal / PolicyDriven)
 ├── comms.py                # Notifications (email / Mattermost)
 ├── policy.py               # Batch-mode policy dataclass
 ├── feedback.py             # In-tree Python port of feedback.pl (pipeline feedback page)
-├── io.py                   # File retrieval (SCP from servers)
-├── lisfiles.py             # .lis file creation, retrieval, and validation
+├── lisfiles.py             # .lis file parsing/validation (local-only; ccs transport moved to retrieval/jive)
 ├── vex.py                  # VEX file parser
 ├── tools.py                # External binary resolution (env var / computers.toml / $PATH)
-├── utils.py                # Shell commands, SSH, notifications, formatting
+├── utils.py                # Shell commands, SSH/SCP helpers, notifications, formatting
 ├── comment_tasav.py        # .comment and .tasav.txt generation
 ├── mstools/                # Measurement Set subpackage
 │   ├── __init__.py
@@ -57,7 +59,7 @@ experiment `.toml`. Everything JIVE-specific (server access, AIPS, archive
 delivery) lives behind three ABCs — `retrieval.Retriever`,
 `pipelines.PipelineBackend`, `distribution.Distributor` — each with a `jive`
 implementation reproducing historical behaviour and a `none` no-op. See
-[Plugin Backends](../guide/backends.md) for the user-facing view.
+[Operating Modes](../guide/modes.md) for the user-facing view.
 
 ### Shared backend registry
 
@@ -155,7 +157,7 @@ Archive-ready / delivered data
 
 1. **New workflow steps** — Add a function + `Task` entry to `_WORKFLOW_STEPS`.
 2. **New retrieval/pipeline/distribution backends** — Implement the ABC and
-   `register('name', factory)`; see [Plugin Backends](../guide/backends.md).
+   `register('name', factory)`; see [Operating Modes](../guide/modes.md).
 3. **New notification backends** — Subclass `comms.Notifier`.
 4. **New dialog modes** — Subclass `dialog.Dialog`.
 5. **New plot types** — Add to the plotting module and the dashboard JS.

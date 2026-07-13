@@ -9,15 +9,15 @@ This sub-package encapsulates ALL knowledge about where input files come from
     antab step (decision recorded in docs/issues-refactor.md: this belongs to
     retrieval, not to the pipeline backends).
 
-Built-in backends: ``jive`` (default; JIVE servers, replicating the historical
-behaviour) and ``none`` (everything already local; never contacts any server).
-Backends are looked up by name in a lazy registry so that selecting ``none`` never
-imports JIVE-specific machinery. Third parties can call :func:`register` to add their
-own backend without touching core code.
+Built-in backends: ``jive`` (JIVE servers, replicating the historical behaviour),
+``none`` (everything already local; never contacts any server), and ``sweeps`` (a
+registered but not-yet-implemented placeholder). Backends are looked up by name in a
+lazy registry so that selecting ``none`` never imports JIVE-specific machinery. Third
+parties can call :func:`register` to add their own backend without touching core code.
 
-Selection precedence: CLI ``--retrieval`` > experiment toml ``[retrieval] mode`` >
-``"jive"``. An unknown name raises :class:`RetrievalError` at selection time, before
-any workflow step executes.
+The backend name is chosen by the operating mode (see :mod:`evn_postprocess.mode`):
+``supsci`` -> ``jive``, ``regular`` -> ``none``, ``sweeps`` -> ``sweeps``. An unknown
+name raises :class:`RetrievalError` at selection time, before any workflow step executes.
 """
 from __future__ import annotations
 
@@ -27,12 +27,6 @@ from pathlib import Path
 from typing import Callable
 
 from loguru import logger
-
-
-DEFAULT_MODE = 'jive'
-
-# Module-level CLI override (set from main via set_cli_mode); None means "not given".
-_CLI_MODE: str | None = None
 
 
 class RetrievalError(RuntimeError):
@@ -92,6 +86,14 @@ class Retriever(ABC):
             RetrievalError: When no station files can be obtained at all.
         """
 
+    def fetch_schedule_files(self, exp) -> None:
+        """Best-effort fetch of the observing-schedule (.key/.sum) files at initialization.
+
+        A JIVE-only nicety; the default does nothing (regular/none runs have no server).
+        Never blocks: any failure is logged and ignored by the implementations.
+        """
+        return None
+
 
 # Lazy factories so unselected backends never import their deps (shared registry).
 from ..registry import BackendRegistry
@@ -118,32 +120,6 @@ def get_retriever(name: str) -> Retriever:
     return _REGISTRY.get(name)
 
 
-def set_cli_mode(name: str | None) -> None:
-    """Sets (and validates) the CLI-provided retrieval mode override.
-
-    Raises:
-        RetrievalError: If *name* is not a registered backend.
-    """
-    global _CLI_MODE
-    if name is not None and name not in _REGISTRY:
-        raise RetrievalError(f"Unknown retrieval backend '{name}'. "
-                             f"Registered backends: {', '.join(available_backends())}.")
-    _CLI_MODE = name
-
-
-def selected_mode(exp_toml=None) -> str:
-    """Returns the effective retrieval mode: CLI > experiment toml > default.
-
-    Args:
-        exp_toml: An ``experiment_state.ExperimentToml`` (or None).
-    """
-    if _CLI_MODE is not None:
-        return _CLI_MODE
-    if exp_toml is not None and exp_toml.retrieval:
-        return exp_toml.retrieval
-    return DEFAULT_MODE
-
-
 def _make_none() -> Retriever:
     from .local import NoneRetriever
     return NoneRetriever()
@@ -154,5 +130,12 @@ def _make_jive() -> Retriever:
     return JiveRetriever()
 
 
+def _make_sweeps() -> Retriever:
+    raise RetrievalError("The 'sweeps' retrieval backend is registered but not implemented "
+                         "yet. Use mode 'supsci' (JIVE servers) or 'regular' (files already "
+                         "local).")
+
+
 register('none', _make_none)
 register('jive', _make_jive)
+register('sweeps', _make_sweeps)

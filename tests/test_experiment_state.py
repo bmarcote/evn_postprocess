@@ -377,3 +377,22 @@ def test_summary_lines_mark_origin(tmp_path):
     text = "\n".join(lines)
     assert "EB101" in text and "Jane Doe" in text and "J1848+3244" in text
     assert all(path.name in line for line in lines)  # every value states its origin
+
+
+# ------------------------------------------------------------------ skip_steps
+
+def test_skip_steps_parsed(tmp_path):
+    path = write_toml(tmp_path, 'skip_steps = ["standardplots", "polconvert"]\n')
+    t = es.load_toml(path)
+    assert t.skip_steps == ["standardplots", "polconvert"]
+
+
+def test_skip_steps_absent_is_empty(tmp_path):
+    path = write_toml(tmp_path, '[observation]\nexpname = "EB101"\n')
+    assert es.load_toml(path).skip_steps == []
+
+
+def test_skip_steps_wrong_type_raises(tmp_path):
+    path = write_toml(tmp_path, 'skip_steps = "standardplots"\n')  # must be a list
+    with pytest.raises(es.ExperimentTomlError):
+        es.load_toml(path)

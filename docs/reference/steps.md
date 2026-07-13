@@ -11,12 +11,12 @@ to reproduce a step **by hand outside `postprocess`** (a server is unreachable, 
 step needs a one-off tweak, or you're debugging) — name the exact local tool or
 script each step calls, mirroring the historical [EVN Post-Correlation Checklist](https://code.jive.eu/marcote/science_support_doc).
 
-!!! note "Backends change what runs"
-    Three steps (`lisfiles`/`antab` station files, `pipeinputs`/`pipeline`/`postpipe`,
-    `archive`) delegate to a **plugin backend** selected in the experiment toml or via
-    `--retrieval`/`--pipeline`/`--distribution`. The commands below describe the
-    default JIVE backends (`jive`, `aips`, `jive`). See
-    [Plugin Backends](../guide/backends.md) for the `none` equivalents.
+!!! note "The mode changes what runs"
+    Input acquisition (`initialize`/`lisfiles`/`antab` station files) and delivery
+    (`distribute`) depend on the [operating mode](../guide/modes.md). The commands below
+    describe **`supsci`** mode (the JIVE support-scientist job). In `regular` mode the
+    inputs are already local and `distribute` only verifies the FITS-IDI files — no
+    server is contacted.
 
 ## Step reference
 
@@ -30,7 +30,7 @@ scans. The experiment toml (`{expname}.toml`) is then applied (source types, PI,
 support scientist); any source still untyped is classified heuristically (see
 [Source Classification](../guide/source-classification.md)).
 
-**Manual equivalent** (retrieval mode `jive`):
+**Manual equivalent** (`supsci` mode):
 
 ```bash
 ssh jops@ccs
@@ -170,7 +170,7 @@ The most interactive automated step. In order:
    cd vlbi_arch/{monthYY}
    mget {exp}*.log {exp}*.antabfs {exp}*.uvflgfs
    ```
-   (VLBA stations additionally pull `{exp}cal.vlba` — see `pipeline.get_vlba_antab`.)
+   (VLBA stations additionally pull `{exp}cal.vlba` — see `retrieval.jive.get_vlba_antab`.)
 3. `.uvflg` files are created from the `.log` files:
    ```bash
    uvflgall.sh
@@ -207,7 +207,7 @@ EVN.py {exp}.inp.txt
 ```
 
 For `pipeline = "none"` in the experiment toml, this step is a no-op (calibration
-skipped entirely — see [Plugin Backends](../guide/backends.md)).
+skipped entirely — see [Operating Modes](../guide/modes.md)).
 
 ### 14. `postpipe` → `pipeline_diagnostics`
 
@@ -237,11 +237,11 @@ append_antab_idi.py [--antab {an_antab_file}] [--fits '{exp}_*_1.IDI*']
 file). On success, the finalisation record (final antab/polconvert-input file links,
 flagged-data percentage) is written into the experiment toml `[postprocess]` section.
 
-### 16. `archive` → `archive`
+### 16. `distribute` → `archive`
 
-The selected **distribution** backend's `deliver()`. For `jive` (default), in strict
-order (stops at the first failure — nothing is archived if credentials/protection
-fail):
+The mode's **distribution** backend's `deliver()`. (The deprecated step name `archive`
+still works as an alias for `postprocess run distribute`.) In `supsci` mode, in strict
+order (stops at the first failure — nothing is archived if credentials/protection fail):
 
 ```bash
 auth_pipe.py -e {EXP}_{YYMMDD} ...        # credentials / file protection
@@ -253,8 +253,9 @@ archive.pl -pipe -e {exp}_{YYMMDD}        # pipeline $IN/$OUT directories
 
 then the PI letter is sent, the operator is reminded to log station feedback
 (`/feedback` in Mattermost + JIVE RedMine), and — for NMEs — reminded to write the
-NME Report. `distribution = "none"` skips archiving entirely and leaves the data in
-place (external/standalone use).
+NME Report. In `regular` mode nothing is archived: `distribute` instead **verifies** the
+expected `*.IDI*` files are present for every correlator pass and reports "ready" (or a
+hard error naming what is missing), contacting no server.
 
 ## Steps not run automatically
 

@@ -1,5 +1,48 @@
 # Changelog
 
+## v2.0.0a7 (in development) — Mode-driven cleanup (Phase 2)
+
+Cleanup pass on top of the modular refactor (see `docs/PRD-cleanup.md`): a single
+operating **mode** replaces the three backend flags, the core is genuinely
+server-agnostic, and per-step output is split into three channels.
+
+### Added
+
+- **Operating modes** (`mode.py`) — `--mode supsci|regular|sweeps`, auto-detected from
+  the OS user/group (`jops`/`supsci` group → supsci; `sweeps` group → sweeps; else
+  regular), persisted on the experiment and reused on resume. See
+  [Operating Modes](../guide/modes.md).
+- **Three-channel reporting** (`reporting.py`) — a concise Rich terminal line,
+  `logs/logging_messages.log` (loguru debug), and `logs/commands.sh` (replayable local
+  commands, one per line with per-step headers).
+- **`skip_steps`** top-level toml key (bypass steps; used by `sweeps` mode).
+- **`servers.py`** — `Server`/`Servers`/`retrieve_servers` moved out of the core data
+  model into a dedicated leaf module, imported only by the JIVE backends and `tools`.
+- A server-access **invariant test** (`tests/test_server_boundary.py`): outbound
+  ssh/scp may live only in `retrieval/jive.py` and the sanctioned `process.py`
+  tConvert-in-eee workaround.
+
+### Changed
+
+- The three `--retrieval`/`--pipeline`/`--distribution` flags are removed in favour of
+  `--mode`; the backend registries stay (mode → backend names).
+- The final step `archive` is renamed **`distribute`** (`archive` kept as a deprecated
+  alias). In non-`supsci` modes it archives nothing and instead verifies the FITS-IDI
+  files are in order.
+- A step failure now notifies (terminal + comms) and exits non-zero, distinct from the
+  clean review pause (marker + exit 0); the failed step stays the resume point.
+- The debug log moved to `logs/logging_messages.log` (freeing `logs/commands.sh`).
+- `main`'s default working directory degrades to the current directory when no
+  `computers.toml` exists, so a standalone user needs no server configuration.
+
+### Removed
+
+- The core server-coupled legacy: `io.py` (its transport moved into the JIVE retrieval
+  backend), `parse_masterprojects`, `get_jexp_info`, `expsumfile`, and the
+  `comment_tasav` MASTER_PROJECTS ssh lookup (the observing date now comes from the
+  local vex). The ccs `.lis` transport moved from `lisfiles.py` (now local-only) into
+  `retrieval/jive.py`.
+
 ## v2.0.0a6 (in development) — Modular refactor
 
 Standalone, modular re-design (see `docs/PRD-refactor.md`): the core now consumes
