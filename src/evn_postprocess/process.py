@@ -91,7 +91,7 @@ def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
         exp (experiment.Experiment): Experiment object.
         pipelinable (Union[list, dict]): Either a list of bool (same length as exp.correlator_passes)
             or a dict with lisfile as key and bool as value.
-    
+
     Returns:
         None
     """
@@ -136,10 +136,10 @@ def archive(exp: experiment.Experiment) -> bool:
 
 def getdata(exp: experiment.Experiment) -> bool:
     """Gets the data into eee from all existing .lis files from the given experiment.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object with correlator passes.
-    
+
     Returns:
         bool: True if data was retrieved successfully.
     """
@@ -149,7 +149,7 @@ def getdata(exp: experiment.Experiment) -> bool:
                 if not a_pass.lisfile.exists():
                     logger.error(f"LIS file not found: {a_pass.lisfile}")
                     return False
-                    
+
                 cmd_args = ["-proj", exp.eEVNname if exp.eEVNname is not None else exp.expname,
                             "-lis", a_pass.lisfile.name]
                 # getdata.pl (and the scp calls it makes) write warnings to stderr that are not
@@ -173,12 +173,12 @@ def getdata(exp: experiment.Experiment) -> bool:
 
         with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as pool:
             results = list(pool.map(_fetch_pass, exp.correlator_passes))
-            
+
         if not all(results):
             failed_count = len(results) - sum(results)
             logger.error(f"Failed to fetch data for {failed_count} passes")
             return False
-            
+
         return True
     except Exception as e:
         logger.error(f"Unexpected error in getdata: {e}")
@@ -189,13 +189,13 @@ def getdata(exp: experiment.Experiment) -> bool:
 def j2ms2(exp: experiment.Experiment) -> bool:
     """Runs j2ms2 on all existing .lis files from the given experiment.
     If the MS to produce already exists, then it will not generate it again.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object with correlator passes.
-    
+
     Returns:
         bool: True if all MS files were created successfully.
-    
+
     Raises:
         IOError: If there is not enough disk space to create the MS files.
     """
@@ -214,7 +214,7 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                     raise IOError("Not enough disk space to create the MS file.")
         except (ValueError, IndexError, subprocess.SubprocessError) as e:
             logger.warning(f"Could not check disk space: {e}, proceeding anyway")
-            
+
         if not exp.correlator_passes:
             logger.error("No correlator passes found for j2ms2")
             return False
@@ -225,15 +225,15 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                 if not a_pass.lisfile.exists():
                     logger.error(f"LIS file not found: {a_pass.lisfile}")
                     return False
-                    
+
                 if os.path.isdir(a_pass.msfile):
                     logger.debug(f"MS file already exists: {a_pass.msfile}")
                     return True
-                    
+
                 j2ms2_args = ["-v", str(a_pass.lisfile)]
                 if not exp.eEVNname:
                     j2ms2_args.append("fo:nosquash_source_table")
-                    
+
                 utils.shell_command("j2ms2", j2ms2_args, shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0,
                                     logfile=exp.dirs.logs / "j2ms2.log")
                 return True
@@ -293,16 +293,16 @@ def j2ms2(exp: experiment.Experiment) -> bool:
 def update_ms_expname(exp: experiment.Experiment) -> bool:
     """For e-EVN experiments, where the .vex-file experiment name does not match the actual
     experiment name, this one must be updated in the created MS file(s).
-    
+
     Args:
         exp (experiment.Experiment): Experiment object.
-    
+
     Returns:
         bool: True if experiment names were updated successfully.
     """
     if (exp.eEVNname is not None) and (exp.eEVNname != exp.expname):
         with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 10)) as executor:
-            futures = [executor.submit(mstools.change_project_name, a_pass.msfile, exp.expname) 
+            futures = [executor.submit(mstools.change_project_name, a_pass.msfile, exp.expname)
                        for a_pass in exp.correlator_passes]
             for fut in futures:
                 fut.result()
@@ -313,10 +313,10 @@ def update_ms_expname(exp: experiment.Experiment) -> bool:
 
 def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
     """Extracts metadata from MS files and populates the experiment object.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object to populate with MS metadata.
-    
+
     Returns:
         bool: True if metadata was extracted successfully.
     """
@@ -336,22 +336,22 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
                     a_pass.antennas[ant.name].observed = ant.observed
                     a_pass.antennas[ant.name].subbands = ant.subbands
                     a_pass.antennas[ant.name].weights = ant.weights
-            
+
             a_pass.freqsetup = experiment.Subbands(subbands=ms.freqsetup.nspw, channels=ms.freqsetup.nchan,
                                                    frequency=ms.freqsetup.meanfreq, bandwidth=ms.freqsetup.bandwidth,
                                                    polarizations=ms.freqsetup.polarizations)
-            
+
             # Copy sources from MS to correlator pass
             a_pass.sources = experiment.Sources()
             for src in ms.sources:
                 if src.name in exp.sources.names:
                     existing_source = exp.sources[src.name]
-                    exp_src = experiment.Source(name=src.name, coordinates=src.coordinates, 
-                                               type=existing_source.type, protected=existing_source.protected, 
+                    exp_src = experiment.Source(name=src.name, coordinates=src.coordinates,
+                                               type=existing_source.type, protected=existing_source.protected,
                                                intent=src.intent)
                 else:
-                    exp_src = experiment.Source(name=src.name, coordinates=src.coordinates, 
-                                               type=experiment.SourceType.other, protected=False, 
+                    exp_src = experiment.Source(name=src.name, coordinates=src.coordinates,
+                                               type=experiment.SourceType.other, protected=False,
                                                intent=src.intent)
                 a_pass.sources.append(exp_src)
         except Exception as e:
@@ -371,7 +371,7 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
                                                     stations_observed=tuple(sorted(ms_antennas))))
             else:
                 logger.warning(f"MS scan {ms_scanno} in {a_pass.msfile.name} has no matching VEX scan")
-        
+
     def _update_mpc_pass(a_pass: experiment.CorrelatorPass):
         a_pass.antennas = exp.correlator_passes[0].antennas
         a_pass.sources = exp.correlator_passes[0].sources
@@ -418,10 +418,10 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
         scan_counts = {ant: sum(1 for s in exp.correlator_passes[0].scans if ant in s.stations_observed)
                        for ant in exp.antennas.observed}
         full_coverage = {ant for ant, count in scan_counts.items() if count == total_scans}
-        
+
         priority_ants = ('Ef', 'Ys', 'O8', 'Gb', 'At', 'Pt')
         primary = next((a for a in priority_ants if a in exp.antennas and exp.antennas[a].observed), None)
-        
+
         if primary and primary in full_coverage:
             exp.refant = [primary]
         elif primary:
@@ -796,10 +796,10 @@ def open_pipeline_dashboard(exp) -> bool:
 def onebit(exp: experiment.Experiment) -> bool:
     """In case some stations recorded at 1 bit, scales 1-bit data to correct for
     quantization losses in all MS associated with the given experiment name.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object with antenna information.
-    
+
     Returns:
         bool: True if scaling was applied successfully, None if user intervention needed.
     """
@@ -821,10 +821,10 @@ def onebit(exp: experiment.Experiment) -> bool:
 
 def ysfocus(exp: experiment.Experiment) -> bool:
     """Fix mount types for Yebes and Hobart antennas.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object.
-    
+
     Returns:
         bool: True if mount types were fixed successfully.
     """
@@ -850,10 +850,10 @@ def ysfocus(exp: experiment.Experiment) -> bool:
 def polswap(exp: experiment.Experiment) -> bool:
     """Swaps the polarization of the given antennas for all associated MS files
     to the given experiment.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object with polswap antenna information.
-    
+
     Returns:
         bool: True if polarization swap was applied successfully.
     """
@@ -1938,10 +1938,9 @@ def send_letters(exp: experiment.Experiment) -> bool:
         if not create_piletter_auth(exp):
             return False
 
-    piletter_name = f"{exp.expname.lower()}.piletter{'_auth' if has_auth else ''}"
     utils.shell_command("archive.pl", ["-stnd", "-e", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
-                                       piletter_name])
-    body = f"[bold]Send[/bold] [bold green]{piletter_name}[/bold green] [bold]to [/bold]" \
+                                       f"{exp.expname.lower()}.piletter"])
+    body = f"[bold]Send[/bold] [bold green]{f"{exp.expname.lower()}.piletter{'_auth' if has_auth else ''}"}[/bold green] [bold]to [/bold]" \
            f"[bold cyan]{', '.join(p.name for p in exp.pi)}[/bold cyan]: " \
            f"[bold]{', '.join(p.email for p in exp.pi)}[/bold]" \
            f"\nAnd CC [cyan]jops@jive.eu[/cyan]"
@@ -1988,10 +1987,10 @@ def nme_report(exp: experiment.Experiment) -> bool:
 
 def aggregate_sources_from_passes(exp: experiment.Experiment) -> None:
     """Aggregates all sources from all correlator passes into the global experiment sources.
-    
+
     This ensures that exp.sources contains all sources from all passes, not just
     the ones from VEX/jexp files.
-    
+
     Args:
         exp (experiment.Experiment): Experiment object to update with aggregated sources.
     """
