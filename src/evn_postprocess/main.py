@@ -5,12 +5,12 @@ import os
 import sys
 import json
 import argparse
+from pathlib import Path
+from importlib.metadata import version
 from loguru import logger
 from rich import print as rprint
 from rich.console import Console
 from rich_argparse import RawTextRichHelpFormatter
-from pathlib import Path
-from importlib.metadata import version
 from . import workflow
 from . import experiment
 from . import lisfiles
