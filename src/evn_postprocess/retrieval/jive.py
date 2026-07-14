@@ -1,23 +1,21 @@
 """The 'jive' retrieval backend: fetch input files from the JIVE servers.
 
 Owns ALL JIVE-server knowledge for input acquisition and every outbound ssh/scp for it
-(ccs for the vex and .lis files, the piletters host for the .piletter, vlbeer for the
-station .log/.antabfs and the .key/.sum schedule files, and the VLBA cal fetch). No other
-module in the package performs input-side server access -- the server-agnostic core and
-the ``none``/``sweeps`` modes never import this file. Imported only when the 'jive'
-backend is selected.
+(ccs for the vex and .lis files, the piletters host for the .piletter, the archive host
+for the .jex experiment description, vlbeer for the station .log/.antabfs and the
+.key/.sum schedule files, and the VLBA cal fetch). No other module in the package performs
+input-side server access -- the server-agnostic core and the ``none``/``sweeps`` modes
+never import this file. Imported only when the 'jive' backend is selected.
 """
 from __future__ import annotations
-
-import glob
 import os
+import glob
+import tempfile
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-
+from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from rich import print as rprint
-
 from . import InputSet, RetrievalError, Retriever
 from .. import experiment_state
 from .. import utils
@@ -40,7 +38,7 @@ def get_init_files(expname: str, servers, eEVNname: str | None = None) -> bool:
     Returns:
         bool: True if the vex file is present locally after the call.
     """
-    eEVNname = expname if eEVNname is None else eEVNname
+    eEVNname: str = expname if eEVNname is None else eEVNname
     piletter_server = servers['piletters']
     piletter_path = Path(f"{expname.lower()}.piletter")
     main_vex = Path(f"{expname.upper()}.vix")
@@ -87,6 +85,65 @@ def get_init_files(expname: str, servers, eEVNname: str | None = None) -> bool:
         futures['vex'].result()
 
     return main_vex.exists()
+
+
+def fetch_jexp_info(expname: str) -> dict[str, str | None]:
+    """Fetches and parses the JIVE ``.jex`` file for *expname* (supsci-only metadata).
+
+    The ``.jex`` file is a JIVE-internal, ``key = value`` description of the experiment
+    holding the PI/co-I contacts and the scheduled sources with their archive-protection
+    flag. It is copied to a temporary file, parsed, and the copy is deleted immediately:
+    the file itself is never kept in the experiment directory (only the extracted
+    information is stored on the Experiment by the distribution backend).
+
+    Args:
+        expname: The experiment name (case-insensitive); the remote file is
+            ``{expname}.jex`` under the ``jexp`` server path in ``computers.toml``.
+
+    Returns:
+        dict[str, str | None]: The ``key = value`` pairs found in the file (empty values
+            map to None). Notable keys: ``piname``/``pimail``, ``coname``/``coimail``
+            (co-I, optional), and ``schedsrc`` (the ``(name|type|protected)`` source list).
+
+    Raises:
+        RetrievalError: When the ``jexp`` server is not configured, or the ``.jex`` file
+            cannot be copied (e.g. no such file on the server).
+    """
+    from .. import servers as _servers
+    try:
+        server = _servers.retrieve_servers()['jexp']
+    except (FileNotFoundError, KeyError) as e:
+        raise RetrievalError(
+            f"Cannot look up the .jex file for {expname}: the 'jexp' server is not "
+            f"configured in computers.toml ({e}).") from e
+
+    temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.jex')
+    temp_file.close()
+    try:
+        utils.scp(f"{server.user}@{server.host}:" + str(server.path / f"{expname.lower()}.jex"),
+                  temp_file.name, capture_output=True)
+        jexp_content = Path(temp_file.name).read_text(encoding='utf-8')
+    except (ValueError, subprocess.TimeoutExpired) as e:
+        raise RetrievalError(
+            f"Could not retrieve {expname.lower()}.jex from {server.host}:{server.path} "
+            f"({e}).") from e
+    finally:
+        Path(temp_file.name).unlink(missing_ok=True)
+
+    result: dict[str, str | None] = {}
+    for line in jexp_content.strip().split('\n'):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        # Drop a trailing ';' (some .jex lines terminate with one).
+        if line.endswith(';'):
+            line = line[:-1]
+        # Only ``key = value`` lines carry data; anything else is skipped (a bare line
+        # would otherwise re-store the previous key). Split on the first '=' only.
+        if '=' in line:
+            key, value = line.split('=', 1)
+            result[key.strip()] = value.strip() or None
+    return result
 
 
 def get_vlbeer_sched_files(expname: str, obsdate, server) -> bool:
@@ -180,20 +237,63 @@ def fetch_from_vlbeer(exp, server) -> bool:
     errors (stations may legitimately lack them). Also flags which antennas have
     log/antabfs files and normalises the non-standard ',opacity_corrected' POLY tag
     so antab_editor can parse the files.
+
+    Already-downloaded files are never overwritten: the first run grabs everything in one
+    scp, but on any later run only files that are not yet present locally are fetched (the
+    remote directory is listed and the missing names are copied one by one). This protects
+    the .antabfs files, which are edited by hand in the antab step, from being clobbered by
+    a re-run; a station that uploads a genuinely new file to vlbeer is still picked up.
     """
     from .. import utils
 
-    def fetch_file(ext: str):
+    host = f"{server.user}@{server.host}"
+    remote_dir = Path(utils.format_remote_path(str(server.path), obsdate=exp.obsdate))
+
+    def scp_one(remote_path: Path):
+        """Copies a single vlbeer file into pipe_temp; a failure is a non-fatal warning."""
         try:
-            s_formatted = utils.format_remote_path(str(server.path), obsdate=exp.obsdate)
-            utils.scp(f"{server.user}@{server.host}:{Path(s_formatted) / f'{exp.expname.lower()}*{ext}'}",
-                      str(exp.dirs.pipe_temp) + "/", timeout=120)
+            utils.scp(f"{host}:{remote_path}", str(exp.dirs.pipe_temp) + "/", timeout=120)
+        except (subprocess.TimeoutExpired, ValueError):
+            rprint(f"[bold yellow]Could not retrieve {remote_path.name} from vlbeer.[/bold yellow]")
+            logger.warning(f"Could not retrieve {remote_path.name} from vlbeer")
+
+    def fetch_file(ext: str):
+        pattern = f"{exp.expname.lower()}*{ext}"
+        remote_glob = remote_dir / pattern
+        # Files of this type already present locally must not be re-fetched/overwritten
+        # (a .antabfs may have been edited by hand). Only their absence triggers a fetch.
+        existing = {p.name for p in exp.dirs.pipe_temp.glob(pattern)}
+        if not existing:
+            # Nothing downloaded yet: grab them all in a single scp (fast first download).
+            try:
+                utils.scp(f"{host}:{remote_glob}", str(exp.dirs.pipe_temp) + "/", timeout=120)
+            except subprocess.TimeoutExpired:
+                rprint(f"[bold yellow]Could not retrieve the {ext} files from vlbeer.[/bold yellow]")
+                logger.warning(f"Could not retrieve {ext} files from vlbeer")
+            except ValueError:
+                rprint(f"[bold yellow]Could not find the {ext} files in vlbeer.[/bold yellow]")
+                logger.warning(f"Could not find {ext} files in vlbeer")
+            return
+        # Some files exist already: list vlbeer and fetch only the ones we do not have yet.
+        try:
+            listing = utils.ssh(host, f"ls -1 {remote_glob}")
         except subprocess.TimeoutExpired:
-            rprint(f"[bold yellow]Could not retrieve the {ext} files from vlbeer.[/bold yellow]")
-            logger.warning(f"Could not retrieve {ext} files from vlbeer")
+            rprint(f"[bold yellow]Could not reach vlbeer to check for new {ext} files.[/bold yellow]")
+            logger.warning(f"Could not list {ext} files on vlbeer (timeout)")
+            return
         except ValueError:
-            rprint(f"[bold yellow]Could not find the {ext} files in vlbeer.[/bold yellow]")
-            logger.warning(f"Could not find {ext} files in vlbeer")
+            logger.debug(f"No {ext} files on vlbeer for {exp.expname} (nothing to update).")
+            return
+        remote_names = [Path(line.strip()).name for line in (listing or '').splitlines() if line.strip()]
+        new_files = [name for name in remote_names if name not in existing]
+        if not new_files:
+            logger.debug(f"All {ext} files already downloaded for {exp.expname}; keeping the "
+                         "local copies (nothing re-fetched from vlbeer).")
+            return
+        logger.info(f"Retrieving {len(new_files)} new {ext} file(s) from vlbeer for "
+                    f"{exp.expname}: {', '.join(new_files)}")
+        for name in new_files:
+            scp_one(remote_dir / name)
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = [executor.submit(fetch_file, a_file) for a_file in ('antabfs', 'log', 'flag')]

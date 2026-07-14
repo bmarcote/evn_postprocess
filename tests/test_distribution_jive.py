@@ -10,7 +10,8 @@ from evn_postprocess import experiment
 from evn_postprocess import experiment_state as es
 from evn_postprocess import workflow
 from evn_postprocess.distribution import DistributionError
-from evn_postprocess.distribution.jive import JiveDistributor, COMMENTS_SENTINEL
+from evn_postprocess.distribution.jive import JiveDistributor, COMMENTS_SENTINEL, NME_PREFIXES
+from evn_postprocess.retrieval import RetrievalError
 
 
 LETTER = '''\
@@ -139,3 +140,103 @@ def test_no_comments_means_untouched_letter(tmp_path, monkeypatch):
     exp = make_exp(tmp_path)
     assert JiveDistributor()._apply_comments_to_letter(exp) is True
     assert (tmp_path / 'eb101.piletter').read_text() == LETTER
+
+
+# --------------------------------------------------- .jex source protection & contacts
+
+# A representative .jex parse result: PI + co-I contacts and a schedsrc with a protected
+# target ('X'), an unprotected fringe-finder (empty protection field), and a protected
+# reference/calibrator.
+JEXP_INFO = {
+    'piname': 'Jane Doe', 'pimail': 'jane@x.edu',
+    'coname': 'John Roe', 'coimail': 'john@y.edu',
+    'schedsrc': '(J1234+5678|T|X), (3C84|F|), (J0555+3948|R|X)',
+}
+
+_FETCH = 'evn_postprocess.retrieval.jive.fetch_jexp_info'
+
+
+def _raise_retrieval(*_a, **_k):
+    raise RetrievalError("no .jex file on the server")
+
+
+def test_source_protection_skips_nme(tmp_path, monkeypatch):
+    # NME runs (name starts with N/F) need no PI/protection: the .jex is never fetched.
+    monkeypatch.chdir(tmp_path)
+
+    def boom(_expname):
+        raise AssertionError("fetch_jexp_info must not be called for an NME")
+
+    monkeypatch.setattr(_FETCH, boom)
+    for prefix in NME_PREFIXES:
+        exp = make_exp(tmp_path)
+        exp.expname = f"{prefix}24L1"
+        assert JiveDistributor()._apply_source_protection(exp) is True
+
+
+def test_source_protection_returns_false_when_jex_missing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_FETCH, _raise_retrieval)
+    assert JiveDistributor()._apply_source_protection(make_exp(tmp_path)) is False
+
+
+def test_source_protection_sets_contacts_and_flags(tmp_path, monkeypatch):
+    from astropy import coordinates as coord
+    from astropy import units as u
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_FETCH, lambda _expname: dict(JEXP_INFO))
+    exp = make_exp(tmp_path)
+    # A source already known from the vex/MS is updated in place; the others are appended.
+    exp.sources.append(experiment.Source('J1234+5678',
+                                          coord.SkyCoord(ra=1 * u.deg, dec=2 * u.deg, frame='icrs')))
+    assert JiveDistributor()._apply_source_protection(exp) is True
+    # PI + co-I recovered onto exp and persisted to the toml (deduped by email).
+    assert {p.email for p in exp.pi} == {'jane@x.edu', 'john@y.edu'}
+    saved = es.load_toml(tmp_path / 'eb101.toml')
+    assert {pi.email for pi in saved.pis} == {'jane@x.edu', 'john@y.edu'}
+    # per-source type + archive protection from schedsrc.
+    assert exp.sources['J1234+5678'].type == experiment.SourceType.target
+    assert exp.sources['J1234+5678'].protected is True
+    assert exp.sources['3C84'].type == experiment.SourceType.fringefinder
+    assert exp.sources['3C84'].protected is False           # empty protection field
+    assert exp.sources['J0555+3948'].type == experiment.SourceType.calibrator
+    assert exp.sources['J0555+3948'].protected is True
+
+
+def test_source_protection_no_duplicate_contact(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_FETCH,
+                        lambda _e: {'piname': 'Jane Doe', 'pimail': 'jane@x.edu', 'schedsrc': '(3C84|F|)'})
+    exp = make_exp(tmp_path)
+    exp.pi.append(experiment.PI('Jane Doe', 'jane@x.edu'))
+    JiveDistributor()._apply_source_protection(exp)
+    assert len([p for p in exp.pi if p.email == 'jane@x.edu']) == 1
+
+
+def test_warn_manual_protection_prints_commands(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    JiveDistributor()._warn_manual_protection(make_exp(tmp_path))
+    out = capsys.readouterr().out
+    assert 'ACTION REQUIRED' in out
+    assert 'EB101_260410' in out          # {EXPNAME}_{yymmdd} archive name
+    assert 'auth_pipe.py' in out
+
+
+def test_deliver_fails_and_warns_when_jex_unrecovered(tmp_path, monkeypatch, capsys):
+    # All stages still run (stubbed to succeed), but because the .jex could not be
+    # recovered a manual-protection error is printed at the end AND deliver() returns
+    # False so the distribute step is flagged as failed for the operator to resolve.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'eb101.piletter').write_text(LETTER)
+    monkeypatch.setattr(_FETCH, _raise_retrieval)
+    for fn in ('set_credentials', 'protect_experiment_files', 'archive',
+               'send_letters', 'antenna_feedback', 'nme_report'):
+        monkeypatch.setattr(f'evn_postprocess.process.{fn}', lambda _e: True)
+    monkeypatch.setattr('evn_postprocess.process.print_exp',
+                        lambda _e, display_in_terminal=True: True)
+    monkeypatch.setattr('evn_postprocess.pipeline.archive', lambda _e: True)
+    exp = make_exp(tmp_path)
+    exp.pi.append(experiment.PI('Known', 'known@x.edu'))   # satisfy _ensure_pi_info
+    assert JiveDistributor().deliver(exp) is False
+    out = capsys.readouterr().out
+    assert 'ACTION REQUIRED' in out and 'EB101_260410' in out
