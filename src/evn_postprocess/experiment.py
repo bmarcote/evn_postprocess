@@ -26,7 +26,6 @@ from .mode import Mode
 from .policy import Policy
 
 
-
 def retrieve_expname() -> str:
     """Returns the experiment name, assuming it is the name of the current directory.
 
@@ -40,7 +39,7 @@ def retrieve_expname() -> str:
     Returns:
         str: The experiment name
     """
-    potential_experiment = Path.cwd().name
+    potential_experiment: str = Path.cwd().name
     if not re.fullmatch(r'[A-Za-z]+[0-9]+[A-Za-z0-9]*', potential_experiment):
         raise ValueError(f"The current directory name '{potential_experiment}' does not look like "
                          "an EVN experiment code. Use --expname to name the experiment explicitly.")
@@ -241,27 +240,27 @@ class Sources(object): #list[Source]):
 
     def calibrator_for_target(self, target: str) -> str | None:
         """Returns the associated calibrator source for a given target.
-        
+
         It finds the calibrator source that is closest in angular separation
         to the specified target.
-        
+
         Args:
             target: The name of the target source.
-            
+
         Returns:
             The name of the closest calibrator source, or None if no calibrators exist.
-            
+
         Raises:
             ValueError: If the target is not in the list of targets.
         """
         if target not in self.target:
             raise ValueError(f"Target '{target}' not found in the list of targets: {', '.join(self.target)}")
-        
+
         if len(self.calibrator) == 0:
             return None
         elif len(self.calibrator) == 1:
             return self.calibrator[0]
-        
+
         min_sep = None
         closest_cal = None
         for acal in self.calibrator:
@@ -269,7 +268,7 @@ class Sources(object): #list[Source]):
             if min_sep is None or sep < min_sep:
                 min_sep = sep
                 closest_cal = acal
-        
+
         return closest_cal
 
 
@@ -354,11 +353,12 @@ class Antennas(list[Antenna]):
         """Antennas whose weights look unexpectedly low: less than 95% of the data sits in
         the first/last weight-histogram bin (weights <0.001 or >0.9), or nothing in the last
         bin. These are worth double-checking on the weight plots before flagging."""
-        low = []
+        low: list[str] = []
         for a in self:
             if len(a.weights) >= 7 and (total := sum(a.weights)) > 0:
                 if ((a.weights[0] + a.weights[6]) / total) < 0.95 or (a.weights[6] == 0):
                     low.append(a.name)
+
         return low
 
     # Deliberate deviation from list's Liskov-substitutable __getitem__/__contains__: this
@@ -561,15 +561,10 @@ class Experiment:
     def __init__(self, expname: str, obsdate: dt.date, supsci: str, dirs: Dirs, eEVNname: str | None = None,
                  steps: list | None = None, pi: list[PI] | None = None, credentials: Credentials | None = None,
                  sources: Sources | None = None, antennas: Antennas | None = None, scans: Scans | None = None,
-                 refant: list[str] | None = None,
-                 correlator_passes: list[CorrelatorPass] | None = None,
-                 lag_pass: CorrelatorPass | None = None,
-                 lag_snr: dict | None = None,
-                 lag_bandpass: dict | None = None,
-                 pol_diagnostics: dict | None = None,
-                 no_lag: bool = False,
-                 policy: Policy | None = None,
-                 mode=None):
+                 refant: list[str] | None = None, correlator_passes: list[CorrelatorPass] | None = None,
+                 lag_pass: CorrelatorPass | None = None, lag_snr: dict | None = None,
+                 lag_bandpass: dict | None = None, pol_diagnostics: dict | None = None, no_lag: bool = False,
+                 policy: Policy | None = None, mode: str | None = None):
         self.expname = expname
         self.obsdate = obsdate
         self.supsci = supsci
@@ -619,7 +614,7 @@ class Experiment:
         # and persisted so a resume never silently switches mode (see evn_postprocess.mode).
         # None means "not resolved yet" (a pre-Phase-2 state file, or a fresh object before
         # the CLI resolves it); callers re-detect in that case.
-        self.mode: Mode | None = Mode(mode) if mode is not None else None
+        self.mode: Mode = Mode(mode) if mode is not None else Mode.default
         # The attached experiment toml (see evn_postprocess.experiment_state), set by
         # inputs.load_experiment / experiment_state.attached_toml. Runtime-only: never
         # serialized into the JSON checkpoint (to_dict/from_dict), so a resume re-attaches
@@ -630,7 +625,7 @@ class Experiment:
     def spectral_line(self) -> bool:
         """Returns if the experiment contains a spectral line pass."""
         return True in ['_line' in apass.lisfile.name for apass in self.correlator_passes]
-    
+
     @property
     def multi_phase_center(self) -> bool:
         """Returns if the experiment contains a multi-phase center correlation.
@@ -729,14 +724,16 @@ class Experiment:
             vex_data = vex.Vex(self.vixfile)
         except Exception as e:
             raise RuntimeError(f"Error parsing VEX file {self.vixfile}: {e}")
-            
+
         if 'STATION' not in vex_data:
             raise ValueError("VEX file missing STATION section")
+
         if 'SOURCE' not in vex_data:
             raise ValueError("VEX file missing SOURCE section")
+
         if 'SCHED' not in vex_data:
             raise ValueError("VEX file missing SCHED section")
-            
+
         try:
             for ant_code in vex_data['STATION']:
                 if 'SITE' not in vex_data['STATION'][ant_code]:
@@ -748,40 +745,39 @@ class Experiment:
                 if 'source_name' not in src or 'ra' not in src or 'dec' not in src:
                     logger.warning(f"Incomplete source information: {src}")
                     continue
-                    
+
                 try:
                     coordinates = coord.SkyCoord(f"{src['ra']} {src['dec'].replace('\'', 'm').replace('"', 's')}")
                 except Exception as e:
                     logger.warning(f"Error parsing coordinates for source {src.get('source_name', 'unknown')}: {e}")
                     continue
-                    
-                self.sources.append(Source(name=src['source_name'],
-                                 coordinates=coordinates,
-                                 type=SourceType.other, protected=False))
+
+                self.sources.append(Source(name=src['source_name'], coordinates=coordinates,
+                                           type=SourceType.other, protected=False))
             # It put a fake type and protected types... They will be overwritten when reading the jexp files
 
             for scanno, scan in vex_data['SCHED'].items():
                 if 'start' not in scan or 'source' not in scan:
                     logger.warning(f"Incomplete scan information for {scanno}")
                     continue
-                    
+
                 try:
                     starttime = dt.datetime.strptime(scan['start'], '%Yy%jd%Hh%Mm%Ss')
                 except ValueError as e:
                     logger.warning(f"Error parsing start time for scan {scanno}: {e}")
                     continue
-                    
+
                 station_entries = [s for ss, s in scan.items() if ss == 'station']
                 if not station_entries:
                     logger.warning(f"No station information for scan {scanno}")
                     continue
-                    
+
                 try:
                     duration_s = max([int(s[2].replace('sec', '')) for s in station_entries])
                 except (ValueError, IndexError) as e:
                     logger.warning(f"Error parsing duration for scan {scanno}: {e}")
                     duration_s = 0
-                    
+
                 stations_scheduled = tuple(s[0] for s in station_entries)
 
                 # Multi-phase-centre correlations list several 'source' entries in the
@@ -791,12 +787,9 @@ class Experiment:
                     logger.debug(f"Scan {scanno} has {len(sources_in_scan)} phase centres: "
                                  f"{', '.join(sources_in_scan)}.")
 
-                self.scans.append(Scan(scanno, starttime=starttime,
-                                       duration_s=duration_s,
-                                       source=sources_in_scan[0],
-                                       stations_scheduled=stations_scheduled,
-                                       phase_centers=tuple(sources_in_scan)
-                                       if len(sources_in_scan) > 1 else ()))
+                self.scans.append(Scan(scanno, starttime=starttime, duration_s=duration_s,
+                                       source=sources_in_scan[0], stations_scheduled=stations_scheduled,
+                                       phase_centers=tuple(sources_in_scan) if len(sources_in_scan) > 1 else ()))
         except Exception as e:
             raise RuntimeError(f"Error processing VEX data: {e}")
 
@@ -830,11 +823,6 @@ class Experiment:
         logger.warning(f"Could not determine the e-EVN experiments for {self.expname} from {self.vixfile}.")
         return [self.expname.upper()]
 
-
-    # NOTE: A previous Experiment.get_setup_from_ms() implementation was removed because
-    # (a) it was dead code: it called a non-existent Antennas.add() method and would have
-    # raised AttributeError at runtime, and (b) the canonical metadata loader is
-    # process.get_metadata_from_ms() which is what the workflow actually uses.
 
     @property
     def _local_copy(self) -> Path:
@@ -922,7 +910,7 @@ class Experiment:
                 'lag_snr': self.lag_snr,
                 'lag_bandpass': self.lag_bandpass,
                 'pol_diagnostics': self.pol_diagnostics,
-                'mode': self.mode.value if self.mode is not None else None}
+                'mode': self.mode.value}
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Experiment':
@@ -939,15 +927,18 @@ class Experiment:
                                      if data.get('correlator_passes') else None)
         if data.get('lag_pass'):
             exp.lag_pass = CorrelatorPass.from_dict(data['lag_pass'])
+
         exp.no_lag = data.get('no_lag', False)
         exp.pol_diagnostics = data.get('pol_diagnostics', {})
         if data.get('_timerange'):
             exp._timerange = [dt.datetime.fromisoformat(t) for t in data['_timerange']]
+
         exp.lag_snr = data.get('lag_snr', {})
         exp.lag_bandpass = data.get('lag_bandpass', {})
-        exp.mode = Mode(data['mode']) if data.get('mode') is not None else None
+        exp.mode = Mode(data['mode']) if data.get('mode') is not None else Mode.default
         if data.get('policy') is not None:
             exp.policy = Policy.from_dict(data['policy'])
+
         return exp
 
     def store(self, path: Path | None = None):
@@ -967,6 +958,7 @@ class Experiment:
                 # fsync isn't supported on every fs (e.g. some network mounts);
                 # ignore and rely on os.replace's atomicity guarantee.
                 pass
+
         os.replace(tmp, target)
 
     @staticmethod
@@ -976,17 +968,17 @@ class Experiment:
         of the experiment.
         """
         try:
-            file_path = path if path is not None else Path(f"{expname.lower() if expname is not None \
+            file_path: Path = path if path is not None else Path(f"{expname.lower() if expname is not None \
                                                             else Path.cwd().name.lower()}.json")
             if not file_path.exists():
                 raise FileNotFoundError(f"Experiment file not found: {file_path}")
-                
+
             with open(file_path, 'r') as f:
                 exp_dict = json.load(f)
-                
+
             if not isinstance(exp_dict, dict):
                 raise ValueError("Invalid experiment file format: expected dictionary")
-                
+
             return Experiment.from_dict(exp_dict)
         except FileNotFoundError as e:
             raise FileNotFoundError(f"Could not load experiment: {e}")
@@ -999,7 +991,7 @@ class Experiment:
 
 
     def __repr__(self, *args, **kwargs) -> str:
-        rep = super().__repr__(*args, **kwargs)
+        rep: str = super().__repr__(*args, **kwargs)
         rep.replace("object", f"object ({self.expname})")
         return rep
 
