@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, TextIO, Union
 from loguru import logger
 import astropy.units as u
+from . import reporting
 
 # The line in the PI letter after which automatic remarks are inserted. Shared
 # single source of truth for process.update_piletter (weight/PolConvert remarks)
@@ -96,17 +97,14 @@ def notify(title: str, body: str = "") -> None:
     if not sys.stderr.isatty():
         return
 
-    msg = f"{title}: {body}" if body else title
 
     # OSC 9  — iTerm2, Windows Terminal
-    osc9 = f"\033]9;{msg}\a"
     # OSC 777 — VTE-based terminals (GNOME Terminal, Tilix, etc.)
-    osc777 = f"\033]777;notify;{title};{body}\a"
 
-    in_tmux = "TMUX" in os.environ
 
-    for seq in (osc9, osc777):
-        if in_tmux:
+    msg = f"{title}: {body}" if body else title
+    for seq in (f"\033]9;{msg}\a", f"\033]777;notify;{title};{body}\a"):
+        if ("TMUX" in os.environ):
             # DCS passthrough: \ePtmux;\e<sequence>\e\\
             seq = f"\033Ptmux;\033{seq}\033\\"
         sys.stderr.write(seq)
@@ -350,8 +348,7 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
     cmd_str = ' '.join(full_shell_command)
     logger.info(f"[bold]> {cmd_str}[/bold]")
     # Record the exact command into logs/commands.sh so a step can be replayed by hand
-    # (see evn_postprocess.reporting). Lazy import keeps utils free of package cycles.
-    from . import reporting
+    # (see evn_postprocess.reporting).
     reporting.record_command(cmd_str)
 
     # Optionally tee the combined stdout/stderr to a log file. Both pump threads
@@ -422,8 +419,7 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
             log_fh.close()
 
     if process.returncode != 0:
-        had_output = bool(stdout_chunks) or bool(stderr_chunks)
-        if had_output:
+        if (bool(stdout_chunks) or bool(stderr_chunks)):
             raise ValueError(f"'{command}' exited with code {process.returncode} (see output above).")
         raise ValueError(f"'{cmd_str}' exited with code {process.returncode} (no output).")
 
@@ -469,38 +465,6 @@ def remote_file_exists(host: str, path: str,
     raise ConnectionError(f"SSH connection to {host} failed (exit code {status}).")
 
 
-def grep_remote_file(host: str, remote_file: str, word: str,
-                     timeout: Optional[Union[float, int]] = None) -> str:
-    """Runs a grep on a remote file via ssh and returns stdout (UTF-8).
-
-    Args:
-        host: Remote host (``user@host`` accepted).
-        remote_file: Path to the file on the remote host.
-        word: Word/pattern to search for.
-        timeout: Wall-clock timeout. Defaults to ``DEFAULT_SSH_TIMEOUT_S``.
-
-    Returns:
-        Captured stdout decoded as UTF-8.
-
-    Raises:
-        ValueError: If the grep command fails.
-        subprocess.TimeoutExpired: If the SSH session exceeds the timeout.
-    """
-    if timeout is None:
-        timeout = DEFAULT_SSH_TIMEOUT_S
-    cmd = ["ssh", *_SSH_BASE_OPTS, host, f"grep {word} {remote_file}"]
-    logger.info(f"> grep {word} {remote_file}")
-    process = subprocess.run(cmd, shell=False, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, timeout=timeout)
-    if process.returncode not in (0, 1):  # 1 == 'no matches', not an error here
-        raise ValueError(
-            f"Errorcode {process.returncode} when searching for {word} in "
-            f"{remote_file} from {host}: {process.stderr.decode('utf-8', errors='replace')!r}"
-        )
-
-    return process.stdout.decode('utf-8')
-
-
 def station_1bit_in_vix(vexfile: str | Path) -> bool:
     """Checks if there is any station in the vex file that recorded at 1 bit.
     Note that this/these station(s) may or may not have recorded at 1 bit in this experiment,
@@ -525,31 +489,6 @@ def station_1bit_in_vix(vexfile: str | Path) -> bool:
     else:
         # File not found
         raise FileNotFoundError(f"{vexfile} file not found.")
-
-
-def extract_tail_standardplots_output(stdplt_output: str) -> str:
-    """Given a full log output from standardplots, it returns only the last bits that contain
-    the information provided by the "r" command.
-
-    Args:
-        stdplt_output (str): Full log output from standardplots.
-
-    Returns:
-        str: Extracted tail containing the "r" command output.
-    """
-    last_lines = []
-    for a_line in stdplt_output.split('\n')[::-1]:
-        # All "r" output lines always start with those messages
-        # (listTimeRage: , listSources: , listAntennas: , listFreqs: ):
-        if 'list' in a_line:
-            last_lines.append(f"# {a_line}")
-        elif 'ms: Current' in a_line:
-            # We are already done for this output
-            break
-
-    last_lines.append('\n')
-    logger.info('\n'.join(last_lines[::-1]))
-    return '\n'.join(last_lines[::-1])
 
 
 def space_available(path) -> u.Quantity:

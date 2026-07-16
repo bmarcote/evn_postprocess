@@ -12,8 +12,8 @@ This sub-package encapsulates ALL knowledge about where input files come from
 Built-in backends: ``jive`` (JIVE servers, replicating the historical behaviour),
 ``none`` (everything already local; never contacts any server), and ``sweeps`` (a
 registered but not-yet-implemented placeholder). Backends are looked up by name in a
-lazy registry so that selecting ``none`` never imports JIVE-specific machinery. Third
-parties can call :func:`register` to add their own backend without touching core code.
+shared registry. Third parties can call :func:`register` to add their own backend
+without touching core code.
 
 The backend name is chosen by the operating mode (see :mod:`evn_postprocess.mode`):
 ``supsci`` -> ``jive``, ``regular`` -> ``none``, ``sweeps`` -> ``sweeps``. An unknown
@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from loguru import logger
+from ..registry import BackendRegistry
 
 
 class RetrievalError(RuntimeError):
@@ -95,9 +95,6 @@ class Retriever(ABC):
         return None
 
 
-# Lazy factories so unselected backends never import their deps (shared registry).
-from ..registry import BackendRegistry
-
 _REGISTRY = BackendRegistry('retrieval', RetrievalError)
 
 
@@ -120,22 +117,17 @@ def get_retriever(name: str) -> Retriever:
     return _REGISTRY.get(name)
 
 
-def _make_none() -> Retriever:
-    from .local import NoneRetriever
-    return NoneRetriever()
-
-
-def _make_jive() -> Retriever:
-    from .jive import JiveRetriever
-    return JiveRetriever()
-
-
 def _make_sweeps() -> Retriever:
     raise RetrievalError("The 'sweeps' retrieval backend is registered but not implemented "
                          "yet. Use mode 'supsci' (JIVE servers) or 'regular' (files already "
                          "local).")
 
 
-register('none', _make_none)
-register('jive', _make_jive)
+# Concrete backend modules import Retriever/InputSet/RetrievalError from this package,
+# so they can only be imported here, after the class definitions above.
+from .jive import JiveRetriever  # noqa: E402
+from .local import NoneRetriever  # noqa: E402
+
+register('none', NoneRetriever)
+register('jive', JiveRetriever)
 register('sweeps', _make_sweeps)

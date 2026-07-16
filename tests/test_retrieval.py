@@ -151,7 +151,7 @@ _SAMPLE_JEX = (
     "pimail = jane@x.edu;\n"
     "coname = John Roe;\n"
     "coimail = john@y.edu;\n"
-    "schedsrc = (J1234+5678|T|X), (3C84|F|);\n"
+    "schedsrc = J1234+5678 (T|X), 3C84 (F|P);\n"
     "emptyval = ;\n"
     "bare line without equals\n"
 )
@@ -172,7 +172,7 @@ def test_fetch_jexp_info_parses_and_cleans_up(monkeypatch):
     # remote path is {jexp server}/{lowercased expname}.jex
     assert captured['origin'] == 'jops@archive:/home/jops/Expadmin/Jexp/eb101.jex'
     assert info['piname'] == 'Jane Doe' and info['coimail'] == 'john@y.edu'
-    assert info['schedsrc'].startswith('(J1234+5678|T|X)')
+    assert info['schedsrc'].startswith('J1234+5678 (T|X)')
     assert info['emptyval'] is None             # empty value -> None
     assert 'bare line without equals' not in info
     assert not Path(captured['dest']).exists()  # the .jex copy must not be kept

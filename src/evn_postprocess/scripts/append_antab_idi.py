@@ -26,12 +26,10 @@ def main(antabfile, idifiles, replace=False):
     def parse(s):
         # Because I do not know regrex
         i0 = s.index('_')
-        i1 = i0 + 1 + s[i0+1:].index('_')
-        return int(s[i0 + 1:i1])
+        return int(s[i0 + 1:(i0 + 1 + s[i0+1:].index('_'))])
 
     # In case there are different passes but a single antab file
-    all_phase_centers = set([parse(an_idi) for an_idi in idifiles])
-    for a_phase_center in all_phase_centers:
+    for a_phase_center in set([parse(an_idi) for an_idi in idifiles]):
         these_idi_files = [idi for idi in idifiles if parse(idi) == a_phase_center]
         print(f"Running append_tsys.py {antabfile} {' '.join(these_idi_files)}...")
         if replace:

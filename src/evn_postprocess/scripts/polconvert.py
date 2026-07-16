@@ -20,6 +20,13 @@ from astropy.io import fits
 from . import find_idi_with_time as find_idi
 import tomllib
 
+# PolConvert only exists in the CASA/polconvert environment; main() raises a clear
+# error when it is missing.
+try:
+    from PolConvert import polconvert_standalone as pconv
+except ImportError:
+    pconv = None
+
 
 __version__ = '2.3'
 
@@ -64,9 +71,9 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
         - logdir : str  [default = 'polconvert_logs']
             Specifies the folder that will be created to keep the log files from this run.
     """
-    # Doing it here to avoid the slow importing and stdout messages before checking the inputs
-    from PolConvert import polconvert_standalone as pconv
-
+    if pconv is None:
+        raise ModuleNotFoundError("The PolConvert package is required to run polconvert "
+                                  "but is not installed in this environment.")
     # Log directory to contain all output files from PolConvert. Remove if files exist from previous runs
     path = Path(logdir)
     if path.exists() and to_compute:
@@ -216,10 +223,8 @@ if __name__ == '__main__':
            'timeavg must be a positive integer.'
     assert isinstance(args['options']['to_compute'], bool), \
            "The parameter 'to_compute' must be either 'true' or 'false'."
-    assert isinstance(args['options']['to_apply'], bool), \
-            "The parameter 'to_apply' must be either 'true' or 'false'."
-    assert isinstance(args['options']['solve_amp'], bool), \
-            "The parameter 'solve_amp' must be either 'true' or 'false'."
+    assert isinstance(args['options']['to_apply'], bool), "The parameter 'to_apply' must be either 'true' or 'false'."
+    assert isinstance(args['options']['solve_amp'], bool), "The parameter 'solve_amp' must be either 'true' or 'false'."
     times = args['options']['time_range']
     assert len(times) % 8 == 0, "'time_range' needs to be an empty list or containing AIPS-format time " \
                                 "[d0, h0, m0, s0, d1, h1, m1, s1]'"
@@ -246,8 +251,7 @@ if __name__ == '__main__':
             args['options']['do_if'] = list(range(1, an_idi['FREQUENCY'].header['NO_BAND']+1))
 
     if ('*' in args['inputs']['ref_idi']) or ('?' in args['inputs']['ref_idi']):
-        args['inputs']['ref_idi'] = find_idi.find_idi_with_time(idi_files= \
-                sorted(glob.glob(args['inputs']['ref_idi'])),
+        args['inputs']['ref_idi'] = find_idi.find_idi_with_time(idi_files= sorted(glob.glob(args['inputs']['ref_idi'])),
                 aipstime=args['options']['time_range'][:4], verbose=False)
         if args['inputs']['ref_idi'] is None:
             raise ValueError("The introduced time range has not been found in the selected FITS-IDI files")

@@ -17,6 +17,7 @@ from loguru import logger
 from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
+from rich.traceback import Traceback
 from . import experiment
 from . import experiment_state
 from . import inputs
@@ -34,16 +35,7 @@ from . import comms as _comms
 from . import mode as _mode
 from . import reporting
 from .mode import Mode
-
-
-def _jive_backend():
-    """Lazily imports the JIVE retrieval backend module (holds the ccs/vlbeer transport).
-
-    Kept lazy so a non-jive run never imports the JIVE server machinery; used by the
-    granular `postprocess exec makelis/getlis` power-user commands.
-    """
-    from .retrieval import jive
-    return jive
+from .retrieval import jive as jive_retrieval
 
 
 def _backends(exp: experiment.Experiment) -> _mode.Backends:
@@ -53,8 +45,7 @@ def _backends(exp: experiment.Experiment) -> _mode.Backends:
     somehow absent (a step reached directly on a pre-Phase-2 checkpoint), it is
     re-detected from the OS so selection never fails for lack of a stored value.
     """
-    m = exp.mode if getattr(exp, 'mode', None) is not None else _mode.detect()
-    return _mode.backends_for(m)
+    return _mode.backends_for((exp.mode if getattr(exp, 'mode', None) is not None else _mode.detect()))
 
 _RICH_TAG_RE = re.compile(r'\[/?[\w\s#.,;:!?=-]+\]')
 _stdout_console = Console(highlight=False)
@@ -96,11 +87,6 @@ def set_notifier(notifier: _comms.Notifier) -> None:
     """
     global _NOTIFIER
     _NOTIFIER = notifier
-
-
-def get_notifier() -> _comms.Notifier | None:
-    """Returns the current module-level notifier, or None."""
-    return _NOTIFIER
 
 
 def _review_flag_path(exp: experiment.Experiment) -> Path:
@@ -305,10 +291,9 @@ def initialize_experiment(expname: str, supsci: str, mode: Mode) -> experiment.E
 
     # In sweeps mode the config must be fully prepared: no heuristic classification runs,
     # and any observed source still untyped is a hard, field-named error.
-    classify = mode != Mode.sweeps
     try:
-        exp = inputs.load_experiment(inputset.vexfile, lisfiles=inputset.lisfiles or None,
-                                     supsci=supsci, dirs=dirs, expname=expname, classify=classify)
+        exp = inputs.load_experiment(inputset.vexfile, lis_paths=inputset.lisfiles or None,
+                                     supsci=supsci, dirs=dirs, expname=expname, classify=(mode != Mode.sweeps))
         if mode == Mode.sweeps:
             inputs.ensure_sources_typed(exp)
     except inputs.InputsError as e:
@@ -461,8 +446,7 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
         logger.error("No pipelinable correlator passes found.")
         return False
 
-    has_fringefinder = any((p.sources and p.sources.fringefinder) for p in pipelinable) or bool(exp.sources.fringefinder)
-    if not has_fringefinder:
+    if not (any((p.sources and p.sources.fringefinder) for p in pipelinable) or bool(exp.sources.fringefinder)):
         logger.error("No fringe-finder sources found in any correlator pass or experiment.")
         return False
 
@@ -601,8 +585,7 @@ def _run_pipeline_stage(exp: experiment.Experiment, stage: str) -> bool:
     backend selection or a backend failure reads as a step failure, not a crash.
     """
     try:
-        backend = _pipeline_backend(exp)
-        return getattr(backend, stage)(exp)
+        return getattr(_pipeline_backend(exp), stage)(exp)
     except pipelines.PipelineError as e:
         logger.error(f"Pipeline backend error at '{stage}': {e}")
         rprint(f"[red]{e}[/red]")
@@ -878,7 +861,7 @@ def antfiles(exp: experiment.Experiment) -> bool:
             rprint(f"[red]{e}[/red]")
             return False
         if any(s.lower() in ('br', 'kp', 'la', 'yy', 'mk') for s in exp.antennas.names):
-            pipeline.get_vlba_antab(exp)
+            jive_retrieval.get_vlba_antab(exp)
 
         if not pipeline.create_uvflg(exp):
             logger.error("uvflg creation needs manual intervention.")
@@ -1000,8 +983,7 @@ def _record_final_in_toml(exp: experiment.Experiment) -> None:
     (currently only free text in the ANTAB comments).
     """
     try:
-        antab_files = sorted(str(p) for p in exp.dirs.pipe_in.glob('*.antab')) \
-            if exp.dirs.pipe_in.exists() else []
+        antab_files = sorted(str(p) for p in exp.dirs.pipe_in.glob('*.antab')) if exp.dirs.pipe_in.exists() else []
         polconvert_inputs = sorted(str(p) for p in Path('.').glob('polconvert*')
                                    if p.is_file() and not p.name.endswith(('.log', '.ms')))
         flagged = None
@@ -1028,8 +1010,7 @@ def archive(exp: experiment.Experiment) -> bool:
     ``sweeps`` (not implemented yet).
     """
     try:
-        backend = _backends(exp).distribution
-        return distribution.get_distributor(backend).deliver(exp)
+        return distribution.get_distributor(_backends(exp).distribution).deliver(exp)
     except distribution.DistributionError as e:
         logger.error(f"Distribution failed: {e}")
         rprint(f"[red]{e}[/red]")
@@ -1052,10 +1033,10 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
     return {
         # -- directory / setup --
         # makelis/getlis are supsci-only ccs operations; their ssh bodies live in the JIVE
-        # retrieval backend (lazy import keeps jive machinery out of non-jive runs).
-        'makelis':       ExecCommand(lambda exp: _jive_backend().create_lis_files(exp),
+        # retrieval backend.
+        'makelis':       ExecCommand(jive_retrieval.create_lis_files,
                                      "Create the .lis files in ccs (JIVE retrieval backend)."),
-        'getlis':        ExecCommand(lambda exp: _jive_backend().get_lis_files(exp),
+        'getlis':        ExecCommand(jive_retrieval.get_lis_files,
                                      "Copy the .lis files from ccs to eee (JIVE retrieval backend)."),
         'modlis':        ExecCommand(lisfiles.get_passes_from_lisfiles,
                                      "Read correlator passes from the .lis files and update the header."),
@@ -1234,9 +1215,7 @@ def validate_steps(from_step: str, to_step: str | None = None) -> tuple[bool, st
         if to_step not in step_names:
             return False, f"Step '{to_step}' not found. Available steps: {', '.join(step_names)}"
 
-        from_idx = step_names.index(from_step)
-        to_idx = step_names.index(to_step)
-        if from_idx > to_idx:
+        if step_names.index(from_step) > step_names.index(to_step):
             return False, f"Step '{from_step}' comes after '{to_step}'. Order should be reversed."
 
     return True, ""
@@ -1311,9 +1290,8 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
 
         ms_files = [p.msfile for p in exp.correlator_passes]
         lis_files = [p.lisfile for p in exp.correlator_passes]
-        existing_ms = [f for f in ms_files if f.exists()]
 
-        if len(existing_ms) < len(ms_files):
+        if len([f for f in ms_files if f.exists()]) < len(ms_files):
             _reset_from('j2ms2', "MS file(s) missing on disk")
             return
 
@@ -1382,14 +1360,12 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
 
     # --- antab: outputs=pipeline/in/*.antab ---
     if 'antab' in step_names and all_steps[step_names.index('antab')].done:
-        antab_files = list(exp.dirs.pipe_in.glob("*.antab")) if exp.dirs.pipe_in.exists() else []
-        if not antab_files:
+        if not (list(exp.dirs.pipe_in.glob("*.antab")) if exp.dirs.pipe_in.exists() else []):
             _reset_from('antab', "ANTAB file(s) missing in pipeline/in")
 
     # --- pipeinputs: outputs=pipeline/in/*.inp.txt ---
     if 'pipeinputs' in step_names and all_steps[step_names.index('pipeinputs')].done:
-        inp_files = list(exp.dirs.pipe_in.glob("*.inp.txt")) if exp.dirs.pipe_in.exists() else []
-        if not inp_files:
+        if not (list(exp.dirs.pipe_in.glob("*.inp.txt")) if exp.dirs.pipe_in.exists() else []):
             _reset_from('pipeinputs', "Pipeline input file(s) missing in pipeline/in")
 
     # --- pipeline: inputs=pipeline/in/*, outputs=pipeline/out/* ---
@@ -1452,7 +1428,6 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
             # A stray '[' in interpolated data must never abort logging: fall back to plain.
             console.print(text, markup=False)
         if record["exception"] is not None:
-            from rich.traceback import Traceback
             exc = record["exception"]
             console.print(Traceback.from_exception(exc.type, exc.value, exc.traceback))
 
@@ -1515,8 +1490,7 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
         exp.steps = all_steps
         exp.store()
 
-        to_idx = step_names.index(to_step) + 1 if to_step is not None else len(all_steps)
-        steps_to_run = all_steps[from_idx:to_idx]
+        steps_to_run = all_steps[from_idx:(step_names.index(to_step) + 1 if to_step is not None else len(all_steps))]
     else:
         # Resume: restore stored done state and only queue steps that are not yet done
         if stored_steps:
@@ -1571,8 +1545,7 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
         # the exact command to open, then confirm interactively — approving continues
         # with the final steps in this same run; naming a step re-runs from it.
         if step.name == 'postpipe':
-            remaining = steps_to_run[steps_to_run.index(step) + 1:]
-            if remaining:
+            if steps_to_run[steps_to_run.index(step) + 1:]:
                 piletter = f"{exp.expname.lower()}.piletter"
                 open_cmd = f"postprocess -e {exp.expname} info --serve"
                 body = (f"[bold]Please review before continuing:[/bold]\n\n"

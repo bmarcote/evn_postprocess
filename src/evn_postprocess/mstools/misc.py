@@ -46,8 +46,7 @@ class Stokes(IntEnum):
 def mjd2date(mjd: float) -> datetime.datetime:
     """Returns the datetime for the given MJD date.
     """
-    origin = datetime.datetime(1858, 11, 17)
-    return origin + datetime.timedelta(mjd)
+    return datetime.datetime(1858, 11, 17) + datetime.timedelta(mjd)
 
 
 def date2mjd(date: datetime.datetime) -> float:

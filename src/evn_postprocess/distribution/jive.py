@@ -8,11 +8,18 @@ the feedback-database upload). Imported only when the 'jive' backend is selected
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from loguru import logger
 from rich import print as rprint
+from astropy import coordinates as coord
+from astropy import units as u
 
-from . import Distributor
+from . import DistributionError, Distributor
+from .. import experiment, experiment_state, pipeline, process
+from .. import workflow  # cycle with workflow importing this sub-package: used at call time only
+from ..retrieval import RetrievalError, jive as jive_retrieval
+from ..utils import PILETTER_REMARKS_ANCHOR
 
 
 # Experiment-name prefixes for Network Monitoring Experiments (and fringe tests). These
@@ -25,6 +32,11 @@ STATUS_LABELS = {'minor': ' (minor issues)', 'major': ' (could not observe)', 's
 # written once, for all affected antennas, under 'Further remarks:' by
 # process.update_piletter. Matches the wording produced in review.default_station_comments.
 _BANDWIDTH_NOTE_RE = re.compile(r"\s*Observed with reduced bandwidth\s*\([^)]*\)\.?", re.IGNORECASE)
+
+# One .jex schedsrc entry: 'NAME (TYPE|FLAG)'. TYPE is T (target), R (reference/
+# calibrator) or C/F (fringe-finder). FLAG is 'X' (password-protect in the EVN archive)
+# or 'P' (public), with an optional trailing '?' when the setting is a guess.
+_SCHEDSRC_ENTRY_RE = re.compile(r'^(?P<name>\S+)\s*\((?P<type>\w)\|(?P<flag>\w?)(?P<guess>\?)?\)$')
 
 
 def _station_note(entry) -> str:
@@ -68,7 +80,6 @@ class JiveDistributor(Distributor):
         Raises:
             DistributionError: In batch mode when PI name/email are missing.
         """
-        from .. import pipeline, process
         # Recover the PI/co-I contacts and per-source archive protection from the JIVE
         # .jex file BEFORE the auth_pipe.py 'protect' stage below, so that stage protects
         # exactly the sources the PI scheduled as protected. False means the .jex could
@@ -102,7 +113,6 @@ class JiveDistributor(Distributor):
     @staticmethod
     def _exp_toml(exp):
         """Returns the experiment toml attached to *exp*, loading it if needed."""
-        from .. import experiment_state
         return experiment_state.attached_toml(exp)
 
     def _apply_source_protection(self, exp) -> bool:
@@ -128,8 +138,6 @@ class JiveDistributor(Distributor):
                         "source protection needed; skipping the .jex lookup.")
             return True
 
-        from ..retrieval import RetrievalError
-        from ..retrieval import jive as jive_retrieval
         try:
             jexp_info = jive_retrieval.fetch_jexp_info(exp.expname)
         except RetrievalError as e:
@@ -147,7 +155,6 @@ class JiveDistributor(Distributor):
         A contact already on exp.pi (same name and email) is not re-added; the toml write
         is deduped by email inside experiment_state.record_pi.
         """
-        from .. import experiment as _experiment
         contacts: list[tuple[str, str]] = []
         if jexp_info.get('piname') and jexp_info.get('pimail'):
             contacts.append((jexp_info['piname'], jexp_info['pimail']))
@@ -158,7 +165,7 @@ class JiveDistributor(Distributor):
             contacts.append((jexp_info['coname'], jexp_info['coimail']))
         for name, email in contacts:
             if not any(pi.name == name and pi.email == email for pi in exp.pi):
-                exp.pi.append(_experiment.PI(name, email))
+                exp.pi.append(experiment.PI(name, email))
         if contacts:
             exp_toml = self._exp_toml(exp)
             exp_toml.record_pi([{'name': name, 'email': email} for name, email in contacts])
@@ -169,44 +176,44 @@ class JiveDistributor(Distributor):
     def _apply_source_flags(self, exp, jexp_info: dict) -> None:
         """Sets per-source type and archive protection from the .jex ``schedsrc`` field.
 
-        ``schedsrc`` is a comma-separated list of ``(name|type|protected)`` entries: type
-        is T (target), R (reference/calibrator) or C/F (fringe-finder); protected is 'X'
-        when the source data must be password-protected in the EVN archive. Sources
+        ``schedsrc`` is a comma-separated list of ``NAME (TYPE|FLAG)`` entries (see
+        _SCHEDSRC_ENTRY_RE): TYPE is T (target), R (reference/calibrator) or C/F
+        (fringe-finder); FLAG is 'X' when the source data must be password-protected in
+        the EVN archive and 'P' when public, with a trailing '?' when the .jex records
+        the protection as a guess (applied as-is, with a warning to verify it). Sources
         already known from the vex/MS are updated in place; any not yet present are added
         with placeholder coordinates so they are still protected downstream.
         """
-        from astropy import coordinates as coord
-        from astropy import units as u
-        from .. import experiment as _experiment
         schedsrc = jexp_info.get('schedsrc')
         if not schedsrc:
             logger.warning(f"The .jex file for {exp.expname} has no scheduled-source list "
                            "(schedsrc); no source protection could be set from it.")
             return
-        type_map = {'T': _experiment.SourceType.target, 'R': _experiment.SourceType.calibrator,
-                    'C': _experiment.SourceType.fringefinder, 'F': _experiment.SourceType.fringefinder}
+        type_map = {'T': experiment.SourceType.target, 'R': experiment.SourceType.calibrator,
+                    'C': experiment.SourceType.fringefinder, 'F': experiment.SourceType.fringefinder}
         protected_names: list[str] = []
         for token in schedsrc.split(','):
             token = token.strip()
             if not token:
                 continue
-            # Split on '|' (not on whitespace) so an unprotected entry serialized with an
-            # empty protection field -- '(NAME|T|)' -- still yields the name and type.
-            fields = [field.strip() for field in token.strip('()').split('|')]
-            if len(fields) < 2 or not fields[0]:
+            match = _SCHEDSRC_ENTRY_RE.match(token)
+            if match is None:
                 logger.warning(f"Skipping malformed schedsrc entry '{token}' in the .jex "
-                               f"file for {exp.expname} (expected (name|type|protected)).")
+                               f"file for {exp.expname} (expected 'NAME (TYPE|FLAG)').")
                 continue
-            src_name, src_type_str = fields[0], fields[1]
-            src_protected = fields[2] if len(fields) >= 3 else ''
-            src_type = type_map.get(src_type_str.upper(), _experiment.SourceType.other)
-            is_protected = src_protected.upper() == 'X'
+            src_name = match.group('name')
+            src_type = type_map.get(match.group('type').upper(), experiment.SourceType.other)
+            is_protected = match.group('flag').upper() == 'X'
+            if match.group('guess') is not None:
+                logger.warning(f"The .jex protection flag for {src_name} is a guess "
+                               f"('{match.group('flag')}?'); verify the archive protection "
+                               f"of {exp.expname} manually.")
             if src_name in exp.sources.names:
                 exp.sources[src_name].type = src_type
                 exp.sources[src_name].protected = is_protected
             else:
                 placeholder = coord.SkyCoord(ra=0 * u.deg, dec=0 * u.deg, frame='icrs')
-                exp.sources.append(_experiment.Source(name=src_name, coordinates=placeholder,
+                exp.sources.append(experiment.Source(name=src_name, coordinates=placeholder,
                                                       type=src_type, protected=is_protected))
             if is_protected:
                 protected_names.append(src_name)
@@ -249,14 +256,11 @@ class JiveDistributor(Distributor):
         Raises:
             DistributionError: In batch mode, when no complete PI contact exists.
         """
-        from . import DistributionError
-        from .. import experiment as _experiment
-        from .. import workflow  # function-level: workflow imports this sub-package
         exp_toml = self._exp_toml(exp)
         if not exp.pi:
             for entry in exp_toml.pis:
                 if entry.name and entry.email:
-                    exp.pi.append(_experiment.PI(entry.name, entry.email))
+                    exp.pi.append(experiment.PI(entry.name, entry.email))
         if any(pi.name and pi.email for pi in exp.pi):
             return
         if workflow.is_batch_mode():
@@ -274,7 +278,7 @@ class JiveDistributor(Distributor):
                 f"No PI contact information for {exp.expname} and no interactive terminal "
                 "to ask for it. Add name and email in [[pi]] entries of the experiment "
                 "toml (or run with --batch for the clean batch behaviour).") from e
-        exp.pi.append(_experiment.PI(name, email))
+        exp.pi.append(experiment.PI(name, email))
         exp.store()
         exp_toml.record_pi([{'name': name, 'email': email}])
         exp_toml.save()
@@ -295,8 +299,6 @@ class JiveDistributor(Distributor):
         letter logs a warning and returns False without blocking the delivery (the
         operator reviews the letter before sending anyway).
         """
-        from pathlib import Path
-        from ..utils import PILETTER_REMARKS_ANCHOR
         exp_toml = self._exp_toml(exp)
         comments = exp_toml.comments
         station_notes = {name: _station_note(entry) for name, entry in comments.stations.items()}
@@ -311,13 +313,11 @@ class JiveDistributor(Distributor):
         lines = letter.read_text(encoding='utf-8').splitlines(keepends=True)
         unplaced = []
         for name, note in sorted(station_notes.items()):
-            label = f"{name.capitalize()}:"
             for i, line in enumerate(lines):
-                if label in line:
+                if f"{name.capitalize()}:" in line:
                     if note not in line:
                         stripped = line.rstrip('\n')
-                        newline = line[len(stripped):]
-                        lines[i] = f"{stripped} {note}{newline}"
+                        lines[i] = f"{stripped} {note}{line[len(stripped):]}"
                     break
             else:
                 unplaced.append(name)
@@ -331,12 +331,10 @@ class JiveDistributor(Distributor):
                 logger.warning(f"No '{PILETTER_REMARKS_ANCHOR}' anchor in {letter}; the general "
                                "review note was not inserted (add it manually if needed).")
             else:
-                anchor_end = text.index(PILETTER_REMARKS_ANCHOR) + len(PILETTER_REMARKS_ANCHOR)
                 # find() (not index()): the anchor may be the very last line without a newline.
-                eol = text.find('\n', anchor_end)
+                eol = text.find('\n', (text.index(PILETTER_REMARKS_ANCHOR) + len(PILETTER_REMARKS_ANCHOR)))
                 eol = len(text) if eol == -1 else eol + 1
-                block = f"\n{COMMENTS_SENTINEL}\n    {comments.general}\n"
-                text = text[:eol] + block + text[eol:]
+                text = text[:eol] + f"\n{COMMENTS_SENTINEL}\n    {comments.general}\n" + text[eol:]
 
         letter.write_text(text, encoding='utf-8')
         logger.info(f"Review comments inserted into {letter}.")

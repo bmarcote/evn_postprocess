@@ -34,6 +34,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from loguru import logger
+from astropy import units as u
+from . import experiment
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +73,7 @@ class CommsConfig:
         if path:
             candidates.append(Path(path))
         candidates.append(Path("comms.toml"))
-        config_home = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
-        candidates.append(config_home / "evn" / "comms.toml")
+        candidates.append(Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / "evn" / "comms.toml")
         try:
             candidates.append(Path(os.path.expanduser("~jops")) / ".config" / "evn" / "comms.toml")
         except RuntimeError:
@@ -253,8 +254,7 @@ class MattermostNotifier(Notifier):
         self._my_user_id = me["id"]
 
         target = self._api("GET", f"/users/username/{self.config.username}")
-        channel = self._api("POST", "/channels/direct", [self._my_user_id, target["id"]])
-        self._channel_id = channel["id"]
+        self._channel_id = self._api("POST", "/channels/direct", [self._my_user_id, target["id"]])["id"]
         logger.info(f"Mattermost DM channel with @{self.config.username}: {self._channel_id}")
 
     def _upload_file(self, filepath: Path) -> str:
@@ -400,8 +400,6 @@ def build_summary_text(exp) -> str:
     Returns:
         Multi-line summary string.
     """
-    from astropy import units as u
-
     lines: list[str] = [f"**Experiment:** {exp.expname}"]
     if exp.obsdate:
         line = f"**Obs. date:** {exp.obsdate.strftime('%d/%m/%Y')}"
@@ -527,7 +525,7 @@ def parse_msops_reply(reply: str, exp) -> dict | None:
                 result[key] = []
             else:
                 antennas = [a.strip().capitalize() for a in re.split(r"[,\s]+", value) if a.strip()]
-                valid_names = set(exp.antennas.names)
+                valid_names = set(exp.antennas.names)  # built once, checked per antenna
                 for ant in antennas:
                     if ant not in valid_names:
                         logger.warning(f"Unknown antenna '{ant}' in {key}")
@@ -556,8 +554,6 @@ def apply_msops_feedback(exp, feedback: dict) -> bool:
     Returns:
         True on success.
     """
-    from . import experiment as _experiment
-
     threshold = feedback["weight_threshold"]
     for i in range(len(exp.correlator_passes)):
         existing = exp.correlator_passes[i].flagged_weights
@@ -565,7 +561,7 @@ def apply_msops_feedback(exp, feedback: dict) -> bool:
             logger.info(f"flag_weights threshold unchanged ({threshold}) for "
                         f"{exp.correlator_passes[i].msfile.name}")
         else:
-            exp.correlator_passes[i].flagged_weights = _experiment.FlagWeight(threshold, -1)
+            exp.correlator_passes[i].flagged_weights = experiment.FlagWeight(threshold, -1)
 
     for antenna in feedback.get("polswap", []):
         exp.antennas[antenna].polswap = True

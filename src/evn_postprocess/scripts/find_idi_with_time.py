@@ -7,16 +7,10 @@ from astropy.io import fits
 
 def date2mjd(date):
   origin = dt.datetime(1858,11,17)
-  mjd = (date-origin).days + (date-origin).seconds/86400.0
-  return mjd
+  return ((date-origin).days + (date-origin).seconds/86400.0)
 
 def mjd2date(mjd):
-  origin = dt.datetime(1858,11,17)
-  date = origin + dt.timedelta(mjd)
-  return date
-
-def mjd2jd(date):
-    return date + 2400000.5
+  return (dt.datetime(1858,11,17) + dt.timedelta(mjd))
 
 def jd2mjd(date):
     return date - 2400000.5
@@ -37,8 +31,7 @@ def get_timerange_in_ididata(datafits):
         Ending time of the last scan in the file (in UT).
     """
     starttime = mjd2date(jd2mjd(datafits['DATE'][0] + datafits['TIME'][0]))
-    endtime = mjd2date(jd2mjd(datafits['DATE'][-1] + datafits['TIME'][-1]))
-    return starttime, endtime
+    return starttime, mjd2date(jd2mjd(datafits['DATE'][-1] + datafits['TIME'][-1]))
 
 
 
@@ -67,9 +60,7 @@ def find_idi_with_time(idi_files, datetime=None, aipstime=None, verbose=True):
     for idi_file in idi_files:
         if verbose:
             print('Opening {} file'.format(idi_file))
-        hdu = fits.open(idi_file)
-        hdu_data = hdu['UV_DATA'].data
-        inittime, endtime = get_timerange_in_ididata(hdu_data)
+        inittime, endtime = get_timerange_in_ididata(fits.open(idi_file)['UV_DATA'].data)
         if datetime is not None:
             the_time = datetime
         elif aipstime is not None:

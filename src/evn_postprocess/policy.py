@@ -68,9 +68,7 @@ class Policy:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Policy":
         """Builds a Policy from a plain dict, ignoring unknown keys defensively."""
-        known = {f.name for f in cls.__dataclass_fields__.values()}
-        filtered = {k: v for k, v in data.items() if k in known}
-        return cls(**filtered)
+        return cls(**{k: v for k, v in data.items() if k in {f.name for f in cls.__dataclass_fields__.values()}})
 
     @classmethod
     def load(cls, path: str | Path) -> "Policy":
