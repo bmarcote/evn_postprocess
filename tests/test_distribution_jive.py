@@ -145,12 +145,12 @@ def test_no_comments_means_untouched_letter(tmp_path, monkeypatch):
 # --------------------------------------------------- .jex source protection & contacts
 
 # A representative .jex parse result: PI + co-I contacts and a schedsrc with a protected
-# target ('X'), an unprotected fringe-finder (empty protection field), and a protected
-# reference/calibrator.
+# target ('X'), a public fringe-finder ('P'), and a reference/calibrator whose protection
+# is a guess ('X?', applied as protected with a warning).
 JEXP_INFO = {
     'piname': 'Jane Doe', 'pimail': 'jane@x.edu',
     'coname': 'John Roe', 'coimail': 'john@y.edu',
-    'schedsrc': '(J1234+5678|T|X), (3C84|F|), (J0555+3948|R|X)',
+    'schedsrc': 'J1234+5678 (T|X), 3C84 (F|P), J0555+3948 (R|X?)',
 }
 
 _FETCH = 'evn_postprocess.retrieval.jive.fetch_jexp_info'
@@ -198,15 +198,15 @@ def test_source_protection_sets_contacts_and_flags(tmp_path, monkeypatch):
     assert exp.sources['J1234+5678'].type == experiment.SourceType.target
     assert exp.sources['J1234+5678'].protected is True
     assert exp.sources['3C84'].type == experiment.SourceType.fringefinder
-    assert exp.sources['3C84'].protected is False           # empty protection field
+    assert exp.sources['3C84'].protected is False           # 'P' = public
     assert exp.sources['J0555+3948'].type == experiment.SourceType.calibrator
-    assert exp.sources['J0555+3948'].protected is True
+    assert exp.sources['J0555+3948'].protected is True      # 'X?' = protected, as a guess
 
 
 def test_source_protection_no_duplicate_contact(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(_FETCH,
-                        lambda _e: {'piname': 'Jane Doe', 'pimail': 'jane@x.edu', 'schedsrc': '(3C84|F|)'})
+                        lambda _e: {'piname': 'Jane Doe', 'pimail': 'jane@x.edu', 'schedsrc': '3C84 (F|P)'})
     exp = make_exp(tmp_path)
     exp.pi.append(experiment.PI('Jane Doe', 'jane@x.edu'))
     JiveDistributor()._apply_source_protection(exp)

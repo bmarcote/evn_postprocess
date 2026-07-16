@@ -88,7 +88,7 @@ def record_command(command: str, step: str | None = None) -> None:
     step = step if step is not None else _current_step
     try:
         path = command_log_path()
-        new_file = not path.exists()
+        new_file = not path.exists()  # must be evaluated before open() creates the file
         with open(path, 'a', encoding='utf-8') as handle:
             if new_file:
                 handle.write("#!/bin/sh\n")

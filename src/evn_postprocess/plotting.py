@@ -1,4 +1,3 @@
-from __future__ import print_function
 import os
 import re
 import sys
@@ -19,27 +18,21 @@ from rich import print as rprint
 from typing import List, Optional, Generator
 from loguru import logger
 import numpy as np
+from astropy import units as u
 from casacore import tables as pt
+from . import experiment_state
+from . import review
+from .experiment_state import STATION_STATUSES
 
 try:
     from jiveplot import jplotter, command  # noqa: F401  (re-exported for module callers)
     _JIVEPLOT_AVAILABLE = True
-except ModuleNotFoundError as _jp_exc:
+except ModuleNotFoundError:
     # jiveplot is only required for standardplots / web-dashboard rendering.
     # Defer the failure so the rest of the package (and the tests) can import without it.
     jplotter = None  # type: ignore[assignment]
     command = None  # type: ignore[assignment]
-    _JIVEPLOT_IMPORT_ERROR = _jp_exc
     _JIVEPLOT_AVAILABLE = False
-
-
-def _require_jiveplot():
-    """Raises a clear error if jiveplot is not available in this environment."""
-    if not _JIVEPLOT_AVAILABLE:
-        raise ModuleNotFoundError(
-            "jiveplot is required for plotting functionality but was not found. "
-            f"Original import error: {_JIVEPLOT_IMPORT_ERROR}"
-        )
 
 
 # program default(s)
@@ -74,87 +67,11 @@ def mkerrf(pfx):
 if _JIVEPLOT_AVAILABLE:
     jplotter.hvutil.mkerrf = mkerrf
 
-# returns None if the argument wasn't present, tp(<value>) if it was
-# (such that it will give an exception if e.g. you expect int but
-#  the user didn't pass a valid int
-def get_val(arg, tp=str):
-    conversion_error = False
-    try:
-        # is 'arg' given?
-        aidx = sys.argv.index(arg)  # raises ValueError if not found FFS
-        aval = sys.argv[aidx+1]     # raises IndexError
-
-        # Check it doesn't start with a '-'!
-        if aval[0]=='-':
-            raise RuntimeError("Option {0} expects argument, got another option '{1}'" .format(arg, aval))
-
-        # remove those arguments
-        del sys.argv[aidx]; del sys.argv[aidx]
-        # now set 'conversion_error' to True because the following
-        # statement could (also) raise a ValueError (like the
-        # "sys.argv.index()"). FFS Python! So we must take measures to tell
-        # them apart
-        conversion_error = True
-        return tp(aval)
-    except ValueError:
-        if conversion_error:
-            raise
-        # no 'arg' given, don't complain
-        return None
-    except IndexError:
-        # Mission option value to option
-        raise RuntimeError("Mission optionvalue to {0}".format(arg))
-
-
 def chunkert(f, l, cs, verbose=True):
     while f<l:
         n = min(cs, l-f)
         yield (f, n)
         f = f + n
-
-def get_observed_subbands(ms):
-    """Given a MS file, it checks which subbands each antenna actually observed.
-    Meaning for which subbands each antenna has non-zero data.
-
-    Returns a dictionary with the antenna names as keys,
-    and a Python set with the observed subbands as values.
-    """
-    ants_spws = collections.defaultdict(set)
-    with pt.table(ms, readonly=True, ack=False) as mstable:
-        with pt.table(mstable.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ants:
-            antenna_names = ms_ants.getcol('NAME')
-
-        with pt.table(mstable.getkeyword('DATA_DESCRIPTION'), readonly=True, ack=False) as ms_spws:
-            spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
-
-        for (start, nrow) in chunkert(0, len(mstable), 5000):
-            ants1 = mstable.getcol('ANTENNA1', startrow=start, nrow=nrow)
-            ants2 = mstable.getcol('ANTENNA2', startrow=start, nrow=nrow)
-            spws = mstable.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
-            msdata = mstable.getcol('DATA', startrow=start, nrow=nrow)
-
-            for antenna in antenna_names:
-                for spw in spw_names:
-                    cond = np.where((ants1 == antenna) & (ants2 == antenna) & (spws == spw))
-                    if (msdata[cond] < 1e-7).all():
-                        ants_spws[antenna].add(spw)
-
-    return ants_spws
-
-def find_best_subband(ants_spws):
-    """Given the dictionary with the subbands that each antenna observed
-    (format from get_observed_subbands' output), it returns the subband number
-    at which most of the antennas are present.
-    """
-    counting = collections.Counter()
-    for antenna in ants_spws:
-        counting.update(ants_spws[antenna])
-
-    # .most_common() returns a list with the orderered elements,
-    # each in a two-elemen tuple: the element and the number of repetitions.
-    return counting.most_common()[0][0]
-
-
 
 # Default antenna priority for reference antenna fallback.
 # Ordered by preference; the first antenna present in a scan with the most subbands wins.
@@ -233,8 +150,7 @@ class Jplot:
 
                 for antenna in antenna_names:
                     for spw in spw_names:
-                        cond = np.where((ants1 == antenna) & (ants2 == antenna) & (spws == spw))
-                        if (msdata[cond] < 1e-7).all():
+                        if (msdata[np.where((ants1 == antenna) & (ants2 == antenna) & (spws == spw))] < 1e-7).all():
                             ants_spws[antenna].add(spw)
 
         return ants_spws
@@ -288,14 +204,11 @@ class Jplot:
                         result[scanno] = {'source': fname, 'antennas': set(), 'antenna_spws': collections.defaultdict(set)}
 
                     a1 = int(ant1_col[i])
-                    a2 = int(ant2_col[i])
-                    spw = int(spw_col[i])
-                    amp = np.max(np.abs(data_col[i]))
 
-                    if a1 == a2 and amp > 1e-5:
+                    if a1 == int(ant2_col[i]) and np.max(np.abs(data_col[i])) > 1e-5:
                         aname = ant_names[a1]
                         result[scanno]['antennas'].add(aname)
-                        result[scanno]['antenna_spws'][aname].add(spw)
+                        result[scanno]['antenna_spws'][aname].add(int(spw_col[i]))
 
         return dict(sorted(result.items()))
 
@@ -511,9 +424,8 @@ class Jplot:
 
             # --- per-scan plots (cross + auto) ---
             for scanno, info in scan_map.items():
-                refant = self.pick_refant_for_scan(info)
                 if 'cross' in plots:
-                    todo.append(self.anp_chan_cross_plot(refant, scanno))
+                    todo.append(self.anp_chan_cross_plot(self.pick_refant_for_scan(info), scanno))
                 if 'auto' in plots:
                     todo.append(self.amp_chan_auto_plot(scanno))
 
@@ -577,9 +489,8 @@ def convert_ps_to_png(plots_dir: Path, expname: str, resolution: int = 150) -> l
             created.extend(existing)
             continue
         # Use %03d placeholder so Ghostscript writes one PNG per page (1-based)
-        out_pattern = plots_dir / f"{stem}-page%03d.png"
         cmd = ["gs", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=png16m",
-               f"-r{resolution}", f"-sOutputFile={out_pattern}", str(ps_file)]
+               f"-r{resolution}", f"-sOutputFile={plots_dir / f'{stem}-page%03d.png'}", str(ps_file)]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode == 0:
@@ -634,8 +545,6 @@ def _build_experiment_summary(exp) -> dict:
     Returns:
         dict with keys suitable for JSON serialization.
     """
-    from astropy import units as u
-
     summary: dict = {
         "expname": exp.expname,
         "obsdate": exp.obsdate.strftime("%d/%m/%Y") if exp.obsdate else "Unknown",
@@ -1174,7 +1083,6 @@ loadComments();
 </html>"""
     # Guard against vocabulary drift: the JS above hand-codes the station statuses
     # (STATUS_COLORS / option labels); they must match experiment_state.STATION_STATUSES.
-    from .experiment_state import STATION_STATUSES
     for status in STATION_STATUSES:
         if f"'{status}'" not in html:
             raise RuntimeError(f"Dashboard HTML is missing station status '{status}': "
@@ -1248,7 +1156,6 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def _exp_toml(self):
         """Returns the experiment toml of the served experiment, loading it if needed."""
-        from . import experiment_state
         return experiment_state.attached_toml(self.__class__.exp)
 
     def _serve_comments(self):
@@ -1257,11 +1164,10 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         Saved toml [comments] entries win; stations without a saved entry get the
         auto-generated defaults (station-summary findings + feedback-DB comment).
         """
-        from . import review as _review
         exp_toml = self._exp_toml()
         if self.__class__._default_comments is None:
             try:
-                self.__class__._default_comments = _review.default_station_comments(self.__class__.exp)
+                self.__class__._default_comments = review.default_station_comments(self.__class__.exp)
             except Exception as exc:  # defaults must never break the dashboard
                 logger.warning(f"Could not compute the default station comments: {exc}")
                 self.__class__._default_comments = {}
@@ -1279,10 +1185,8 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         Expects JSON body: {"general": str, "stations": {NAME: {"status": s, "note": n}}}.
         """
-        from . import experiment_state
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
             general = body.get("general")
             stations = body.get("stations", {})
         except (json.JSONDecodeError, ValueError) as exc:
@@ -1307,8 +1211,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         Updates the exp object in-place, rebuilds the summary dict, and stores to disk.
         """
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
             src_name = body["source"]
             new_type_name = body["type"]
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
@@ -1348,9 +1251,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         previously-listed refants are kept after it as fallback order.
         """
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
-            new_ref = body["refant"]
+            new_ref = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))["refant"]
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
             self._serve_json({"ok": False, "error": str(exc)})
             return
@@ -1361,8 +1262,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             return
 
         # Put the chosen antenna first, keeping the rest of the previous list as fallback.
-        rest = [r for r in exp.refant if r != new_ref]
-        exp.refant = [new_ref] + rest
+        exp.refant = [new_ref] + [r for r in exp.refant if r != new_ref]
         exp.store()
         self.__class__.experiment_summary = _build_experiment_summary(exp)
         logger.info(f"Reference antenna set to '{new_ref}' (refant order: {', '.join(exp.refant)}) and stored.")
@@ -1388,8 +1288,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def _serve_plot_list(self):
         """Return a JSON list of available PNG plot filenames."""
-        pngs = sorted(f.name for f in self.plots_dir.glob(f"{self.expname}*.png"))
-        self._serve_json(pngs)
+        self._serve_json(sorted(f.name for f in self.plots_dir.glob(f"{self.expname}*.png")))
 
     def _serve_plot_file(self):
         """Serve a PNG plot image file."""
@@ -1468,8 +1367,7 @@ def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -
             plots). When None or no page exists, only the standard plots are shown.
     """
     # Ensure PNGs exist
-    existing_pngs = list(plots_dir.glob(f"{exp.expname.lower()}*.png"))
-    if not existing_pngs:
+    if not list(plots_dir.glob(f"{exp.expname.lower()}*.png")):
         logger.info("Converting PostScript plots to PNG for the dashboard...")
         convert_ps_to_png(plots_dir, exp.expname.lower())
 

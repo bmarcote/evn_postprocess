@@ -58,8 +58,7 @@ def polswap(msfile: str | Path, antenna: str, starttime: dt.datetime | None = No
         pols_prod = list([list(j) for j in products])
         temp = np.copy(products)
         temp[:,ant_order] = products[:,ant_order] ^ 1
-        pols_prod_mod = list([list(j) for j in temp])
-        return np.array([pols_prod.index(i) for i in pols_prod_mod])
+        return np.array([pols_prod.index(i) for i in list([list(j) for j in temp])])
 
     with misc.table(msfile, readonly=False) as ms:
         changes = None
@@ -154,11 +153,10 @@ def copy_pol(msfile: str | Path, antenna: str, polfrom: str):
             pols_prod = ms_pol.getcol('CORR_PRODUCT')[0]
 
         # Determine which polarizations to copy based on polfrom
-        polfrom_upper = polfrom.upper()
         
         # Map the polfrom to the corresponding Stokes parameters
         # For circular: R=0, L=1; For linear: X=0, Y=1
-        if polfrom_upper in ('R', 'X'):
+        if polfrom.upper() in ('R', 'X'):
             pol_index = 0
         else:  # 'L' or 'Y'
             pol_index = 1
@@ -195,8 +193,7 @@ def copy_pol(msfile: str | Path, antenna: str, polfrom: str):
                 progress_bar.update(task, advance=nrow)
                 
                 for ant_pos, antcol in enumerate(['ANTENNA1', 'ANTENNA2']):
-                    ants = ms.getcol(antcol, startrow=start, nrow=nrow)
-                    cond = np.where(ants == antenna_number)[0]
+                    cond = np.where(ms.getcol(antcol, startrow=start, nrow=nrow) == antenna_number)[0]
                     
                     if len(cond) > 0:
                         for a_col in columns:

@@ -9,11 +9,9 @@ import os
 import re
 import copy
 import json
-import subprocess
 import datetime as dt
 from pathlib import Path
 from importlib.metadata import version as pkg_version
-import tomllib
 from dataclasses import dataclass, asdict
 from enum import Enum
 from loguru import logger
@@ -23,7 +21,9 @@ from rich import print as rprint
 import blessed
 from . import vex
 from . import mstools
+from . import process  # cycle: process imports this module; both only use each other at call time
 from .mode import Mode
+from .policy import Policy
 
 
 
@@ -502,7 +502,6 @@ class CorrelatorPass:
         self.freqsetup = freqsetup
 
     def to_dict(self) -> dict:
-        from loguru import logger
         logger.debug(f"CorrelatorPass.to_dict: freqsetup={self.freqsetup}, flagged_weights={self.flagged_weights}")
         return {'lisfile': str(self.lisfile), 'msfile': str(self.msfile), 'fitsidifile': self.fitsidifile,
                 'pipeline': self.pipeline, 'scans': self.scans.to_dict() if self.scans else [],
@@ -744,8 +743,7 @@ class Experiment:
                     continue
                     
                 try:
-                    coords_str = f"{src['ra']} {src['dec'].replace('\'', 'm').replace('"', 's')}"
-                    coordinates = coord.SkyCoord(coords_str)
+                    coordinates = coord.SkyCoord(f"{src['ra']} {src['dec'].replace('\'', 'm').replace('"', 's')}")
                 except Exception as e:
                     logger.warning(f"Error parsing coordinates for source {src.get('source_name', 'unknown')}: {e}")
                     continue
@@ -809,8 +807,7 @@ class Experiment:
             return [self.expname.upper()]
 
         try:
-            vex_data = vex.Vex(self.vixfile)
-            descriptions = [block['exper_description'] for block in vex_data['EXPER'].values()
+            descriptions = [block['exper_description'] for block in vex.Vex(self.vixfile)['EXPER'].values()
                             if 'exper_description' in block]
         except Exception as e:
             logger.warning(f"Could not read exper_description from {self.vixfile}: {e}")
@@ -942,10 +939,7 @@ class Experiment:
         exp.lag_snr = data.get('lag_snr', {})
         exp.lag_bandpass = data.get('lag_bandpass', {})
         exp.mode = Mode(data['mode']) if data.get('mode') is not None else None
-        # Policy is attached lazily because the Policy dataclass lives in a sibling module
-        # imported only when the policy feature is actually used.
         if data.get('policy') is not None:
-            from .policy import Policy  # local import avoids circular dependency
             exp.policy = Policy.from_dict(data['policy'])
         return exp
 
@@ -1044,12 +1038,10 @@ class Experiment:
 
         print("\n")
         rprint("[bold]SOURCES[/bold]")
-        for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), \
-                                 (SourceType.fringefinder, SourceType.target,
+        for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), (SourceType.fringefinder, SourceType.target,
                                   SourceType.calibrator)):
             src = [s for s in self.sources if s.type is src_type]
-            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]" \
-                   f"{', '.join([s.name for s in src])}[/italic]")
+            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]{', '.join([s.name for s in src])}[/italic]")
 
         print("\n")
         rprint("[bold]ANTENNAS[/bold]")
@@ -1087,8 +1079,7 @@ class Experiment:
         term = blessed.Terminal(force_styling=True)
         s_file = []
         with term.fullscreen(), term.cbreak():
-            s = term.red_on_bright_black(term.center(term.bold("EVN Post-processing of " \
-                                                               f"{self.expname.upper()}")))
+            s = term.red_on_bright_black(term.center(term.bold("EVN Post-processing of " f"{self.expname.upper()}")))
             s_file += [f"# EVN Post-processing of {self.expname.upper()}\n"]
             s += f"{term.normal}\n\n{term.normal}"
             obsdate_str = self.obsdate.strftime('%d/%m/%Y') if self.obsdate else 'Unknown'
@@ -1114,8 +1105,7 @@ class Experiment:
             s += term.bright_black('Station Feedback Link: ') + \
                  f"{term.link(self.feedback_page(), self.feedback_page())}\n"
             s_file += [f"Station Feedback Link: {self.feedback_page()}"]
-            s += term.bright_black('EVN Archive Link: ') + \
-                 f"{term.link(self.archive_page, self.archive_page)}\n"
+            s += term.bright_black('EVN Archive Link: ') + f"{term.link(self.archive_page, self.archive_page)}\n"
             s_file += [f"EVN Archive Link: {self.archive_page}\n"]
             #s += term.bright_black('Protection Link: ') +\
                     #     term.link('https://archive.jive.eu/scripts/pipe/admin.php',
@@ -1145,13 +1135,11 @@ class Experiment:
                 # loader is process.get_metadata_from_ms() (get_setup_from_ms was removed);
                 # it populates every pass, so one call is enough.
                 if a_pass.freqsetup is None:
-                    from . import process
                     process.get_metadata_from_ms(self)
                     self.store()
 
                 if a_pass.freqsetup is not None:
-                    s += term.bright_black('Frequency: ') + \
-                         f"{a_pass.freqsetup.frequency.to(u.GHz):0.04}\n"
+                    s += term.bright_black('Frequency: ') + f"{a_pass.freqsetup.frequency.to(u.GHz):0.04}\n"
                     s_file += [f"Frequency: {a_pass.freqsetup.frequency.to(u.GHz):0.04}"]
                     s += term.bright_black('Bandwidth: ') + \
                          f"{a_pass.freqsetup.bandwidth.to(u.MHz):0.04}.\n" + \
@@ -1181,36 +1169,29 @@ class Experiment:
                 s += term.bright_black(key) + \
                      f"{', '.join([s.name+term.red('*') if s.protected else s.name for s in src])}"\
                      "\n"
-                s_file += [f"{key}: " \
-                           f"{', '.join([s.name+'*' if s.protected else s.name for s in src])}"]
+                s_file += [f"{key}: {', '.join([s.name+'*' if s.protected else s.name for s in src])}"]
 
-            s += term.bright_black(f"Sources with {term.red('*')} denote the " \
-                                   "ones that need to be protected.\n")
+            s += term.bright_black(f"Sources with {term.red('*')} denote the " "ones that need to be protected.\n")
             s_file += ["Sources with * denote the ones that need to be protected."]
             s += term.bold_green('ANTENNAS\n')
             s_file += ['## ANTENNAS']
             antennas_observing = [ant.name for ant in self.antennas if ant.observed]
             s += term.bright_black(f'Antennas with data ({len(antennas_observing)}):') + \
                  f"{', '.join(antennas_observing)}\n"
-            s_file += [f"Antennas with data ({len(antennas_observing)}): " \
-                       f"{', '.join(antennas_observing)}"]
+            s_file += [f"Antennas with data ({len(antennas_observing)}): {', '.join(antennas_observing)}"]
             missing_ants = [ant.name for ant in self.antennas if not ant.observed]
             s += term.bright_black('Did not observe: ') + \
                  f"{', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}\n\n"
-            s_file += [f"Did not observe: " \
-                       f"{', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}"]
-            s += term.bright_black('Reference Antenna: ') + \
-                 f"{', '.join([r.capitalize() for r in self.refant])}\n"
+            s_file += [f"Did not observe: {', '.join(missing_ants) if len(missing_ants) > 0 else 'None'}"]
+            s += term.bright_black('Reference Antenna: ') + f"{', '.join([r.capitalize() for r in self.refant])}\n"
             s_file += [f"Reference Antenna: {', '.join([r.capitalize() for r in self.refant])}"]
 
             if len(self.antennas.polswap) > 0:
-                s += term.bright_black('Polswapped antennas: ') + \
-                     f"{', '.join(self.antennas.polswap)}\n"
+                s += term.bright_black('Polswapped antennas: ') + f"{', '.join(self.antennas.polswap)}\n"
                 s_file += [f"Polswapped antennas: {', '.join(self.antennas.polswap)}"]
 
             if len(self.antennas.polconvert) > 0:
-                s += term.bright_black('Polconverted antennas: ') + \
-                     f"{', '.join(self.antennas.polconvert)}\n"
+                s += term.bright_black('Polconverted antennas: ') + f"{', '.join(self.antennas.polconvert)}\n"
                 s_file += [f"Polconverted antennas: {', '.join(self.antennas.polconvert)}"]
 
             if len(self.antennas.onebit) > 0:
@@ -1234,26 +1215,21 @@ class Experiment:
             missing_logs = [a.name for a in self.antennas if (not a.logfsfile) and a.observed]
             s += term.bright_black('Missing log files: ') + \
                  f"{', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}\n"
-            s_file += [f"Missing log files: " \
-                       f"{', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}"]
+            s_file += [f"Missing log files: {', '.join(missing_logs) if len(missing_logs) > 0 else 'None'}"]
 
             missing_antabs = [a.name for a in self.antennas if (not a.antabfsfile) and a.observed]
             s += term.bright_black('Missing ANTAB files: ') + \
                  f"{', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"
-            s_file += [f"Missing ANTAB files: " \
-                       f"{', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"]
+            s_file += [f"Missing ANTAB files: {', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"]
 
             # In case of antennas not observing the full bandwidth (this may be per correlator pass)
             ss, ss_file = "", []
             try:
                 if len(set([cp.freqsetup.subbands for cp in self.correlator_passes])) == 1:
                     for antenna in self.correlator_passes[0].antennas:
-                        if 0 < len(antenna.subbands) < \
-                               self.correlator_passes[0].freqsetup.subbands:
-                            ss += f"    {antenna.name}: " \
-                                  f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands}\n"
-                            ss_file += [f"    {antenna.name}: " \
-                                        f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands}"]
+                        if 0 < len(antenna.subbands) < self.correlator_passes[0].freqsetup.subbands:
+                            ss += f"    {antenna.name}: {' '*(3*(antenna.subbands[0]))}{antenna.subbands}\n"
+                            ss_file += [f"    {antenna.name}: {' '*(3*(antenna.subbands[0]))}{antenna.subbands}"]
                 else:
                     for antenna in self.correlator_passes[0].antennas:
                         for i,a_pass in enumerate(self.correlator_passes):
@@ -1272,10 +1248,8 @@ class Experiment:
                     s_file += ['Antennas with smaller bandwidth:']
                     s_file += ss_file
             except AttributeError:
-                ss += "    No freq. setup information to detect which antennas " \
-                      "have a reduced bandwidth."
-                ss_file += ["    No freq. setup information to detect which antennas " \
-                            "have a reduced bandwidth."]
+                ss += "    No freq. setup information to detect which antennas have a reduced bandwidth."
+                ss_file += ["    No freq. setup information to detect which antennas have a reduced bandwidth."]
 
             s_final = term.wrap(s, width=term.width)
             s_file += ["\n\n## COMMENTS FROM SUP.SCI\n\n\n\n\n"]

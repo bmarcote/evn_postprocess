@@ -70,8 +70,7 @@ def _user_groups() -> set[str]:
     names: set[str] = set()
     gids = set(os.getgroups())
     try:
-        user = _username()
-        if user:
+        if _username():
             gids.add(os.stat(os.path.expanduser('~')).st_gid)  # cheap primary-group hint
     except OSError:
         pass

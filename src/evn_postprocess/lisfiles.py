@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 import glob
@@ -5,6 +7,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from . import experiment, utils
+from . import process  # cycle: process imports this module; both only use each other at call time
 
 
 # Suffix tagging the auxiliary lag-space products ({expname}-lag.lis / {expname}-lag.ms).
@@ -107,8 +110,7 @@ def split_lis_cont_line(exp: experiment.Experiment, fulllisfile: str | Path) -> 
     if ('prod_line' in n_prods) and (len(n_prods) > 1):
         print('This is a spectral line experiment with line and continuum passes.')
         lis_cont = str(fulllisfile).replace('.lis', '_cont.lis')
-        lis_line = str(fulllisfile).replace('.lis', '_line.lis')
-        with open(lis_cont, 'w') as f_cont, open(lis_line, 'w') as f_line:
+        with open(lis_cont, 'w') as f_cont, open(str(fulllisfile).replace('.lis', '_line.lis'), 'w') as f_line:
             with open(fulllisfile) as f_full:
                 for a_fileline in f_full.readlines():
                     if a_fileline[0].strip() not in ('+', '-'):
@@ -142,10 +144,8 @@ def _process_single_lisfile(args):
                 msname = [elem.strip() for elem in a_lisline.split() if '.ms' in elem][0]
                 # In case the output FITS IDI name has already been set
                 if '.IDI' in a_lisline:
-                    fitsidiname = [elem.strip() for elem in \
-                                   a_lisline.split() if '.IDI' in elem][0]
-                    to_pipeline = True if ((fitsidiname.split('_')[-2] == '1') or \
-                                           thereis_line) else False
+                    fitsidiname = [elem.strip() for elem in a_lisline.split() if '.IDI' in elem][0]
+                    to_pipeline = True if ((fitsidiname.split('_')[-2] == '1') or thereis_line) else False
                 else:
                     if thereis_line:
                         if '_line' in a_lisfile:
@@ -224,7 +224,6 @@ def get_passes_from_lisfiles(exp: experiment.Experiment) -> bool:
     exp.correlator_passes = new_passes
 
     # Aggregate sources from all correlator passes into the global experiment sources
-    from . import process
     process.aggregate_sources_from_passes(exp)
     
     exp.store()

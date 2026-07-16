@@ -13,6 +13,7 @@ from loguru import logger
 
 from . import InputSet, RetrievalError, Retriever
 from .. import experiment_state
+from ..inputs import find_local_vex
 from ..lisfiles import LAG_TAG
 
 
@@ -28,7 +29,6 @@ class NoneRetriever(Retriever):
                 retrieval mode 'none' does not create or download files.
         """
         workdir = Path(workdir)
-        from ..inputs import find_local_vex  # local import: inputs imports experiment (heavy)
         vexfile = find_local_vex(expname, workdir)
         if vexfile is None:
             raise RetrievalError(
@@ -72,8 +72,7 @@ class NoneRetriever(Retriever):
             RetrievalError: When no .antabfs file exists in ``exp.dirs.pipe_temp``.
         """
         tempdir = Path(exp.dirs.pipe_temp)
-        antabs = list(tempdir.glob('*.antabfs'))
-        if not antabs:
+        if not list(tempdir.glob('*.antabfs')):
             raise RetrievalError(
                 f"No .antabfs files found in {tempdir.resolve()}. Retrieval mode 'none' does "
                 f"not download station files: place the .antabfs (and .log) files there.")

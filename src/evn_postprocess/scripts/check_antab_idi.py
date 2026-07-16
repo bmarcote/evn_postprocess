@@ -96,8 +96,7 @@ if __name__ == '__main__':
     else:
         idifiles = sorted(glob.glob(f"{Path.cwd().name.lower()}_*_1.IDI*"), key=natsort_keygen())
 
-    files2check = [idi for idi in idifiles if (idi.endswith('.IDI') or idi.endswith('.IDI1')) \
-                   and os.path.isfile(idi)]
+    files2check = [idi for idi in idifiles if (idi.endswith('.IDI') or idi.endswith('.IDI1')) and os.path.isfile(idi)]
     if len(files2check) == 0:
         raise FileNotFoundError("No FITS-IDI files found.")
 

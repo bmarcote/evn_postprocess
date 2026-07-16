@@ -11,9 +11,18 @@ from loguru import logger
 from rich import print as rprint
 from rich.console import Console
 from rich_argparse import RawTextRichHelpFormatter
-from . import workflow
+from . import comms
+from . import distribution
 from . import experiment
+from . import experiment_state
 from . import lisfiles
+from . import mode as _mode
+from . import pipelines
+from . import retrieval
+from . import servers
+from . import workflow
+from .plotting import serve_dashboard
+from .policy import Policy
 
 
 __version__: str = version(distribution_name='evn_postprocess')
@@ -101,7 +110,7 @@ help_edit = """[bold]Edit some of the parameters related to the experiment[/bold
                                                   for the given source.
         - [bold green]polconvert[/bold green] : marks the antennas to be pol converted.
         - [bold green]polswap[/bold green] : marks the antennas to be pol swapped.
-        - [bold green]onebit[/old green] :  marks the antennas to be corrected because
+        - [bold green]onebit[/bold green] :  marks the antennas to be corrected because
                                              they observed with one bit.
 """
 
@@ -125,8 +134,7 @@ printed, and the server runs until you press Ctrl+C.
 [dim]This is the same dashboard reachable through 'postprocess info --serve'.[/dim]
 """
 
-help_last = "[bold]Returns the last step that run successfully from post-process " \
-            "in this experiment.[/bold]"
+help_last = "[bold]Returns the last step that run successfully from post-process in this experiment.[/bold]"
 
 help_gui = 'Type of GUI to use for interactions with the user:\n' \
            '- "terminal" (default): it uses the basic prompt in the terminal.\n' \
@@ -166,8 +174,7 @@ def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
         if not values:
             rprint("[bold]Available antennas:[/bold]")
             for ant in exp.antennas:
-                status = "[green]observed[/green]" if ant.observed else "[red]not observed[/red]"
-                rprint(f"  {ant.name}  {status}")
+                rprint(f"  {ant.name}  {("[green]observed[/green]" if ant.observed else "[red]not observed[/red]")}")
             if exp.refant:
                 rprint(f"\n[dim]Current refant: {', '.join(exp.refant)}[/dim]")
             return
@@ -183,8 +190,7 @@ def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
     if not values:
         rprint(f"[bold]Available sources[/bold] (current {field} sources marked with *):")
         for src in exp.sources:
-            marker = " *" if src.type == src_type else ""
-            rprint(f"  {src.name}  [dim]({src.type.name})[/dim]{marker}")
+            rprint(f"  {src.name}  [dim]({src.type.name})[/dim]{(" *" if src.type == src_type else "")}")
         return
 
     known_sources = set(exp.sources.names)
@@ -288,9 +294,8 @@ def main():
     parser_run.add_argument('steps', type=str, nargs='*', default=[],
                             help='Optional step range: [STEP1 [STEP2]]. '
                             'Runs from STEP1 to end, or from STEP1 to STEP2 (inclusive).')
-    help_exec = workflow.build_exec_help()
     parser_exec = subparsers.add_parser('exec', help='Runs a single command from the post-processing workflow.',
-                                        description=help_exec, formatter_class=parser.formatter_class)
+                                        description=workflow.build_exec_help(), formatter_class=parser.formatter_class)
     parser_exec.add_argument('task_name', type=str, nargs='?', default=None,
                              help='Name of the command to run. If not provided, lists all available commands.')
     parser_edit = subparsers.add_parser('edit', help='Edit experiment metadata.',
@@ -332,8 +337,7 @@ def main():
         # configured (supsci); otherwise the current directory, so a regular user needs
         # no server configuration to run in their own experiment folder.
         try:
-            from . import servers as _servers
-            cwd = Path(_servers.retrieve_servers()['eee'].path) / expname.upper()
+            cwd = Path(servers.retrieve_servers()['eee'].path) / expname.upper()
         except (FileNotFoundError, KeyError):
             cwd = Path('.')
 
@@ -345,7 +349,6 @@ def main():
             rprint(f"[red]Error creating or accessing directory {cwd}: {e}[/red]")
             sys.exit(1)
 
-        from . import mode as _mode
         if Path(f"{expname.lower()}.json").exists():
             rprint(f"[bold]Recovering previously-stored information for {expname}[/bold]")
             try:
@@ -391,7 +394,6 @@ def main():
         # Attach the experiment toml as the prepared config. Runtime-only: it is never
         # serialized into the JSON checkpoint (see experiment_state). --config names an
         # explicit toml (sweeps); otherwise the conventional {expname}.toml is used.
-        from . import experiment_state
         try:
             if args.config is not None:
                 exp.exp_toml = experiment_state.load_toml(Path(args.config))
@@ -403,7 +405,6 @@ def main():
 
         # Fail fast on an invalid/unimplemented backend for the resolved mode: a bad
         # mode must not surface only hours later at the pipeline step.
-        from . import distribution, pipelines, retrieval
         try:
             backends = _mode.backends_for(exp.mode)
             retrieval.get_retriever(backends.retrieval)  # sweeps stubs raise here
@@ -429,7 +430,6 @@ def main():
         # downstream helpers (e.g. dialog.PolicyDriven, workflow._signal_pause)
         # can read it without threading the value through every call.
         if args.policy:
-            from .policy import Policy
             try:
                 exp.policy = Policy.load(args.policy)
             except FileNotFoundError:
@@ -446,14 +446,12 @@ def main():
             workflow.set_batch_mode(True)
             # Make sure exp.policy at least exists so PolicyDriven can read fields.
             if exp.policy is None:
-                from .policy import Policy
                 exp.policy = Policy(batch=True)
 
         # --- Comms wiring: load config and set the workflow notifier ---
-        from . import comms as _comms
-        _comms_config = _comms.CommsConfig.load(args.comms)
-        if _comms_config.mode != "none":
-            workflow.set_notifier(_comms.make_notifier(_comms_config))
+        comms_config = comms.CommsConfig.load(args.comms)
+        if comms_config.mode != "none":
+            workflow.set_notifier(comms.make_notifier(comms_config))
 
         if not args.subpar or args.subpar == 'run':
             from_step, to_step = None, None
@@ -475,7 +473,6 @@ def main():
             if not ok:
                 sys.exit(1)
         elif args.subpar == 'dashboard' or (args.subpar == 'info' and args.serve):
-            from .plotting import serve_dashboard
             serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out)
         else:  # args.subpar == 'info' without --serve: plain terminal output
             exp.print_blessed(outputfile=None)

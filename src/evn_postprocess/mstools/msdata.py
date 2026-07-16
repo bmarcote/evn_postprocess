@@ -538,19 +538,16 @@ class Ms:
                     scans = msdata.getcol('SCAN_NUMBER', startrow=start, nrow=nrow)
                     weights = msdata.getcol('WEIGHT', startrow=start, nrow=nrow)
 
-                    auto_indices = np.where((ants1 == ants2) & (np.max(np.abs(data), axis=(1, 2)) > 1e-5))[0]
-                    for idx in auto_indices:
+                    for idx in np.where((ants1 == ants2) & (np.max(np.abs(data), axis=(1, 2)) > 1e-5))[0]:
                         ant_idx = ants1[idx]
                         ant_name = ant_names[ant_idx]
                         scan_antennas[int(scans[idx])].add(ant_name)
                         antenna_spws[ant_name].add(int(spws[idx]))
 
-                    weights_flat = weights.reshape(nrow, -1)
                     for ant_idx in range(n_ants):
                         ant_mask = (ants1 == ant_idx) | (ants2 == ant_idx)
                         if np.any(ant_mask):
-                            ant_weights = weights_flat[ant_mask].ravel()
-                            hist, _ = np.histogram(ant_weights, bins=bins_edges)
+                            hist, _ = np.histogram(weights.reshape(nrow, -1)[ant_mask].ravel(), bins=bins_edges)
                             weight_stats[ant_idx] += hist
 
                     progress_bar.update(task, advance=nrow)
@@ -816,8 +813,7 @@ class Ms:
 
         obs = data['observation']
         starttime = dt.datetime.fromisoformat(obs['starttime'])
-        endtime = dt.datetime.fromisoformat(obs['endtime'])
-        obj._obsepoch = ObsEpoch(starttime=starttime, endtime=endtime)
+        obj._obsepoch = ObsEpoch(starttime=starttime, endtime=dt.datetime.fromisoformat(obs['endtime']))
 
         freq = data['frequency_setup']
         obj._freqsetup = FreqSetup(

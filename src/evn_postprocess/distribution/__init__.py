@@ -15,10 +15,14 @@ unimplemented backends fail with an explicit error at selection time.
 """
 from __future__ import annotations
 
+import glob
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Callable
 
 from loguru import logger
+
+from ..registry import BackendRegistry
 
 
 class DistributionError(RuntimeError):
@@ -40,8 +44,6 @@ class Distributor(ABC):
             bool: True when the delivery completed (or was deliberately skipped).
         """
 
-
-from ..registry import BackendRegistry
 
 _REGISTRY = BackendRegistry('distribution', DistributionError)
 
@@ -78,8 +80,6 @@ class NoneDistributor(Distributor):
     name = 'none'
 
     def deliver(self, exp) -> bool:
-        from pathlib import Path
-        import glob
         passes = getattr(exp, 'correlator_passes', None) or []
         if not passes:
             logger.error(f"Distribution mode 'none': no correlator passes are set up for "
@@ -104,20 +104,15 @@ class NoneDistributor(Distributor):
         return True
 
 
-def _make_none() -> Distributor:
-    return NoneDistributor()
-
-
-def _make_jive() -> Distributor:
-    from .jive import JiveDistributor
-    return JiveDistributor()
-
-
 def _make_sweeps() -> Distributor:
     raise DistributionError("The 'sweeps' distribution backend is registered but not "
                             "implemented yet. Use 'jive' (default) or 'none'.")
 
 
-register('none', _make_none)
-register('jive', _make_jive)
+# The concrete backend module imports Distributor from this package, so it can only be
+# imported here, after the class definitions above.
+from .jive import JiveDistributor  # noqa: E402
+
+register('none', NoneDistributor)
+register('jive', JiveDistributor)
 register('sweeps', _make_sweeps)

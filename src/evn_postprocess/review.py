@@ -14,6 +14,7 @@ The same StationSummary feeds the dashboard Comments tab auto-notes (Issue 9).
 from __future__ import annotations
 
 import datetime as dt
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,7 +22,16 @@ from loguru import logger
 from rich.console import Console
 from rich.panel import Panel
 
-from . import experiment
+# Optional MySQL client for the station-feedback lookup; the lookup silently skips if absent.
+try:
+    import pymysql as mysql_client
+except ImportError:
+    try:
+        import MySQLdb as mysql_client
+    except ImportError:
+        mysql_client = None
+
+from . import comms, experiment
 
 
 @dataclass
@@ -100,13 +110,12 @@ def station_summary(exp: experiment.Experiment) -> StationSummary:
     """
     summary = StationSummary()
     subband_counts = [len(a.subbands) for a in exp.antennas if a.observed and a.subbands]
-    max_subbands = max(subband_counts) if subband_counts else None
     for ant in exp.antennas:
         if not ant.scheduled:
             continue
         report = StationReport(name=ant.name, observed=ant.observed,
                                n_subbands=len(ant.subbands) if ant.subbands else None,
-                               max_subbands=max_subbands)
+                               max_subbands=(max(subband_counts) if subband_counts else None))
         if ant.observed:
             report.missed_ranges = _missed_ranges(exp, ant.name)
         summary.stations[ant.name] = report
@@ -166,13 +175,10 @@ def station_feedback(exp: experiment.Experiment) -> dict[str, str]:
     except OSError:
         pass
     try:
-        import tomllib
         with open(FEEDBACKDB_CONFIG, 'rb') as f:
             config = tomllib.load(f)
-        try:
-            import pymysql as mysql_client
-        except ImportError:
-            import MySQLdb as mysql_client
+        if mysql_client is None:
+            raise ImportError("neither pymysql nor MySQLdb is installed")
         query = config.get('query', "SELECT station, comment FROM station_feedback "
                                     "WHERE expname = %(expname)s")
         connection = mysql_client.connect(host=config['host'], user=config['user'],
@@ -233,6 +239,5 @@ def announce_antab_summary(exp: experiment.Experiment, notifier=None) -> Station
                               border_style="yellow", padding=(1, 2)))
     except Exception as e:  # rendering must never stop the workflow
         logger.warning(f"Could not render the antab station summary ({e}); plain text:\n{text}")
-    from . import comms
     comms.notify_operator(exp, "antab_editor about to start", text, notifier)
     return summary

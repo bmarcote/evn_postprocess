@@ -67,8 +67,7 @@ def _read_comments(comment_file: Path) -> dict[str, str]:
             continue
         # The keyword is the first whitespace-delimited token; the rest is the comment.
         parts = block.split(None, 1)
-        name = parts[0]
-        comments[name] = parts[1].strip() if len(parts) > 1 else ""
+        comments[parts[0]] = parts[1].strip() if len(parts) > 1 else ""
     return comments
 
 
@@ -108,8 +107,7 @@ def _comment_block(name: str, comments: dict[str, str]) -> str:
 def _pdf_section(expname: str, directory: Path, name: str, text: str,
                  text2: str | None, comments: dict[str, str]) -> str:
     """Renders a single-link section pointing at ``{expname}_{name}.pdf``."""
-    link = f"./{expname}_{name}.pdf"
-    out = _mkhref(link, directory, text)
+    out = _mkhref(f"./{expname}_{name}.pdf", directory, text)
     if text2:
         out += text2
     out += "<br />\n"
@@ -121,11 +119,9 @@ def _map_links(expname: str, directory: Path, source: str, name: str,
                suffixes: Sequence[str], texts: Sequence[str]) -> str:
     """Renders the per-source list of links ``{expname}_{source}_{name}.{suffix}``."""
     out = ""
-    n = len(suffixes)
     for i, (suffix, text) in enumerate(zip(suffixes, texts)):
-        link = f"./{expname}_{source}_{name}.{suffix}"
-        out += " " + _mkhref(link, directory, text)
-        out += ", or \n" if i + 1 < n else ". <br />\n"
+        out += " " + _mkhref(f"./{expname}_{source}_{name}.{suffix}", directory, text)
+        out += ", or \n" if i + 1 < len(suffixes) else ". <br />\n"
     return out
 
 

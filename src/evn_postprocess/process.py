@@ -5,6 +5,8 @@ verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 
 """
+from __future__ import annotations
+
 import os
 import re
 import glob
@@ -14,7 +16,7 @@ import traceback
 from typing import Optional, Union
 from pathlib import Path
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 import shutil
 import subprocess
 import numpy as np
@@ -25,9 +27,17 @@ from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
 from concurrent.futures import ThreadPoolExecutor
+
+# casatasks (CASA) is only present in the polconvert-verification environment; the
+# post_polconvert step raises a clear error when it is needed but missing.
+try:
+    import casatasks
+except ImportError:
+    casatasks = None
 from . import experiment, utils, mstools
+from . import lisfiles  # cycle: lisfiles imports this module; both only use each other at call time
 from . import servers as _servers
-from .plotting import convert_ps_to_png, serve_dashboard
+from . import plotting  # module-form: cycle via experiment; names resolved at call time
 # polconvert_main kept for future use once version compatibility is resolved.
 # from .scripts.polconvert import main as polconvert_main
 from .scripts import find_idi_with_time as find_idi_mod
@@ -81,32 +91,6 @@ _POLCONVERT_REFANT_SNR_FRACTION: float = 0.5
 _POLCONVERT_CHANAVG: int = 16
 _POLCONVERT_TIMEAVG_S: int = 20
 _POLCONVERT_SOLVE_WEIGHT: float = 0.1
-
-
-def update_pipelinable_passes(exp, pipelinable: Union[list, dict]) -> None:
-    """Updates the attribute of the CorrelatorPasses from exp to define
-    if the specific pass should run in the pipeline or not.
-
-    Args:
-        exp (experiment.Experiment): Experiment object.
-        pipelinable (Union[list, dict]): Either a list of bool (same length as exp.correlator_passes)
-            or a dict with lisfile as key and bool as value.
-
-    Returns:
-        None
-    """
-    if isinstance(pipelinable, list):
-        assert len(pipelinable) == len(exp.correlator_passes)
-        for i, is_pipelinable in enumerate(pipelinable):
-            assert isinstance(is_pipelinable, bool)
-            exp.correlator_passes[i].pipeline = is_pipelinable
-    elif isinstance(pipelinable, dict):
-        for a_lisfile in pipelinable:
-            for a_exppass in exp.correlator_passes:
-                if a_exppass.lisfile == a_lisfile:
-                    a_exppass.pipeline = pipelinable[a_lisfile]
-                    break
-
 
 
 def archive(exp: experiment.Experiment) -> bool:
@@ -175,8 +159,7 @@ def getdata(exp: experiment.Experiment) -> bool:
             results = list(pool.map(_fetch_pass, exp.correlator_passes))
 
         if not all(results):
-            failed_count = len(results) - sum(results)
-            logger.error(f"Failed to fetch data for {failed_count} passes")
+            logger.error(f"Failed to fetch data for {(len(results) - sum(results))} passes")
             return False
 
         return True
@@ -206,11 +189,8 @@ def j2ms2(exp: experiment.Experiment) -> bool:
             if du_result.returncode != 0:
                 logger.warning("Could not estimate disk space usage, proceeding anyway")
             else:
-                cor_size = int(du_result.stdout.split()[-2])
-                available_space = utils.space_available(Path.cwd())
-                if available_space <= 1.2*u.kbit*cor_size:
-                    rprint("\n\n[bold red]There is no enough space in the computer to create " \
-                           "the MS file[/bold red]")
+                if utils.space_available(Path.cwd()) <= 1.2*u.kbit*int(du_result.stdout.split()[-2]):
+                    rprint("\n\n[bold red]There is no enough space in the computer to create the MS file[/bold red]")
                     raise IOError("Not enough disk space to create the MS file.")
         except (ValueError, IndexError, subprocess.SubprocessError) as e:
             logger.warning(f"Could not check disk space: {e}, proceeding anyway")
@@ -254,7 +234,6 @@ def j2ms2(exp: experiment.Experiment) -> bool:
             if exp.no_lag:
                 logger.info("--no-lag set: skipping creation of the lag-space MS.")
             elif not lag_ms.exists() and exp.correlator_passes[0].lisfile.exists():
-                from . import lisfiles
                 lag_lisfile = lisfiles.create_lag_lisfile(exp, exp.correlator_passes[0])
                 # Register the lag pass as a dedicated, separate product (NOT a correlator
                 # pass). It is kept out of exp.correlator_passes on purpose so it is never
@@ -385,8 +364,7 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
         logger.debug("Using MPC path - extracting metadata from first pass only")
         _get_ms_metadata(exp, exp.correlator_passes[0])
         with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes)-1, 10)) as executor:
-            futures = [executor.submit(_update_mpc_pass, a_pass) for a_pass in exp.correlator_passes[1:]]
-            for fut in futures:
+            for fut in [executor.submit(_update_mpc_pass, a_pass) for a_pass in exp.correlator_passes[1:]]:
                 fut.result()
     else:
         logger.debug("Using standard path - extracting metadata from all passes")
@@ -533,7 +511,6 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
         logger.warning(f"Lag MS {lag_ms} not found. Skipping lag SNR computation.")
         return True
 
-    ff_names = set(exp.sources.fringefinder)
 
     with mstools.misc.table(lag_ms) as ms:
         with mstools.misc.table(ms.getkeyword('ANTENNA')) as t:
@@ -545,6 +522,7 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
         with mstools.misc.table(ms.getkeyword('SPECTRAL_WINDOW')) as t:
             n_spw = t.nrows()
         # FIELD_IDs that correspond to fringe-finder sources (used for the pol diagnostics).
+        ff_names = set(exp.sources.fringefinder)  # built once, checked per field
         ff_field_ids = {fid for fid, name in enumerate(field_names) if name in ff_names}
 
         # Per-baseline accumulators. The lag MS holds the *complex* cross-power spectrum per
@@ -617,8 +595,7 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
     for (scan, a1i, a2i), spec_sum in acc_sum.items():
         spec = spec_sum / acc_cnt[(scan, a1i, a2i)]      # mean |lag| spectrum (nchan, npol)
         peak = np.max(spec, axis=0)                       # (npol,) fringe-peak amplitude per pol
-        med = np.median(spec, axis=0)
-        noise = 1.4826 * np.median(np.abs(spec - med), axis=0)
+        noise = 1.4826 * np.median(np.abs(spec - np.median(spec, axis=0)), axis=0)
         snr = np.divide(peak, noise, out=np.zeros_like(peak, dtype=float), where=noise > 0)
         is_ff = acc_ff[(scan, a1i, a2i)]
         snr_max = float(np.max(snr)) if is_ff else 0.0
@@ -698,7 +675,6 @@ def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
     Returns:
         bool: True if standardplots completed successfully, False otherwise.
     """
-    from .plotting import Jplot
 
     if not exp.refant:
         logger.error("No reference antenna set. Use 'postprocess edit refant <ANT>' first.")
@@ -722,7 +698,7 @@ def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
             logger.info(f"standardplots {a_pass.msfile.name} refant={refant} "
                         f"calsrc={','.join(calsources)} weights={do_weights and counter == 1}")
 
-            plotter = Jplot(ms=str(a_pass.msfile.name), refant=refant, calsrc=','.join(calsources),
+            plotter = plotting.Jplot(ms=str(a_pass.msfile.name), refant=refant, calsrc=','.join(calsources),
                             weight_plots=(do_weights and counter == 1))
 
             if not plotter.create_plot(sources=calsources):
@@ -767,11 +743,11 @@ def open_standardplot_files(exp) -> bool:
     if len(standardplots) == 0:
         raise FileNotFoundError(f"Standardplots for {exp.expname} not found but expected.")
 
-    convert_ps_to_png(exp.dirs.plots, exp.expname.lower())
+    plotting.convert_ps_to_png(exp.dirs.plots, exp.expname.lower())
     # rprint("\n[bold yellow]Take a look at the produced standard plots:[/bold yellow]")
     # rprint(f"[yellow]{'\n- '.join([aplot for aplot in standardplots])}"
     #        "\nOpening the dashboard in your browser...[/yellow]")
-    serve_dashboard(exp, exp.dirs.plots)
+    plotting.serve_dashboard(exp, exp.dirs.plots)
     return True
 
 
@@ -789,7 +765,7 @@ def open_pipeline_dashboard(exp) -> bool:
     Returns:
         bool: True after the dashboard server is stopped by the user.
     """
-    serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out)
+    plotting.serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out)
     return True
 
 
@@ -840,8 +816,7 @@ def ysfocus(exp: experiment.Experiment) -> bool:
             mstools.fix_hobart_mount(a_pass.msfile)
 
     with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
-        futures = [executor.submit(_fix_mounts, a_pass) for a_pass in exp.correlator_passes]
-        for fut in futures:
+        for fut in [executor.submit(_fix_mounts, a_pass) for a_pass in exp.correlator_passes]:
             fut.result()  # Propagate any exceptions
 
     return True
@@ -863,8 +838,7 @@ def polswap(exp: experiment.Experiment) -> bool:
                 mstools.polswap(a_pass.msfile, antenna)
 
         with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
-            futures = [executor.submit(_polswap_pass, a_pass) for a_pass in exp.correlator_passes]
-            for fut in futures:
+            for fut in [executor.submit(_polswap_pass, a_pass) for a_pass in exp.correlator_passes]:
                 fut.result()  # Propagate any exceptions
         logger.info(f"polswap {','.join(exp.antennas.polswap)}")
     return True
@@ -896,8 +870,7 @@ def flag_weights(exp: experiment.Experiment) -> bool:
 
     # TODO: check if this is IO or CPU bound
     with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
-        futures = [executor.submit(_flag_weights_pass, a_pass) for a_pass in exp.correlator_passes]
-        for fut in futures:
+        for fut in [executor.submit(_flag_weights_pass, a_pass) for a_pass in exp.correlator_passes]:
             fut.result()  # Propagate any exceptions
     return True
 
@@ -921,8 +894,7 @@ def update_piletter(exp: experiment.Experiment) -> bool:
         with open(f"{exp.expname.lower()}.piletter~", 'w') as destfile:
             for a_line in orifile.readlines():
                 tmp_line = a_line
-                if ('derived from the following EVN project code(s):' in tmp_line) and \
-                   (exp.expname[-1].isalpha()):
+                if ('derived from the following EVN project code(s):' in tmp_line) and (exp.expname[-1].isalpha()):
                     tmp_line = tmp_line.replace(exp.expname, exp.expname[:-1])
 
                 if ('***SuppSci:' not in tmp_line) and ('there is one***' not in tmp_line):
@@ -947,8 +919,7 @@ def update_piletter(exp: experiment.Experiment) -> bool:
                         if len(exp.antennas.polconvert) > 0:
                             destfile.write("\n")
                             if len(exp.antennas.polconvert) > 1:
-                                s = f"s {', '.join(exp.antennas.polconvert[:-1])} and " \
-                                    f"{exp.antennas.polconvert[-1]} "
+                                s = f"s {', '.join(exp.antennas.polconvert[:-1])} and {exp.antennas.polconvert[-1]} "
                             else:
                                 s = f" {exp.antennas.polconvert[0]} "
 
@@ -963,14 +934,12 @@ def update_piletter(exp: experiment.Experiment) -> bool:
                         ants_bw = {}
                         if len(set([cp.freqsetup.subbands for cp in exp.correlator_passes])) == 1:
                             for antenna in exp.correlator_passes[0].antennas:
-                                if 0 < len(antenna.subbands) < \
-                                        exp.correlator_passes[0].freqsetup.subbands:
+                                if 0 < len(antenna.subbands) < exp.correlator_passes[0].freqsetup.subbands:
                                     # In case the antenna observed a consecutive number of subbands
                                     ant_sbs = np.array(antenna.subbands)
                                     ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
                                     if (ant_sbs[1:] == 1).all():
-                                        ants_bw[antenna.name] = \
-                                              [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1}"]
+                                        ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1}"]
                                     else:
                                         ants_bw[antenna.name] = [f"{antenna.subbands}"]
                         else:
@@ -1003,8 +972,7 @@ def update_piletter(exp: experiment.Experiment) -> bool:
                             s = "- Note that "
                             for i,ant_r in enumerate(ants_bw_r):
                                 if i == 0:
-                                    s += f"{', '.join(ants_bw_r[ant_r])} only observed " \
-                                         f"subbands {ant_r}, "
+                                    s += f"{', '.join(ants_bw_r[ant_r])} only observed subbands {ant_r}, "
                                 elif i== len(ants_bw_r)-1:
                                     s += f"and {', '.join(ants_bw_r[ant_r])} subbands {ant_r}, "
                                 else:
@@ -1018,8 +986,7 @@ def update_piletter(exp: experiment.Experiment) -> bool:
                             s_end = (" have been corrected for opacity in the Tsys/Gain Curve "
                                      "measurements.\n")
                             if len(exp.antennas.opacity) > 1:
-                                s += f"s {', '.join(exp.antennas.opacity[:-1])} and " \
-                                     f"{exp.antennas.opacity[-1]}"
+                                s += f"s {', '.join(exp.antennas.opacity[:-1])} and {exp.antennas.opacity[-1]}"
                             else:
                                 s += f" {exp.antennas.opacity[0]}"
                             destfile.write(s + s_end)
@@ -1114,9 +1081,8 @@ def tconvert(exp: experiment.Experiment) -> bool:
         return True
 
     server = _servers.retrieve_servers()['eee']
-    remote = f"{server.user}@{server.host}"
     with ThreadPoolExecutor(max_workers=min(len(passes), 4)) as pool:
-        futures = [pool.submit(_tconvert_pass_in_eee, exp, remote, a_pass) for a_pass in passes]
+        futures = [pool.submit(_tconvert_pass_in_eee, exp, f"{server.user}@{server.host}", a_pass) for a_pass in passes]
         return all(future.result() for future in futures)
 
 
@@ -1167,31 +1133,6 @@ def _tconvert_pass_in_eee(exp: experiment.Experiment, remote: str,
     return True
 
 
-def _find_best_fringefinder_scan(exp: experiment.Experiment) -> Optional[experiment.Scan]:
-    """Find the fringe-finder scan observed by the most antennas.
-
-    Args:
-        exp: Experiment object.
-
-    Returns:
-        The Scan with the most observed stations on a fringe-finder source, or None.
-    """
-    ff_sources = exp.sources.fringefinder
-    if not ff_sources:
-        return None
-
-    best_scan = None
-    best_count = 0
-    for scan in exp.scans:
-        if scan.source in ff_sources:
-            n_observed = len(scan.stations_observed) if scan.stations_observed else len(scan.stations_scheduled)
-            if n_observed > best_count:
-                best_count = n_observed
-                best_scan = scan
-
-    return best_scan
-
-
 def _get_all_fringefinder_scans(exp: experiment.Experiment) -> list[experiment.Scan]:
     """Get all fringe-finder scans sorted by number of observing antennas (descending).
 
@@ -1232,8 +1173,7 @@ def _scan_to_aips_timerange(scan: experiment.Scan, obsdate, trim_start_min: int 
     Returns:
         8-element list in AIPS time format.
     """
-    from datetime import datetime as dt
-    obs_midnight = dt.combine(obsdate, dt.min.time())
+    obs_midnight = datetime.combine(obsdate, datetime.min.time())
     start = scan.starttime + timedelta(minutes=trim_start_min)
     end = scan.starttime + timedelta(seconds=scan.duration_s) - timedelta(minutes=trim_end_min)
 
@@ -1243,9 +1183,7 @@ def _scan_to_aips_timerange(scan: experiment.Scan, obsdate, trim_start_min: int 
         remainder = total_sec % 86400
         hours = remainder // 3600
         remainder = remainder % 3600
-        minutes = remainder // 60
-        seconds = remainder % 60
-        return [days, hours, minutes, seconds]
+        return [days, hours, (remainder // 60), (remainder % 60)]
 
     return _to_aips(start) + _to_aips(end)
 
@@ -1390,6 +1328,8 @@ def _rank_polconvert_refants(exp: experiment.Experiment, lin_ants: list[str],
     if not candidates:
         return []
     priority = {name: i for i, name in enumerate(exp.refant or [])}
+    # gate must be computed before the sort: list.sort() empties the list while it runs,
+    # so it cannot be inlined into _key.
     gate = max(_POL_MIN_SNR, _POLCONVERT_REFANT_SNR_FRACTION * max(_snr(a) for a in candidates))
 
     def _key(ant: str):
@@ -1411,8 +1351,7 @@ def _polconvert_exclude_ants(exp: experiment.Experiment, lin_ants: list[str], re
     for ant in exp.antennas:
         if not ant.observed:
             exclude.append(ant.name)
-        elif ant.name not in lin_ants and ant.name != refant \
-                and not subbands.issubset(set(ant.subbands)):
+        elif ant.name not in lin_ants and ant.name != refant and not subbands.issubset(set(ant.subbands)):
             exclude.append(ant.name)
     return sorted(set(exclude))
 
@@ -1433,7 +1372,7 @@ def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
 
     ratios: list[float] = []
     for dat_file in dat_files:
-        content = dat_file.read_text()
+        content = dat_file.read_text()  # read once, searched per polarization
         a = {pol: float(m.group(1)) for pol in ('RR', 'LL', 'RL', 'LR')
              if (m := re.search(rf'{pol}:\s*([\d.eE+-]+)\s*;', content))}
         if len(a) != 4:
@@ -1605,7 +1544,9 @@ def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
         if pconv_ms_path.exists():
             shutil.rmtree(pconv_ms_path)
 
-        import casatasks
+        if casatasks is None:
+            raise ModuleNotFoundError("casatasks is required to convert the PCONVERTed "
+                                      "FITS-IDI files to MS but is not installed.")
         casatasks.importfitsidi(vis=pconv_ms, fitsidifile=idi_files, constobsid=True, scanreindexgap_s=8.0, specframe='GEO')
         logger.info(f"Created {pconv_ms} from {len(idi_files)} PCONVERT IDI files.")
 
@@ -1618,8 +1559,7 @@ def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
             logger.error("No fringe-finder sources found for polconvert verification.")
             return False
 
-        from .plotting import Jplot
-        plotter = Jplot(ms=pconv_ms, refant=exp.refant[0], calsrc=','.join(calsources))
+            plotter = plotting.Jplot(ms=pconv_ms, refant=exp.refant[0], calsrc=','.join(calsources))
         plotter.create_plot(sources=calsources, plots=['cross'])
 
         # Rename pconv plot files to standard names so they override the previous ones
@@ -1627,7 +1567,7 @@ def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
             Path(stdplot_file).rename(stdplot_file.replace('-pconv', ''))
 
         # Convert PS plots to PNG images, overriding previous ones
-        convert_ps_to_png(exp.dirs.plots, exp.expname.lower())
+        plotting.convert_ps_to_png(exp.dirs.plots, exp.expname.lower())
         logger.info("PolConvert verification plots created and converted to images.")
 
     logger.info("PolConvert post-processing complete.")
@@ -1698,8 +1638,7 @@ def set_credentials(exp: experiment.Experiment) -> bool:
         logger.error("More than one .auth file found in the directory.")
         return False
     else:
-        possible_char = string.digits + string.ascii_letters
-        password = "".join(random.sample(possible_char, 12))
+        password = "".join(random.sample((string.digits + string.ascii_letters), 12))
         exp.credentials = experiment.Credentials(username=exp.expname.lower(), password=password)
         auth_file = Path(f"{exp.credentials.username}_{exp.credentials.password}.auth")
         auth_file.touch()
@@ -1722,13 +1661,12 @@ def protect_experiment_files(exp: experiment.Experiment) -> bool:
         logger.info("No protection required for this experiment.")
         return True
 
-    archive_exp = f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}"
     # Protect both the archived source data ("source") and the pipeline results/plots
     # ("pipe") for the protected sources (typically the targets). Missing the "pipe"
     # protection would leave the pipeline data for the target publicly accessible.
     for protection in ("source", "pipe"):
         try:
-            utils.shell_command("auth_pipe.py", ["-e", archive_exp,
+            utils.shell_command("auth_pipe.py", ["-e", f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}",
                                 "-s", ' '.join(protected_sources), "-p", protection])
         except ValueError:
             logger.error(f"Could not protect experiment {protection} files in archive.")
@@ -1814,8 +1752,7 @@ def append_antab(exp: experiment.Experiment) -> bool:
     Returns:
         True if Tsys/GC information was appended or already present, False on error.
     """
-    fits2check = glob.glob(f"{exp.expname.lower()}_*_*.IDI1") + \
-                 glob.glob(f"{exp.expname.lower()}_*_*.IDI")
+    fits2check = glob.glob(f"{exp.expname.lower()}_*_*.IDI1") + glob.glob(f"{exp.expname.lower()}_*_*.IDI")
     if not fits2check:
         logger.error("Could not find FITS-IDI files to append Tsys/GC.")
         return False
@@ -1839,8 +1776,7 @@ def append_antab(exp: experiment.Experiment) -> bool:
 
     def _parse_pass(filename):
         i0 = filename.index('_')
-        i1 = i0 + 1 + filename[i0+1:].index('_')
-        return int(filename[i0+1:i1])
+        return int(filename[i0+1:(i0 + 1 + filename[i0+1:].index('_'))])
 
     def _run_append(antabfile, idi_list):
         antabfile = str(antabfile)
@@ -1860,8 +1796,7 @@ def append_antab(exp: experiment.Experiment) -> bool:
         _run_append(antabfiles[0], idifiles)
     else:
         for i, antabfile in enumerate(antabfiles):
-            pass_files = [idi for idi in idifiles if f"_{i+1}_1.IDI" in idi]
-            _run_append(antabfile, pass_files)
+            _run_append(antabfile, [idi for idi in idifiles if f"_{i+1}_1.IDI" in idi])
 
     if not all(check_consistency(f) for f in fits2check):
         logger.error("The Tsys/GC could not be imported into the FITS-IDI files.")

@@ -103,8 +103,7 @@ def run(name: str, args: Sequence[str], *, cwd: Path | str | None = None,
     Returns:
         The completed process. Stdout and stderr are captured as strings.
     """
-    bin_path = resolve(name)
-    cmd = [bin_path, *map(str, args)]
+    cmd = [resolve(name), *map(str, args)]
     full_env = {**os.environ, **(env or {})}
     cwd_str = str(cwd) if cwd is not None else None
     logger.info(f"[bold]> {' '.join(cmd)}[/bold]" + (f"  (cwd={cwd_str})" if cwd_str else ""))
@@ -128,19 +127,9 @@ def j2ms2(args: Iterable[str], cwd: Path | str | None = None, **kwargs):
     return run("j2ms2", list(args), cwd=cwd, **kwargs)
 
 
-def evnpy(args: Iterable[str], cwd: Path | str | None = None, **kwargs):
-    """Runs ``EVN.py`` (the EVN pipeline driver) with the given arguments."""
-    return run("EVN.py", list(args), cwd=cwd, **kwargs)
-
-
 def feedback(args: Iterable[str], cwd: Path | str | None = None, **kwargs):
     """Runs ``feedback.pl`` with the given arguments."""
     return run("feedback.pl", list(args), cwd=cwd, **kwargs)
-
-
-def archive_pl(args: Iterable[str], cwd: Path | str | None = None, **kwargs):
-    """Runs ``archive.pl`` with the given arguments."""
-    return run("archive.pl", list(args), cwd=cwd, **kwargs)
 
 
 def antab_editor(args: Iterable[str], cwd: Path | str | None = None, **kwargs):

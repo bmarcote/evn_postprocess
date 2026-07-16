@@ -104,13 +104,11 @@ def parse_scan_selection(value: Any, filename: str = '<memory>', key: str = 'sca
     if value is None:
         return None
     scans: set[int] = set()
-    entries = value if isinstance(value, list) else [value]
-    for entry in entries:
+    for entry in (value if isinstance(value, list) else [value]):
         if isinstance(entry, bool) or not isinstance(entry, (int, str)):
             raise ExperimentTomlError(f"{filename}: key '{key}': scan entries must be integers or "
                                       f"strings, got {type(entry).__name__} ({entry!r}).")
-        tokens = [t.strip() for t in entry.split(',')] if isinstance(entry, str) else [entry]
-        for token in tokens:
+        for token in ([t.strip() for t in entry.split(',')] if isinstance(entry, str) else [entry]):
             if isinstance(token, int):
                 low = high = token
             elif token.isdigit():
@@ -302,8 +300,7 @@ class ExperimentToml:
         post = PostprocessSection()
         for key in ('weight_threshold', 'flagged_percent'):
             if key in section:
-                value = _expect(section[key], (int, float), filename, 'postprocess', key, 'a number')
-                setattr(post, key, float(value))
+                setattr(post, key, float(_expect(section[key], (int, float), filename, 'postprocess', key, 'a number')))
         for key in ('polswap', 'polconvert', 'onebit', 'refant', 'antab_files', 'polconvert_input_files'):
             if key in section:
                 setattr(post, key, _expect_str_list(section[key], filename, 'postprocess', key))
@@ -547,8 +544,7 @@ def attached_toml(exp, fresh: bool = False) -> ExperimentToml:
     current = getattr(exp, 'exp_toml', None)
     if current is not None and not fresh:
         return current
-    path = current.path if (current is not None and current.path is not None) \
-        else toml_path_for(exp.expname)
+    path = current.path if (current is not None and current.path is not None) else toml_path_for(exp.expname)
     exp.exp_toml = load_toml(path)
     return exp.exp_toml
 

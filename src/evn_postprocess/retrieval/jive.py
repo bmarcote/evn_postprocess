@@ -18,8 +18,11 @@ from loguru import logger
 from rich import print as rprint
 from . import InputSet, RetrievalError, Retriever
 from .. import experiment_state
+from .. import lisfiles
 from .. import utils
+from ..inputs import find_local_vex
 from ..lisfiles import LAG_TAG
+from .. import servers
 
 
 # --------------------------------------------------------------------------------------
@@ -103,15 +106,14 @@ def fetch_jexp_info(expname: str) -> dict[str, str | None]:
     Returns:
         dict[str, str | None]: The ``key = value`` pairs found in the file (empty values
             map to None). Notable keys: ``piname``/``pimail``, ``coname``/``coimail``
-            (co-I, optional), and ``schedsrc`` (the ``(name|type|protected)`` source list).
+            (co-I, optional), and ``schedsrc`` (the ``NAME (TYPE|FLAG)`` source list).
 
     Raises:
         RetrievalError: When the ``jexp`` server is not configured, or the ``.jex`` file
             cannot be copied (e.g. no such file on the server).
     """
-    from .. import servers as _servers
     try:
-        server = _servers.retrieve_servers()['jexp']
+        server = servers.retrieve_servers()['jexp']
     except (FileNotFoundError, KeyError) as e:
         raise RetrievalError(
             f"Cannot look up the .jex file for {expname}: the 'jexp' server is not "
@@ -182,9 +184,8 @@ def lis_files_in_ccs(exp, server) -> bool:
 
 def create_lis_files(exp) -> bool:
     """Creates the .lis files remotely on ccs (make_lis)."""
-    from .. import servers as _servers
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
-    server = _servers.retrieve_servers()['ccs']
+    server = servers.retrieve_servers()['ccs']
     if not lis_files_in_ccs(exp, server):
         logger.info("Creating lis file...")
         utils.ssh(f"{server.user}@{server.host}",
@@ -194,22 +195,20 @@ def create_lis_files(exp) -> bool:
 
 def get_lis_files(exp) -> bool:
     """Copies the .lis files from ccs and normalises them for this experiment."""
-    from .. import servers as _servers
-    from .. import lisfiles as _lisfiles
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
-    server = _servers.retrieve_servers()['ccs']
-    if len(_lisfiles._pass_lisfiles(f"{eEVNname.lower()}*.lis")) == 0:
+    server = servers.retrieve_servers()['ccs']
+    if len(lisfiles._pass_lisfiles(f"{eEVNname.lower()}*.lis")) == 0:
         utils.scp(f"{server.user}@{server.host}:"
                   + str(Path(str(server.path).format(expname=eEVNname)) / f"{eEVNname.lower()}*.lis"), '.')
 
-    for a_lis in _lisfiles._pass_lisfiles("*.lis"):
-        _lisfiles.split_lis_cont_line(exp, a_lis)
+    for a_lis in lisfiles._pass_lisfiles("*.lis"):
+        lisfiles.split_lis_cont_line(exp, a_lis)
 
     # e-EVN runs may need the lis files renamed to this experiment.
     if eEVNname != exp.expname:
-        for a_lis in _lisfiles._pass_lisfiles("*.lis"):
+        for a_lis in lisfiles._pass_lisfiles("*.lis"):
             if exp.expname.lower() not in a_lis:
-                _lisfiles.update_lis_file(a_lis, eEVNname, exp.expname)
+                lisfiles.update_lis_file(a_lis, eEVNname, exp.expname)
             os.rename(a_lis, a_lis.replace(eEVNname.lower(), exp.expname.lower()))
     return True
 
@@ -244,8 +243,6 @@ def fetch_from_vlbeer(exp, server) -> bool:
     the .antabfs files, which are edited by hand in the antab step, from being clobbered by
     a re-run; a station that uploads a genuinely new file to vlbeer is still picked up.
     """
-    from .. import utils
-
     host = f"{server.user}@{server.host}"
     remote_dir = Path(utils.format_remote_path(str(server.path), obsdate=exp.obsdate))
 
@@ -296,8 +293,7 @@ def fetch_from_vlbeer(exp, server) -> bool:
             scp_one(remote_dir / name)
 
     with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(fetch_file, a_file) for a_file in ('antabfs', 'log', 'flag')]
-        for future in futures:
+        for future in [executor.submit(fetch_file, a_file) for a_file in ('antabfs', 'log', 'flag')]:
             future.result()
 
     for ext in ('antabfs', 'log'):
@@ -362,7 +358,6 @@ class JiveRetriever(Retriever):
 
     @staticmethod
     def _servers():
-        from .. import servers
         try:
             return servers.retrieve_servers()
         except FileNotFoundError as e:
@@ -381,7 +376,6 @@ class JiveRetriever(Retriever):
             RetrievalError: When the vex file cannot be obtained.
         """
         workdir = Path(workdir)
-        from ..inputs import find_local_vex
         vexfile = find_local_vex(expname, workdir)
         if vexfile is None:
             servers = self._servers()
@@ -439,9 +433,8 @@ class JiveRetriever(Retriever):
         Raises:
             RetrievalError: When the vlbeer server is not configured.
         """
-        servers = self._servers()
         try:
-            vlbeer = servers['vlbeer']
+            vlbeer = self._servers()['vlbeer']
         except KeyError as e:
             raise RetrievalError(f"Server 'vlbeer' missing from computers.toml: {e}") from e
         return fetch_from_vlbeer(exp, vlbeer)
@@ -454,8 +447,7 @@ class JiveRetriever(Retriever):
         knows about vlbeer for schedule files inside the JIVE retrieval backend.
         """
         try:
-            servers = self._servers()
             get_vlbeer_sched_files(exp.expname if exp.eEVNname is None else exp.eEVNname,
-                                   exp.obsdate, servers['vlbeer'])
+                                   exp.obsdate, self._servers()['vlbeer'])
         except (RetrievalError, FileNotFoundError, KeyError, ValueError, RuntimeError) as e:
             logger.warning(f"Could not retrieve the .key/.sum files from vlbeer (continuing): {e}")

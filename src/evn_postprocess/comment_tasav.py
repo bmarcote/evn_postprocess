@@ -4,11 +4,10 @@ Given default templates, customizes them to include basic data from the given ex
 Takes information from the pipeline IN/OUT directories via the exp.dirs object.
 The EVN Pipeline must have been run before calling these functions.
 """
-import subprocess
 from datetime import datetime as dt
 from importlib import resources
-from pathlib import Path
 from loguru import logger
+from . import inputs, vex
 
 
 def get_input_file_info(dirs, expname: str):
@@ -19,8 +18,7 @@ def get_input_file_info(dirs, expname: str):
     Returns
         refant, cutoff, bpass, phaseref, target, do_primary_beam
     """
-    inp_file = dirs.pipe_in / f"{expname}.inp.txt"
-    with open(inp_file, 'r') as inpfile:
+    with open((dirs.pipe_in / f"{expname}.inp.txt"), 'r') as inpfile:
         phaseref = None
         cutoff = 7
         target = None
@@ -89,8 +87,7 @@ def get_setup(dirs, expname: str):
     Returns
         freq (GHz), datarate (Mbps), number_ifs, bandwidth (MHz), pols
     """
-    scan_file = dirs.pipe_out / f"{expname}.SCAN"
-    with open(scan_file, 'r') as scanfile:
+    with open((dirs.pipe_out / f"{expname}.SCAN"), 'r') as scanfile:
         freq = None
         lastline = None
         for scanline in scanfile.readlines():
@@ -141,9 +138,7 @@ def parse_setup(exp_base: str, type_exp: str, freq, datarate, number_ifs, bandwi
         type_exp : str  'cont' or 'line'.
     """
     # Observing date from the LOCAL vex file (no server contact): the vex is already on
-    # disk after initialization. Replaces the historical `ssh jops@ccs grep MASTER_PROJECTS.LIS`
-    # lookup so this module makes no outbound server call (server-agnostic core).
-    from . import inputs, vex
+    # disk after initialization, so this module makes no outbound server call.
     vexfile = inputs.find_local_vex(exp_base)
     if vexfile is None:
         raise FileNotFoundError(
@@ -178,8 +173,7 @@ def parse_setup(exp_base: str, type_exp: str, freq, datarate, number_ifs, bandwi
 
 def get_antennas(dirs, expname: str):
     """Returns a list of all antennas from {expname}.DTSUM in dirs.pipe_out."""
-    dtsum_file = dirs.pipe_out / f"{expname}.DTSUM"
-    with open(dtsum_file, 'r') as dtsumfile:
+    with open((dirs.pipe_out / f"{expname}.DTSUM"), 'r') as dtsumfile:
         list_antennas = []
         inside_array = False
         for dtline in dtsumfile.readlines():
@@ -245,8 +239,7 @@ def create_comment_and_tasav(exp, expname: str, is_line: bool = False):
     refant, fringe_cutoff, bpass, phaseref, target, do_pb_cor = get_input_file_info(dirs, expname)
 
     # --- .comment file ---
-    template_comment = resources.files("evn_postprocess.templates").joinpath("template.comment")
-    with resources.as_file(template_comment) as tpath:
+    with resources.as_file(resources.files("evn_postprocess.templates").joinpath("template.comment")) as tpath:
         with open(tpath, 'r') as f:
             comment_text = f.read()
 
@@ -265,8 +258,7 @@ def create_comment_and_tasav(exp, expname: str, is_line: bool = False):
 
     # --- .tasav.txt file ---
     tasav_template_name = "template-pbcor.tasav.txt" if do_pb_cor else "template.tasav.txt"
-    template_tasav = resources.files("evn_postprocess.templates").joinpath(tasav_template_name)
-    with resources.as_file(template_tasav) as tpath:
+    with resources.as_file(resources.files("evn_postprocess.templates").joinpath(tasav_template_name)) as tpath:
         with open(tpath, 'r') as f:
             tasav_text = f.read()
 

@@ -5,6 +5,7 @@ verify that all steps have been performed correctly and/or
 perform required changes in intermediate files.
 """
 import os
+import re
 import glob
 import shutil
 import subprocess
@@ -12,45 +13,12 @@ import traceback
 from importlib import resources
 from loguru import logger
 from pathlib import Path
-from typing import Optional
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from rich import print as rprint
-from . import experiment
 from . import utils
 from . import lisfiles
 from . import comment_tasav
-from .servers import Server
-
-
-def get_files_from_vlbeer(exp, server: Server) -> bool:
-    """Retrieves the antabfs, log, and flag files from vlbeer.
-
-    DEPRECATED thin alias: the implementation moved to
-    retrieval.jive.fetch_from_vlbeer (all vlbeer knowledge belongs to the retrieval
-    backends). Kept so historical call sites keep working; new code should go through
-    ``retrieval.get_retriever(...).fetch_station_files(exp)``.
-    """
-    from .retrieval.jive import fetch_from_vlbeer
-    return fetch_from_vlbeer(exp, server)
-
-
-def get_vlba_antab(exp) -> Optional[bool]:
-    """Retrieves the VLBA cal (antab) files and gains into the archive temp folder.
-
-    DEPRECATED thin alias: the ssh implementation moved to
-    ``retrieval.jive.get_vlba_antab`` (all input-side server access belongs to the JIVE
-    retrieval backend). Kept so historical call sites keep working.
-    """
-    from .retrieval.jive import get_vlba_antab as _impl
-    return _impl(exp)
-
-
-                # if ext == 'log':
-                #     exp.antennas[ant].logfsfile = True
-                # elif ext == 'antabfs':
-                #     exp.antennas[ant].antabfsfile = True
-                #
-
+from . import feedback
 
 
 def run_antab_editor(exp) -> bool:
@@ -127,10 +95,9 @@ def create_uvflg(exp) -> bool:
 
     # Check which observed antennas are missing .uvflgfs files and supplement
     # them with a-priori flagging from the experiment .flag file (from vlbeer).
-    uvflgfs_files = glob.glob("*.uvflgfs")
     antennas_with_uvflgfs = {
         Path(f).stem.replace(exp.expname.lower(), '').upper()
-        for f in uvflgfs_files
+        for f in glob.glob("*.uvflgfs")
     }
     missing_antennas = {a.upper() for a in exp.antennas.observed} - antennas_with_uvflgfs
     if missing_antennas:
@@ -305,9 +272,8 @@ def comment_tasav_files(exp) -> bool:
     try:
         # Check if files already exist
         comment_files = list(exp.dirs.pipe_out.glob(f"{exp.expname.lower()}*.comment"))
-        tasav_files = list(exp.dirs.pipe_in.glob(f"{exp.expname.lower()}*.tasav.txt"))
 
-        if comment_files and tasav_files:
+        if comment_files and list(exp.dirs.pipe_in.glob(f"{exp.expname.lower()}*.tasav.txt")):
             logger.debug("Comment and tasav files already exist. Skipping.")
             return True
 
@@ -349,8 +315,6 @@ def pipeline_feedback(exp) -> bool:
     (see :mod:`evn_postprocess.feedback`). For multi-pass experiments one page is
     produced per pass (``{expname}_{p}.html``), otherwise a single ``{expname}.html``.
     """
-    import re
-    from . import feedback
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
     sources = [s.name for s in exp.sources]
     # Network Monitoring Experiments (and the e-EVN test experiments) use the NME-formatted
@@ -398,7 +362,7 @@ def archive(exp) -> bool:
 def ampcal(exp) -> bool:
     """Runs the ampcal.sh script to incorporate the gain corrections into the Grafana database.
     """
-    original_cwd = os.getcwd()
+    original_cwd = os.getcwd()  # must be read before the chdir so the finally can restore it
     try:
         os.chdir(exp.dirs.pipe_out)
         utils.shell_command("ampcal.sh")

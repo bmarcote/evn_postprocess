@@ -1,8 +1,11 @@
 import abc
 import sys
+import blessed
 from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 from loguru import logger
 from . import experiment
 from . import utils
@@ -114,9 +117,8 @@ class Terminal(Dialog):
         """
         low_weight_antennas = exp.antennas.low_weights
 
-        ant_list = ', '.join(exp.antennas.names)
         _console.print(Panel("[bold]Review the standard plots and answer the following questions.[/bold]\n"
-                             f"Available antennas: [cyan]{ant_list}[/cyan]",
+                             f"Available antennas: [cyan]{', '.join(exp.antennas.names)}[/cyan]",
                              title="[bold yellow]MS Operations[/bold yellow]", border_style="yellow", padding=(1, 2)))
 
         if low_weight_antennas:
@@ -186,12 +188,6 @@ class Terminal(Dialog):
         Returns:
             bool: True if user wants to continue, False if user cancels.
         """
-        from rich.console import Console
-        from rich.table import Table
-        from rich.text import Text
-        from rich.panel import Panel
-        import blessed
-
         if not exp.scans:
             rprint("[yellow]No scan information available. Skipping scan overview.[/yellow]")
             return True
@@ -224,8 +220,7 @@ class Terminal(Dialog):
             for scan in exp.scans:
                 scheduled = set(scan.stations_scheduled)
                 observed = set(scan.stations_observed)
-                stype = source_type_map.get(scan.source, "other")
-                style = source_type_styles.get(stype, "dim")
+                style = source_type_styles.get(source_type_map.get(scan.source, "other"), "dim")
                 row_cells: list = [Text(str(scan.scanno), style=style), Text(scan.source, style=style)]
                 for antenna in all_antennas:
                     if antenna in scheduled:
@@ -282,7 +277,6 @@ class PolicyDriven(Dialog):
             BatchInteractionError: If the policy lacks the weight threshold,
                 which is the one value that has no defensible default.
         """
-        from . import experiment as _experiment  # local import to avoid the cycle
         policy = getattr(exp, "policy", None)
         if policy is None:
             raise BatchInteractionError(
@@ -303,9 +297,7 @@ class PolicyDriven(Dialog):
                     f"{exp.correlator_passes[i].msfile.name}, keeping previous result."
                 )
             else:
-                exp.correlator_passes[i].flagged_weights = _experiment.FlagWeight(
-                    policy.weight_threshold, -1
-                )
+                exp.correlator_passes[i].flagged_weights = experiment.FlagWeight(policy.weight_threshold, -1)
 
         for antenna in policy.polswap:
             if antenna in exp.antennas.names:

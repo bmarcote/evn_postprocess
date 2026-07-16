@@ -26,6 +26,8 @@ from loguru import logger
 
 from . import experiment
 from . import experiment_state
+from . import lisfiles
+from . import source_classify
 from . import vex
 
 
@@ -212,10 +214,9 @@ def _apply_toml(exp: experiment.Experiment, exp_toml: experiment_state.Experimen
                        f"experiment toml, or heuristics/operators must classify them later.")
 
 
-def load_experiment(vexfile: str | Path, lisfiles: list[Path] | None = None,
+def load_experiment(vexfile: str | Path, lis_paths: list[Path] | None = None,
                     tomlfile: str | Path | None = None, supsci: str | None = None,
-                    expname: str | None = None,
-                    dirs: experiment.Dirs | None = None,
+                    expname: str | None = None, dirs: experiment.Dirs | None = None,
                     classify: bool = True) -> experiment.Experiment:
     """Builds a populated Experiment from local .vex (+ optional .lis and .toml) files.
 
@@ -225,7 +226,7 @@ def load_experiment(vexfile: str | Path, lisfiles: list[Path] | None = None,
 
     Args:
         vexfile: The observation vex file (any of .vix/.vex/.vox/.vax).
-        lisfiles: The .lis files of the correlator passes. When None, the conventional
+        lis_paths: The .lis files of the correlator passes. When None, the conventional
             ``{expname.lower()}*.lis`` files in the working directory are used (if any).
             NOTE: pass parsing follows the working-directory convention regardless
             (lisfiles.get_passes_from_lisfiles); files passed from another directory
@@ -271,7 +272,6 @@ def load_experiment(vexfile: str | Path, lisfiles: list[Path] | None = None,
     # fully-prepared config (sweeps mode) no guessing is permitted, so this is skipped and
     # the caller instead errors on any source still untyped.
     if classify:
-        from . import source_classify
         source_classify.apply_classification(exp)
     else:
         logger.debug(f"{expname}: heuristic source classification disabled (prepared config).")
@@ -279,11 +279,10 @@ def load_experiment(vexfile: str | Path, lisfiles: list[Path] | None = None,
     # Correlator passes from the local .lis files (conventional discovery when the
     # caller does not name them). Absence is not an error at this stage: the lis files
     # may be created/retrieved by a later step.
-    from . import lisfiles as _lisfiles  # local import: lisfiles imports experiment too
-    available = ([Path(f) for f in lisfiles] if lisfiles
-                 else [Path(f) for f in _lisfiles._pass_lisfiles(f"{expname.lower()}*.lis")])
+    available = ([Path(f) for f in lis_paths] if lis_paths
+                 else [Path(f) for f in lisfiles._pass_lisfiles(f"{expname.lower()}*.lis")])
     if available:
-        if not _lisfiles.get_passes_from_lisfiles(exp):
+        if not lisfiles.get_passes_from_lisfiles(exp):
             raise InputsError(f"Could not set up the correlator passes from the .lis files: "
                               f"{', '.join(str(f) for f in available)}.")
     else:
@@ -300,7 +299,7 @@ def ensure_sources_typed(exp: experiment.Experiment) -> None:
     Raises:
         InputsError: Naming every observed source left without a type.
     """
-    observed = {scan.source for scan in exp.scans}
+    observed = {scan.source for scan in exp.scans}  # built once, checked per source
     untyped = sorted(s.name for s in exp.sources
                      if s.type == experiment.SourceType.other and s.name in observed)
     if untyped:

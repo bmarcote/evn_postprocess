@@ -26,6 +26,14 @@ import math
 from collections import Counter
 
 from loguru import logger
+from astropy import units as u
+
+# vlbiplanobs is an optional dependency; when absent, classification degrades to
+# scan-statistics-only with a warning (see _load_rfc_catalogue).
+try:
+    from vlbiplanobs.calibrators import RFCCatalog
+except ImportError:
+    RFCCatalog = None
 
 from . import experiment
 from . import experiment_state
@@ -60,13 +68,12 @@ def _load_rfc_catalogue():
     vlbiplanobs is an optional dependency; any failure (not installed, catalogue file
     missing/corrupt) degrades to scan-statistics-only classification with a warning.
     """
-    try:
-        from vlbiplanobs.calibrators import RFCCatalog
-        from astropy import units as u
-        return RFCCatalog(min_flux=0.0 * u.Jy)
-    except ImportError:
+    if RFCCatalog is None:
         logger.warning("vlbiplanobs is not installed: source classification degrades to "
                        "scan statistics only (no RFC catalogue lookup).")
+        return None
+    try:
+        return RFCCatalog(min_flux=0.0 * u.Jy)
     except Exception as e:
         logger.warning(f"Could not load the RFC catalogue from vlbiplanobs (degrading to "
                        f"scan statistics only): {e}")
@@ -86,7 +93,7 @@ def _known_in_catalogue(source: experiment.Source, catalog) -> bool:
         # The RA tolerance must be de-projected by cos(dec) (an RA degree spans less
         # sky towards the poles) and the comparison must handle the 0/360 wrap.
         cos_dec = max(math.cos(math.radians(dec)), 1e-6)
-        ra_tolerance_deg = (CATALOGUE_MATCH_ARCSEC / 3600.0) / cos_dec
+        ra_tolerance_deg = CATALOGUE_MATCH_ARCSEC / 3600.0 / cos_dec  # computed once, checked per source
         for cat_source in catalog.sources:
             if abs(cat_source.dec_deg - dec) * 3600.0 > CATALOGUE_MATCH_ARCSEC:
                 continue

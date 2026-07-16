@@ -21,7 +21,7 @@ from typing import Callable
 
 from loguru import logger
 
-
+from ..registry import BackendRegistry
 
 
 class PipelineError(RuntimeError):
@@ -47,8 +47,6 @@ class PipelineBackend(ABC):
     def collect(self, exp) -> bool:
         """Collects diagnostics/outputs after the pipeline run."""
 
-
-from ..registry import BackendRegistry
 
 _REGISTRY = BackendRegistry('pipeline', PipelineError)
 
@@ -90,20 +88,15 @@ class NonePipeline(PipelineBackend):
         return True
 
 
-def _make_none() -> PipelineBackend:
-    return NonePipeline()
-
-
-def _make_aips() -> PipelineBackend:
-    from .aips import AipsPipeline
-    return AipsPipeline()
-
-
 def _make_vpipe() -> PipelineBackend:
     raise PipelineError("The 'vpipe' pipeline backend is registered but not implemented yet. "
                         "Use 'aips' (default) or 'none'.")
 
 
-register('none', _make_none)
-register('aips', _make_aips)
+# Concrete backend modules import PipelineBackend from this package, so they can only be
+# imported here, after the class definitions above.
+from .aips import AipsPipeline  # noqa: E402
+
+register('none', NonePipeline)
+register('aips', AipsPipeline)
 register('vpipe', _make_vpipe)
