@@ -19,7 +19,6 @@ from . import lisfiles
 from . import mode as _mode
 from . import pipelines
 from . import retrieval
-from . import servers
 from . import workflow
 from .plotting import serve_dashboard
 from .policy import Policy
@@ -149,15 +148,15 @@ def _apply_refant(exp: experiment.Experiment, refant_args: list[str]):
         exp: Experiment object.
         refant_args: List of antenna codes from CLI.
     """
-    known = set(exp.antennas.names)
-    invalid = [a for a in refant_args if a not in known]
+    known: set[str] = set(exp.antennas.names)
+    invalid: list[str] = [a for a in refant_args if a not in known]
     if invalid:
         rprint(f"[red]Unknown antenna(s): {', '.join(invalid)}[/red]")
-        rprint(f"[dim]Available antennas: {', '.join(sorted(known))}[/dim]")
+        rprint(f"[dim]Available antennas: {', '.join(known)}[/dim]")
         sys.exit(1)
 
-    exp.refant = list(refant_args)
-    rprint(f"[green]Reference antenna(s) set to: {', '.join(exp.refant)}[/green]")
+    exp.refant: list[str] = list(refant_args)
+    # rprint(f"[green]Reference antenna(s) set to: {', '.join(exp.refant)}[/green]")
 
 
 def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
@@ -172,9 +171,10 @@ def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
     """
     if field == 'refant':
         if not values:
-            rprint("[bold]Available antennas:[/bold]")
-            for ant in exp.antennas:
-                rprint(f"  {ant.name}  {("[green]observed[/green]" if ant.observed else "[red]not observed[/red]")}")
+            rprint("[bold]Available antennas:[/bold]" \
+                   f"{', '.join(('[green]'+ant.name+'[/green]' if ant.observed else \
+                      '[red]'+ant.name+'[/red]' for ant in exp.antennas))}")
+
             if exp.refant:
                 rprint(f"\n[dim]Current refant: {', '.join(exp.refant)}[/dim]")
             return
@@ -182,31 +182,39 @@ def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
         _apply_refant(exp, values)
         return
 
-    # Source-type fields: target, phasecal, fringefinder
-    type_map = {'target': experiment.SourceType.target, 'phasecal': experiment.SourceType.calibrator,
-                'fringefinder': experiment.SourceType.fringefinder}
-    src_type = type_map[field]
-
-    if not values:
-        rprint(f"[bold]Available sources[/bold] (current {field} sources marked with *):")
-        for src in exp.sources:
-            rprint(f"  {src.name}  [dim]({src.type.name})[/dim]{(" *" if src.type == src_type else "")}")
-        return
-
-    known_sources = set(exp.sources.names)
-    for src_name in values:
-        if src_name not in known_sources:
-            rprint(f"[red]Unknown source '{src_name}'.[/red]")
-            rprint(f"[dim]Available sources: {', '.join(sorted(known_sources))}[/dim]")
+    match field:
+        case 'target':
+            src_type: experiment.SourceType = experiment.SourceType.target
+        case 'phasecal':
+            src_type: experiment.SourceType = experiment.SourceType.calibrator
+        case 'fringefinder':
+            src_type: experiment.SourceType = experiment.SourceType.fringefinder
+        case _:
+            rprint(f"[bold red]The field ({field}) is not recognized.[/bold red]")
+            rprint("[dim]The available options are 'target', 'phasecal', or 'fringefinder'[/dim]")
             sys.exit(1)
 
+    if not values:
+        rprint("[bold]Available sources[/bold]:")
+        for src in exp.sources:
+            rprint(f"  {src.name}  [dim]({src.type.name})[/dim]")
+
+        return
+
+    if (unknown_sources := [src_name for src_name in values if src_name not in exp.sources.names]):
+        rprint(f"[red]Unknown source{'s' if len(unknown_sources) > 1 else ''}" \
+               f"'{', '.join(unknown_sources)}'.[/red]")
+        rprint(f"[dim]Available sources: {', '.join(exp.sources.names)}[/dim]")
+        sys.exit(1)
+
+    for src_name in values:
         exp.sources[src_name].type = src_type
-        rprint(f"[green]Source '{src_name}' set to {field}.[/green]")
 
     # Propagate type changes to per-pass sources
     for a_pass in exp.correlator_passes:
         if not a_pass.sources:
             continue
+
         for src_name in values:
             if src_name in a_pass.sources.names:
                 a_pass.sources[src_name].type = src_type
@@ -222,9 +230,10 @@ def main() -> None:
                         help='Surname of the EVN Support Scientist.\n' \
                         '[dim]By default recovered assuming the user that is running this program.[/dim]')
     parser.add_argument('-d', '--dir', type=str, default=None,
-                        help='Directory to run the post-processing. By default in /data/exp/<expname>.')
+                        help='Directory to run the post-processing. By default in CWD.')
     parser.add_argument('-a', '--no-archive', action='store_false', default=True,
-                        help='Skip the archive part of the files to the EVN archive.')
+                        help='Skip the archive part of the files to the EVN archive '
+                             '(assuming you are a support scientist).')
     parser.add_argument('--no-lag', action='store_true', default=False,
                         help='Do not create the auxiliary lag-space MS nor compute the per-scan '
                              'antenna signal-to-noise from it. The scan overview then only reports '
@@ -240,31 +249,30 @@ def main() -> None:
                         help='Operating mode. Auto-detected from the OS user/group when omitted '
                              '("jops" or the "supsci" group -> supsci; the "sweeps" group -> '
                              'sweeps; otherwise regular).\n'
-                             '- "supsci": JIVE support-scientist job (retrieve from the correlator, '
+                             '- "supsci": JIVE support scientist (retrieve from the correlator, '
                              'ANTAB from vlbeer, archive/deliver).\n'
-                             '- "regular": all inputs already local, no server contact, no archiving.\n'
+                             '- "regular": all inputs already local, no archiving.\n'
                              '- "sweeps": the automated SWEEPS system (not implemented yet).\n'
-                             '[dim]Overrides and re-persists the mode stored on the experiment.[/dim]')
+                             '[dim]Overrides the mode stored on the experiment.[/dim]')
     parser.add_argument('--config', type=str, default=None, metavar='FILE',
-                        help='Path to the experiment toml used as the prepared config (sweeps mode). '
-                             'Optional: defaults to the conventional {expname}.toml in the directory.')
+                        help='Path to the experiment TOML used as config. '
+                             'Optional: defaults to the conventional {expname}.toml '
+                             'in the directory.')
     parser.add_argument('--policy', type=str, default=None, metavar='FILE',
                         help='Path to a policy.toml file with the unattended decisions '
                              '(weight threshold, polswap/polconvert/onebit antennas, refant, '
-                             'pause_after, skip_archive). See evn_postprocess.policy for the schema.')
+                             'pause_after, skip_archive). See evn_postprocess.policy.')
     parser.add_argument('--tConvert-in-eee', action=argparse.BooleanOptionalAction, default=True,
-                        help='Temporary workaround for the broken local tConvert and PolConvert: run '
-                             'both steps on eee instead. tConvert copies the MS files to '
-                             'jops@eee:/data0/temp/, runs there, and copies the FITS-IDI files back; '
-                             'polconvert pushes its input file to the experiment directory on eee '
-                             '(where the FITS-IDI files already are), runs there, and copies the '
-                             '.PCONVERT files back. Enabled by default; use --no-tConvert-in-eee to '
-                             'run both locally.')
+                        help='Temporary workaround for the broken local tConvert: it runs '
+                             'the step on `eee` instead. It copies the MS files to '
+                             'jops@eee:/data0/temp/, runs tConvert there, and copies the '
+                             'FITS-IDI files back. Enabled by default; use --no-tConvert-in-eee to '
+                             'run locally.')
     parser.add_argument('--batch', action='store_true', default=False,
                         help='Run unattended: never invoke interactive dialogs or open the '
                              'standardplots dashboard. The runner stops with exit code 0 and '
                              'writes a REVIEW_REQUIRED marker file when human input is needed. '
-                             'Implies --policy if any decision is required.')
+                             '[bold]Implies --policy if any decision is required[/bold].')
     parser.add_argument('--comms', type=str, default=None, metavar='FILE',
                         help='Path to a comms.toml file with the communication settings '
                              '(mode, username, email/mattermost config). If not provided, '
@@ -330,17 +338,7 @@ def main() -> None:
         rprint("[red]Please specify the experiment name with -e/--expname or run from the experiment directory[/red]")
         sys.exit(1)
 
-    if args.dir:
-        cwd = Path(args.dir)
-    else:
-        # Default working directory: the JIVE eee location when a computers.toml is
-        # configured (supsci); otherwise the current directory, so a regular user needs
-        # no server configuration to run in their own experiment folder.
-        try:
-            cwd = Path(servers.retrieve_servers()['eee'].path) / expname.upper()
-        except (FileNotFoundError, KeyError):
-            cwd = Path('.')
-
+    cwd: Path = Path(args.dir) if args.dir else Path('.')
     if (not args.subpar) or (args.subpar in ('info', 'run', 'dashboard')):
         try:
             cwd.mkdir(exist_ok=True)
@@ -352,15 +350,16 @@ def main() -> None:
         if Path(f"{expname.lower()}.json").exists():
             rprint(f"[bold]Recovering previously-stored information for {expname}[/bold]")
             try:
-                exp = experiment.Experiment.load(expname)
+                exp: experiment.Experiment = experiment.Experiment.load(expname)
                 # Resolve the mode: --mode overrides the stored one (re-persisted, with a
                 # warning on change); otherwise the stored mode is reused, or re-detected
                 # for a pre-Phase-2 checkpoint that has none.
-                resolved = _mode.resolve(cli_mode=args.mode, stored_mode=exp.mode)
+                resolved: _mode.Mode = _mode.resolve(cli_mode=args.mode, stored_mode=exp.mode)
                 if exp.mode != resolved:
-                    exp.mode = resolved
+                    exp.mode: _mode.Mode = resolved
                     exp.store()
-                # Just to avoid that the user deleted some folders
+
+                # Just to avoid that some folders were deleted by the user
                 workflow.create_folder_structure()
                 # User may have changed the lis files... (exclude the auxiliary
                 # {expname}-lag.lis, which is not a correlator pass).
@@ -370,12 +369,12 @@ def main() -> None:
                         rprint("[red]Error: Failed to reload .lis files[/red]")
                         sys.exit(1)
             except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-                rprint(f"[red]Error loading experiment data: {e}[/red]")
+                rprint(f"[bold red]Error loading experiment data: {e}[/bold red]")
                 rprint("[red]The experiment file may be corrupted. Consider reinitializing the experiment by removing the json file.[/red]")
                 sys.exit(1)
         else:
             try:
-                supsci = args.supsci if args.supsci else experiment.retrieve_username()
+                supsci: str = args.supsci if args.supsci else experiment.retrieve_username()
                 if supsci == 'unknown':
                     raise ValueError("Could not determine the username. Please specify it with --supsci.")
 
@@ -383,9 +382,7 @@ def main() -> None:
                 # persist it so every later invocation reuses it (no re-detection).
                 resolved = _mode.resolve(cli_mode=args.mode, stored_mode=None)
                 rprint(f"[dim]Operating mode: {resolved.value}[/dim]")
-                exp = workflow.initialize_experiment(expname, supsci, resolved)
-                # if args.j2ms2par is not None:
-                #     exp.special_params = {'j2ms2': [par.strip() for par in args.j2ms2par.split(',')]}
+                exp: experiment.Experiment = workflow.initialize_experiment(expname, supsci, resolved)
                 exp.store()
             except (ValueError, FileNotFoundError, RuntimeError) as e:
                 rprint(f"[red]Error initializing experiment: {e}[/red]")
@@ -395,7 +392,7 @@ def main() -> None:
         # serialized into the JSON checkpoint (see experiment_state). --config names an
         # explicit toml (sweeps); otherwise the conventional {expname}.toml is used.
         try:
-            if args.config is not None:
+            if args.config:
                 exp.exp_toml = experiment_state.load_toml(Path(args.config))
             else:
                 experiment_state.attached_toml(exp, fresh=True)
@@ -406,7 +403,7 @@ def main() -> None:
         # Fail fast on an invalid/unimplemented backend for the resolved mode: a bad
         # mode must not surface only hours later at the pipeline step.
         try:
-            backends = _mode.backends_for(exp.mode)
+            backends: _mode.Backends = _mode.backends_for(exp.mode)
             retrieval.get_retriever(backends.retrieval)  # sweeps stubs raise here
             pipelines.get_pipeline(backends.pipeline)
             distribution.get_distributor(backends.distribution)
@@ -431,7 +428,7 @@ def main() -> None:
         # can read it without threading the value through every call.
         if args.policy:
             try:
-                exp.policy = Policy.load(args.policy)
+                exp.policy: Policy = Policy.load(args.policy)
             except FileNotFoundError:
                 rprint(f"[red]Policy file not found: {args.policy}[/red]")
                 sys.exit(1)
@@ -440,7 +437,7 @@ def main() -> None:
                 sys.exit(1)
             exp.store()
         # tConvert workaround: run the step on eee unless explicitly disabled.
-        exp.tconvert_in_eee = args.tConvert_in_eee
+        exp.tconvert_in_eee: bool = args.tConvert_in_eee
 
         if args.batch:
             workflow.set_batch_mode(True)
@@ -449,7 +446,7 @@ def main() -> None:
                 exp.policy = Policy(batch=True)
 
         # --- Comms wiring: load config and set the workflow notifier ---
-        comms_config = comms.CommsConfig.load(args.comms)
+        comms_config: comms.CommsConfig = comms.CommsConfig.load(args.comms)
         if comms_config.mode != "none":
             workflow.set_notifier(comms.make_notifier(comms_config))
 
@@ -459,8 +456,8 @@ def main() -> None:
                 if len(args.steps) > 2:
                     rprint("[red]Error: 'run' accepts at most two step names.[/red]")
                     sys.exit(1)
-                from_step = args.steps[0]
-                to_step = args.steps[1] if len(args.steps) == 2 else None
+                from_step: str = args.steps[0]
+                to_step: str | None = args.steps[1] if len(args.steps) == 2 else None
                 valid, error_msg = workflow.validate_steps(from_step, to_step)
                 if not valid:
                     rprint(f"[red]Error: {error_msg}[/red]")
@@ -468,7 +465,7 @@ def main() -> None:
             # A step failure returns False -> exit non-zero (distinct from a clean review
             # pause / e-EVN barrier, which returns True -> exit 0). The failed step stays
             # the resume point for the next `postprocess run`.
-            ok = workflow.run_workflow(exp, args.no_archive, debug=args.debug,
+            ok: bool = workflow.run_workflow(exp, args.no_archive, debug=args.debug,
                                        from_step=from_step, to_step=to_step)
             if not ok:
                 sys.exit(1)
@@ -478,13 +475,13 @@ def main() -> None:
             exp.print_blessed(outputfile=None)
             if exp.mode is not None:
                 rprint(f"[bold]Operating mode[/bold]: {exp.mode.value}")
+
             # Show the values sourced from the experiment toml, marked with
             # their origin so they are distinguishable from vex/lis metadata.
             if exp.exp_toml is not None:
-                toml_lines = experiment_state.summary_lines(exp.exp_toml)
+                toml_lines: list[str] = experiment_state.summary_lines(exp.exp_toml)
                 if toml_lines:
-                    rprint(f"\n[bold]From the experiment file "
-                           f"{exp.exp_toml.path.name}:[/bold]")
+                    rprint(f"\n[bold]From the experiment file {exp.exp_toml.path.name}:[/bold]")
                     for line in toml_lines:
                         print(f"  {line}")  # plain print: lines may contain [brackets]
     elif args.subpar == 'list' or args.subpar == 'last':

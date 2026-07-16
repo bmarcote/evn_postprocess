@@ -1,8 +1,7 @@
 """Operating mode: who is running evn_postprocess and in what context.
 
-A single mode replaces the three Phase-1 backend-selection flags. It answers one
-question -- support-scientist job, regular local user, or the automated SWEEPS
-system -- and from that answer derives which retrieval, pipeline, and distribution
+The mode currently has three different modes: support scientists, SWEEPS, or regular
+users. From the answer it derives which retrieval, pipeline, and distribution
 backends run (see :func:`backends_for`).
 
 Resolution (see :func:`resolve`): an explicit ``--mode`` wins over the mode persisted
@@ -13,13 +12,11 @@ OS group ``supsci`` selects ``supsci``; membership of the OS group ``sweeps`` se
 counts as "not a member" -- detection never raises.
 """
 from __future__ import annotations
-
-import getpass
 import grp
 import os
+import getpass
 from enum import Enum
 from typing import NamedTuple
-
 from loguru import logger
 
 
@@ -35,6 +32,7 @@ class Mode(str, Enum):
     supsci = 'supsci'
     regular = 'regular'
     sweeps = 'sweeps'
+    default = 'regular'
 
 
 class Backends(NamedTuple):
@@ -49,8 +47,7 @@ class Backends(NamedTuple):
 _BACKENDS: dict[Mode, Backends] = {
     Mode.supsci: Backends(retrieval='jive', pipeline='aips', distribution='jive'),
     Mode.regular: Backends(retrieval='none', pipeline='aips', distribution='none'),
-    Mode.sweeps: Backends(retrieval='sweeps', pipeline='aips', distribution='sweeps'),
-}
+    Mode.sweeps: Backends(retrieval='sweeps', pipeline='aips', distribution='sweeps')}
 
 
 def _username() -> str:
@@ -68,12 +65,13 @@ def _user_groups() -> set[str]:
     login user. Unresolvable gids and lookup failures are skipped, never raised.
     """
     names: set[str] = set()
-    gids = set(os.getgroups())
+    gids: set[int] = set(os.getgroups())
     try:
         if _username():
             gids.add(os.stat(os.path.expanduser('~')).st_gid)  # cheap primary-group hint
     except OSError:
         pass
+
     for gid in gids:
         try:
             names.add(grp.getgrgid(gid).gr_name)
@@ -101,8 +99,10 @@ def detect() -> Mode:
     groups = _user_groups()
     if user == SUPSCI_USER or SUPSCI_GROUP in groups:
         return Mode.supsci
+
     if SWEEPS_GROUP in groups:
         return Mode.sweeps
+
     return Mode.regular
 
 
@@ -116,15 +116,17 @@ def resolve(cli_mode: Mode | str | None = None, stored_mode: Mode | str | None =
         cli_mode: The mode passed on the command line (``--mode``), or None.
         stored_mode: The mode persisted on the experiment state, or None.
     """
-    cli = Mode(cli_mode) if cli_mode is not None else None
-    stored = Mode(stored_mode) if stored_mode is not None else None
+    cli: Mode | None = Mode(cli_mode) if cli_mode is not None else None
+    stored: Mode | None = Mode(stored_mode) if stored_mode is not None else None
     if cli is not None:
         if stored is not None and cli != stored:
             logger.warning(f"Overriding the stored mode '{stored.value}' with '{cli.value}' "
                            "(from --mode); the new mode is persisted for later runs.")
         return cli
+
     if stored is not None:
         return stored
+
     return detect()
 
 
