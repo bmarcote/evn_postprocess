@@ -97,9 +97,12 @@ class Sources(list):
         """
         super().__init__(args)
 
-    @overload
+    # Deliberate deviation from list's Liskov-substitutable __getitem__/__contains__: this
+    # is a name-or-index/object collection by design, used throughout the codebase (e.g.
+    # exp.sources['3C84']). Not fully substitutable for a plain list, hence the ignores below.
+    @overload  # type: ignore[override]
     def __getitem__(self, item: str) -> Source: ...
-    
+
     @overload
     def __getitem__(self, item: int) -> Source: ...
     
@@ -213,9 +216,12 @@ class Antennas(list):
         """
         super().__init__(args)
 
-    @overload
+    # Deliberate deviation from list's Liskov-substitutable __getitem__/__contains__: this
+    # is a name-or-index/object collection by design, used throughout the codebase (e.g.
+    # exp.antennas['Ef']). Not fully substitutable for a plain list, hence the ignores below.
+    @overload  # type: ignore[override]
     def __getitem__(self, item: str) -> Antenna: ...
-    
+
     @overload
     def __getitem__(self, item: int) -> Antenna: ...
     
@@ -242,9 +248,9 @@ class Antennas(list):
         
         return super().__getitem__(item)
 
-    @overload
+    @overload  # type: ignore[override]
     def __contains__(self, item: str) -> bool: ...
-    
+
     @overload
     def __contains__(self, item: Antenna) -> bool: ...
 
@@ -381,14 +387,14 @@ class FreqSetup:
             Number of subbands.
         - nchan : int
             Number of channels per subband.
-        - polarizations : tuple[misc.Stokes]
+        - polarizations : tuple[misc.Stokes, ...]
             Tuple of polarization/Stokes parameters in the observation.
     """
     meanfreq: u.Quantity
     bandwidth: u.Quantity
     nspw: int
     nchan: int
-    polarizations: tuple[misc.Stokes]
+    polarizations: tuple[misc.Stokes, ...]
 
 
 class OperationsProxy:
@@ -707,7 +713,9 @@ class Ms:
                 for a_ss in ss:
                     print(a_ss)
 
-                print(term.move_y(term.height - 3) + \
+                # blessed's stub declares move_y(str); it actually requires an int at runtime
+                # (curses.tparm) and raises TypeError if given a str.
+                print(term.move_y(term.height - 3) +  # type: ignore[arg-type]
                       term.center(term.on_bright_black('press any key to continue (or Q to cancel)')).rstrip())
                 return term.inkey()#.strip()
 

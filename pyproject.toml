@@ -36,6 +36,24 @@ docs = [
     "mkdocstrings-python",
     "pymdown-extensions>=10.21",
 ]
+dev = [
+    "mypy>=1.14",
+]
+
+[tool.mypy]
+python_version = "3.13"
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+# Untyped/partially-stubbed third-party scientific-stack dependencies.
+[[tool.mypy.overrides]]
+module = [
+    "casacore.*", "astropy.*", "loguru.*", "rich.*", "rich_argparse.*", "blessed.*",
+    "jiveplot.*", "vlbiplanobs.*", "pymysql.*", "MySQLdb.*", "PolConvert.*", "casatasks.*",
+    "ply.*", "pyrap.*", "natsort.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

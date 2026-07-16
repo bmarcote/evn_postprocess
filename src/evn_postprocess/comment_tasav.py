@@ -88,8 +88,8 @@ def get_setup(dirs, expname: str):
         freq (GHz), datarate (Mbps), number_ifs, bandwidth (MHz), pols
     """
     with open((dirs.pipe_out / f"{expname}.SCAN"), 'r') as scanfile:
-        freq = None
-        lastline = None
+        freq: float | None = None
+        lastline: str | None = None
         for scanline in scanfile.readlines():
             lastline = scanline
             if 'Freq = ' in scanline:
@@ -111,6 +111,9 @@ def get_setup(dirs, expname: str):
 
         if freq is None:
             raise IOError('The SCAN file does not contain a line with Freq = XXX')
+        # freq is only ever set inside the loop, so reaching here guarantees the loop ran
+        # at least once and lastline was assigned.
+        assert lastline is not None
 
         last_if = lastline.split()
         if len(last_if) == 6:

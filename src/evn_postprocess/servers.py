@@ -40,7 +40,10 @@ class Servers(list[Server]):
         """Returns a list of all server names."""
         return [server.name for server in self]
 
-    def __getitem__(self, key: int | str) -> Server:
+    # Deliberate deviation from list's Liskov-substitutable __getitem__: this is a
+    # name-or-index collection by design (e.g. servers['ccs']), not fully substitutable
+    # for a plain list.
+    def __getitem__(self, key: int | str) -> Server:  # type: ignore[override]
         """Get a server by index (int) or by name (str)."""
         if isinstance(key, int):
             return super().__getitem__(key)

@@ -171,8 +171,8 @@ def get_setup():
     """
     with open('/data/pipe/{}/out/{}.SCAN'.format(args.experiment.lower().split('_')[0],
                                        args.experiment.lower()), 'r') as scanfile:
-        freq = None
-        lastline = None
+        freq: float | None = None
+        lastline: str | None = None
         for scanline in scanfile.readlines():
             lastline = scanline # It will be the last line at the end of the loop. DO NOT JUDGE ME!!!!
             # Getting the frequency and the number of polarizations
@@ -197,7 +197,9 @@ def get_setup():
 
         if freq is None:
             raise IOError('The SCAN file does not contain a line with Freq = XXX')
-
+        # freq is only ever set inside the loop, so reaching here guarantees the loop ran
+        # at least once and lastline was assigned.
+        assert lastline is not None
 
         # The very last line (if not empty) is the last IF with Freq, BW, ch.Sep, and Sideband
         last_if = lastline.split()

@@ -41,7 +41,7 @@ def get_init_files(expname: str, servers, eEVNname: str | None = None) -> bool:
     Returns:
         bool: True if the vex file is present locally after the call.
     """
-    eEVNname: str = expname if eEVNname is None else eEVNname
+    eEVNname = expname if eEVNname is None else eEVNname
     piletter_server = servers['piletters']
     piletter_path = Path(f"{expname.lower()}.piletter")
     main_vex = Path(f"{expname.upper()}.vix")

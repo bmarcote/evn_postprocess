@@ -7,14 +7,14 @@ from rich import print as rprint
 from . import misc
 
 
-def get_polarizations(msfile: str | Path) -> tuple[misc.Stokes]:
+def get_polarizations(msfile: str | Path) -> tuple[misc.Stokes, ...]:
     """Returns the polarizations available in the MS file.
-    
+
     Args:
         msdata (str | Path): Path to Measurement Set file.
-    
+
     Returns:
-        stokes (tuple[misc.Stokes]): Tuple with the Stokes parameters
+        stokes (tuple[misc.Stokes, ...]): Tuple with the Stokes parameters
     """
     with misc.table(msfile, readonly=False) as ms:
         with misc.table(ms.getkeyword('POLARIZATION')) as ms_pol:

@@ -17,11 +17,11 @@ from enum import Enum
 from loguru import logger
 from astropy import units as u
 from astropy import coordinates as coord
-from rich import print as rprint
 import blessed
 from . import vex
 from . import mstools
 from . import process  # cycle: process imports this module; both only use each other at call time
+from . import experiment_state
 from .mode import Mode
 from .policy import Policy
 
@@ -361,10 +361,13 @@ class Antennas(list[Antenna]):
                     low.append(a.name)
         return low
 
-    def __getitem__(self, key: str | int) -> Antenna:
+    # Deliberate deviation from list's Liskov-substitutable __getitem__/__contains__: this
+    # is a name-or-index/object collection by design (e.g. exp.antennas['Ef']), not fully
+    # substitutable for a plain list.
+    def __getitem__(self, key: str | int) -> Antenna:  # type: ignore[override]
         return super().__getitem__(self.names.index(key) if isinstance(key, str) else key)
 
-    def __contains__(self, key: str | Antenna) -> bool:
+    def __contains__(self, key: str | Antenna) -> bool:  # type: ignore[override]
         return key in self.names if isinstance(key, str) else super().__contains__(key)
 
     def __str__(self) -> str:
@@ -565,7 +568,7 @@ class Experiment:
                  lag_bandpass: dict | None = None,
                  pol_diagnostics: dict | None = None,
                  no_lag: bool = False,
-                 policy=None,
+                 policy: Policy | None = None,
                  mode=None):
         self.expname = expname
         self.obsdate = obsdate
@@ -609,15 +612,19 @@ class Experiment:
         # process.polconvert). Runtime-only: decided from the CLI on each run, not persisted.
         self.tconvert_in_eee: bool = True
         self._timerange: list[dt.datetime] | None = None
-        # Policy is set lazily (None means "interactive defaults"). The full Policy
-        # dataclass lives in evn_postprocess.policy and is loaded on demand to avoid
-        # a circular import at module-load time.
-        self.policy = policy
+        # Policy carries the batch/msops decisions from a policy.toml (see
+        # evn_postprocess.policy). None means "interactive defaults".
+        self.policy: Policy | None = policy
         # Operating mode (supsci | regular | sweeps), resolved once at initialization
         # and persisted so a resume never silently switches mode (see evn_postprocess.mode).
         # None means "not resolved yet" (a pre-Phase-2 state file, or a fresh object before
         # the CLI resolves it); callers re-detect in that case.
         self.mode: Mode | None = Mode(mode) if mode is not None else None
+        # The attached experiment toml (see evn_postprocess.experiment_state), set by
+        # inputs.load_experiment / experiment_state.attached_toml. Runtime-only: never
+        # serialized into the JSON checkpoint (to_dict/from_dict), so a resume re-attaches
+        # it from disk rather than trusting a stale copy.
+        self.exp_toml: experiment_state.ExperimentToml | None = None
 
     @property
     def spectral_line(self) -> bool:
@@ -775,7 +782,7 @@ class Experiment:
                     logger.warning(f"Error parsing duration for scan {scanno}: {e}")
                     duration_s = 0
                     
-                stations_scheduled = [s[0] for s in station_entries]
+                stations_scheduled = tuple(s[0] for s in station_entries)
 
                 # Multi-phase-centre correlations list several 'source' entries in the
                 # scan (vex $SCHED); the first one is the primary source.
@@ -907,7 +914,7 @@ class Experiment:
                 'antennas': self.antennas.to_dict() if self.antennas else [],
                 'scans': self.scans.to_dict() if self.scans else [], 'refant': self.refant,
                 'spectral_line': self.spectral_line,
-                'policy': self.policy.to_dict() if getattr(self, 'policy', None) is not None else None,
+                'policy': self.policy.to_dict() if self.policy is not None else None,
                 'correlator_passes': [cp.to_dict() for cp in self.correlator_passes] if self.correlator_passes else [],
                 'lag_pass': self.lag_pass.to_dict() if self.lag_pass else None,
                 'no_lag': self.no_lag,
@@ -999,79 +1006,6 @@ class Experiment:
 
     def __str__(self) -> str:
         return f"<Experiment {self.expname}>"
-
-
-    def print(self):
-        """Pretty print of the full experiment.
-        """
-        print('\n\n')
-        rprint(f"[bold red]Experiment {self.expname.upper()}[/bold red].", sep="\n\n")
-        obsdate_str = self.obsdate.strftime('%d/%m/%Y') if self.obsdate else 'Unknown'
-        if self.timerange:
-            rprint(f"[dim]Obs. date[/dim]: {obsdate_str} "
-                   f"{'-'.join([t.time().strftime('%H:%M') for t in self.timerange])} UTC")
-        else:
-            rprint(f"[dim]Obs. date[/dim]: {obsdate_str}")
-
-        if self.eEVNname is not None:
-            rprint(f"[dim]e-EVN run[/dim]: {self.eEVNname}")
-
-        for a_pi in self.pi:
-            rprint(f"[dim]PI[/dim]: {a_pi.name} ({a_pi.email})")
-        rprint(f"[dim]Password[/dim]: {self.credentials.password}")
-        rprint(f"[dim]Sup. Sci[/dim]: {self.supsci}")
-        rprint(f"[dim]Last run step[/dim]: {self.last_step}")
-        print("\n")
-        rprint("[bold]SETUP[/bold]")
-        # loop over passes
-        for i,a_pass in enumerate(self.correlator_passes):
-            if len(self.correlator_passes) > 1:
-                rprint(f"[bold]Correlator pass #{i}[/bold]")
-
-            if a_pass.freqsetup is not None:
-                rprint(f"Frequency: {a_pass.freqsetup.frequency.to(u.GHz):0.04}")
-                rprint(f"Bandwidth: {a_pass.freqsetup.bandwidth.to(u.MHz):0.04}")
-                rprint(f"{a_pass.freqsetup.subbands} x " \
-                       f"{(a_pass.freqsetup.bandwidth/a_pass.freqsetup.subbands).to(u.MHz).value}-MHz subbands")
-                rprint(f"{a_pass.freqsetup.channels} channels each.")
-                rprint(f"lisfile: [italic]{a_pass.lisfile}[/italic]", sep="\n\n")
-
-        print("\n")
-        rprint("[bold]SOURCES[/bold]")
-        for name,src_type in zip(('Fringe-finder', 'Target', 'Phase-cal'), (SourceType.fringefinder, SourceType.target,
-                                  SourceType.calibrator)):
-            src = [s for s in self.sources if s.type is src_type]
-            rprint(f"{name}{'' if len(src) == 1 else 's'}: [italic]{', '.join([s.name for s in src])}[/italic]")
-
-        print("\n")
-        rprint("[bold]ANTENNAS[/bold]")
-        ant_str = []
-        for ant in self.antennas:
-            if ant.observed:
-                ant_str.append(ant.name)
-            else:
-                ant_str.append(f"[bold red]{ant.name}[/bold red]")
-
-        rprint(f"{', '.join(ant_str)}")
-        if len(self.antennas.polswap) > 0:
-            rprint(f"Polswapped antennas: [italic]{', '.join(self.antennas.polswap)}[/italic]")
-
-        if len(self.antennas.polconvert) > 0:
-            rprint(f"Polconverted antennas: [italic]{', '.join(self.antennas.polconvert)}[/italic]")
-
-        if len(self.antennas.onebit) > 0:
-            rprint(f"Onebit antennas: [italic]{', '.join(self.antennas.onebit)}[/italic]")
-
-        missing_logs = [a.name for a in self.antennas if not a.logfsfile]
-        if len(missing_logs) > 0:
-            rprint(f"Missing log files: [italic]{', '.join(missing_logs)}[/italic]")
-
-        missing_antabs = [a.name for a in self.antennas if not a.antabfsfile]
-        if len(missing_antabs) > 0:
-            rprint(f"Missing ANTAB files: [italic]{', '.join(missing_antabs)}[/italic]")
-
-        print("\n")
-
 
     def print_blessed(self, outputfile: str | None = None, display_in_terminal: bool = True) -> bool:
         """Pretty print of the full experiment with all available data.
@@ -1225,14 +1159,18 @@ class Experiment:
             # In case of antennas not observing the full bandwidth (this may be per correlator pass)
             ss, ss_file = "", []
             try:
-                if len(set([cp.freqsetup.subbands for cp in self.correlator_passes])) == 1:
+                first_freqsetup = self.correlator_passes[0].freqsetup
+                if first_freqsetup is not None and len({cp.freqsetup.subbands for cp
+                        in self.correlator_passes if cp.freqsetup is not None}) == 1:
                     for antenna in self.correlator_passes[0].antennas:
-                        if 0 < len(antenna.subbands) < self.correlator_passes[0].freqsetup.subbands:
+                        if 0 < len(antenna.subbands) < first_freqsetup.subbands:
                             ss += f"    {antenna.name}: {' '*(3*(antenna.subbands[0]))}{antenna.subbands}\n"
                             ss_file += [f"    {antenna.name}: {' '*(3*(antenna.subbands[0]))}{antenna.subbands}"]
                 else:
                     for antenna in self.correlator_passes[0].antennas:
                         for i,a_pass in enumerate(self.correlator_passes):
+                            if a_pass.freqsetup is None:
+                                continue
                             if 0 < len(antenna.subbands) < a_pass.freqsetup.subbands:
                                 ss += f"    {antenna.name}: " \
                                       f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands} " \
@@ -1241,9 +1179,9 @@ class Experiment:
                                             f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands} " \
                                             f"(in correlator pass {a_pass.lisfile})"]
 
-                if ss != "":
+                if ss != "" and first_freqsetup is not None:
                     s += term.bright_black('Antennas with smaller bandwidth:\n')
-                    s += f" Total: {list(range(self.correlator_passes[0].freqsetup.subbands))}\n"
+                    s += f" Total: {list(range(first_freqsetup.subbands))}\n"
                     s += ss
                     s_file += ['Antennas with smaller bandwidth:']
                     s_file += ss_file
@@ -1259,7 +1197,9 @@ class Experiment:
                 for a_ss in ss:
                     print(a_ss)
 
-                print(term.move_y(term.height - 3) + \
+                # blessed's stub declares move_y(str); it actually requires an int at runtime
+                # (curses.tparm) and raises TypeError if given a str.
+                print(term.move_y(term.height - 3) +  # type: ignore[arg-type]
                       term.center(term.on_bright_black('press any key to continue ' \
                                                        '(or Q to cancel)')).rstrip())
                 return term.inkey()#.strip()
