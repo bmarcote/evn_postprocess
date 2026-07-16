@@ -117,7 +117,7 @@ def test_load_experiment_regular(tmp_path, monkeypatch):
     assert exp.eEVNname is None
     assert sorted(exp.antennas.names) == ['Ef', 'Wb']
     assert len(exp.scans) == 1
-    assert exp.scans[0].stations_scheduled == ['Ef', 'Wb']
+    assert exp.scans[0].stations_scheduled == ('Ef', 'Wb')
     assert exp.supsci == 'marcote'                      # toml wins over the argument
     assert exp.pi[0].name == 'Jane Doe'
     from evn_postprocess.experiment import SourceType

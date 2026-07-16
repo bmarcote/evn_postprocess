@@ -426,7 +426,7 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
     return ''.join(stdout_chunks)
 
 
-def remote_file_exists(host: str, path: str,
+def remote_file_exists(host: str, path: str | Path,
                        timeout: Optional[Union[float, int]] = None) -> bool:
     """Checks if a file/glob exists on the remote host.
 

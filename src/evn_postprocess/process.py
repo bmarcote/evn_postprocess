@@ -565,17 +565,17 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
             cross_scans, cross_a1, cross_a2 = scans[cross], ants1[cross], ants2[cross]
             cross_fields, cross_ddids = fields[cross], ddids[cross]
             for i in range(len(cross_scans)):
-                key = (int(cross_scans[i]), int(cross_a1[i]), int(cross_a2[i]))
+                bl_key = (int(cross_scans[i]), int(cross_a1[i]), int(cross_a2[i]))
                 is_ff_row = int(cross_fields[i]) in ff_field_ids
-                if key not in acc_sum:
-                    acc_sum[key] = lag[i].copy()
-                    acc_cnt[key] = 1
-                    acc_ff[key] = is_ff_row
+                if bl_key not in acc_sum:
+                    acc_sum[bl_key] = lag[i].copy()
+                    acc_cnt[bl_key] = 1
+                    acc_ff[bl_key] = is_ff_row
                 else:
-                    acc_sum[key] += lag[i]
-                    acc_cnt[key] += 1
+                    acc_sum[bl_key] += lag[i]
+                    acc_cnt[bl_key] += 1
                 if is_ff_row:
-                    ifkey = (key[0], key[1], key[2], int(cross_ddids[i]))
+                    ifkey = (bl_key[0], bl_key[1], bl_key[2], int(cross_ddids[i]))
                     if ifkey not in acc_if_sum:
                         acc_if_sum[ifkey] = lag[i].copy()
                         acc_if_cnt[ifkey] = 1
@@ -600,11 +600,11 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
         is_ff = acc_ff[(scan, a1i, a2i)]
         snr_max = float(np.max(snr)) if is_ff else 0.0
         for aidx in (a1i, a2i):
-            key = (scan, aidx)
-            if key not in best_snr:
-                best_snr[key] = snr.copy()
+            ant_key = (scan, aidx)
+            if ant_key not in best_snr:
+                best_snr[ant_key] = snr.copy()
             else:
-                np.maximum(best_snr[key], snr, out=best_snr[key])
+                np.maximum(best_snr[ant_key], snr, out=best_snr[ant_key])
             if is_ff:
                 if aidx not in ff_amp_sum:
                     ff_amp_sum[aidx] = np.zeros(spec.shape[1])
@@ -634,12 +634,12 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
         peak = np.max(spec, axis=0)                            # (npol,) fringe-peak per pol
         par = float(np.mean(peak[parallel_idx])) if parallel_idx else float(np.max(peak))
         for aidx in (a1i, a2i):
-            key = (scan, aidx)
-            if key not in bp_amp:
-                bp_amp[key] = np.full(n_spw, np.nan, dtype=float)
-            cur = bp_amp[key][ddid]
+            ant_key = (scan, aidx)
+            if ant_key not in bp_amp:
+                bp_amp[ant_key] = np.full(n_spw, np.nan, dtype=float)
+            cur = bp_amp[ant_key][ddid]
             if np.isnan(cur) or par > cur:        # keep the strongest baseline per IF
-                bp_amp[key][ddid] = par
+                bp_amp[ant_key][ddid] = par
 
     lag_bandpass: dict[str, dict[str, list]] = {}
     for (scan, aidx), amps in bp_amp.items():
@@ -931,10 +931,16 @@ def update_piletter(exp: experiment.Experiment) -> bool:
                                            "recover the absolute EVPA value when using the "
                                            "antenna as reference station during fringe-fitting.\n")
 
-                        ants_bw = {}
-                        if len(set([cp.freqsetup.subbands for cp in exp.correlator_passes])) == 1:
+                        ants_bw: dict[str, list[str]] = {}
+                        first_freqsetup = exp.correlator_passes[0].freqsetup
+                        if any(cp.freqsetup is None for cp in exp.correlator_passes):
+                            logger.warning(f"{exp.expname}: not all correlator passes have a frequency "
+                                           "setup yet; the per-antenna bandwidth-limitation note in the "
+                                           "PI letter may be incomplete.")
+                        if first_freqsetup is not None and len({cp.freqsetup.subbands for cp
+                                in exp.correlator_passes if cp.freqsetup is not None}) == 1:
                             for antenna in exp.correlator_passes[0].antennas:
-                                if 0 < len(antenna.subbands) < exp.correlator_passes[0].freqsetup.subbands:
+                                if 0 < len(antenna.subbands) < first_freqsetup.subbands:
                                     # In case the antenna observed a consecutive number of subbands
                                     ant_sbs = np.array(antenna.subbands)
                                     ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
@@ -945,6 +951,8 @@ def update_piletter(exp: experiment.Experiment) -> bool:
                         else:
                             for antenna in exp.correlator_passes[0].antennas:
                                 for i,a_pass in enumerate(exp.correlator_passes):
+                                    if a_pass.freqsetup is None:
+                                        continue
                                     if 0 < len(antenna.subbands) < a_pass.freqsetup.subbands:
                                         if antenna.name not in ants_bw:
                                             ant_sbs = np.array(antenna.subbands)
@@ -965,9 +973,9 @@ def update_piletter(exp: experiment.Experiment) -> bool:
 
                         if len(ants_bw) > 0:
                             ants_bw_r = defaultdict(list)
-                            for ant in ants_bw:
-                                for sb_range in ants_bw[ant]:
-                                    ants_bw_r[sb_range].append(ant)
+                            for ant_name in ants_bw:
+                                for sb_range in ants_bw[ant_name]:
+                                    ants_bw_r[sb_range].append(ant_name)
 
                             s = "- Note that "
                             for i,ant_r in enumerate(ants_bw_r):
@@ -1559,7 +1567,7 @@ def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
             logger.error("No fringe-finder sources found for polconvert verification.")
             return False
 
-            plotter = plotting.Jplot(ms=pconv_ms, refant=exp.refant[0], calsrc=','.join(calsources))
+        plotter = plotting.Jplot(ms=pconv_ms, refant=exp.refant[0], calsrc=','.join(calsources))
         plotter.create_plot(sources=calsources, plots=['cross'])
 
         # Rename pconv plot files to standard names so they override the previous ones

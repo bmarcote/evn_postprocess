@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 import sys
@@ -20,6 +22,7 @@ from loguru import logger
 import numpy as np
 from astropy import units as u
 from casacore import tables as pt
+from . import experiment  # cycle: experiment->process->plotting; module-form + future annotations
 from . import experiment_state
 from . import review
 from .experiment_state import STATION_STATUSES
@@ -30,8 +33,8 @@ try:
 except ModuleNotFoundError:
     # jiveplot is only required for standardplots / web-dashboard rendering.
     # Defer the failure so the rest of the package (and the tests) can import without it.
-    jplotter = None  # type: ignore[assignment]
-    command = None  # type: ignore[assignment]
+    jplotter = None
+    command = None
     _JIVEPLOT_AVAILABLE = False
 
 
@@ -43,8 +46,6 @@ Version = "$Id: standardplots,v 1.1 2014-08-08 15:38:41 jive_cc Exp $"
 # Single pol data gets coloured black.
 PolCMap = "ckey p[rr]=2 p[ll]=3 p[rl]=4 p[lr]=5 p[none]=1"
 
-# One-liner to split a list of things into two lists, one satisfying the predicate, the other not
-partition = lambda p, l: reduce(lambda y_n, x: (y_n[0]+[x], y_n[1]) if p(x) else (y_n[0], y_n[1]+[x]), l, ([], []))
 # function composition is really great
 compose = lambda *fns: lambda x: reduce(lambda a, f: f(a), reversed(fns), x)
 Map = lambda fn: partial(map, fn)
@@ -1104,7 +1105,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
     plots_dir: Path = Path("plots")
     expname: str = ""
     dashboard_html: str = ""
-    exp: object = None
+    exp: experiment.Experiment | None = None
     # Pipeline feedback page(s): directory holding the {expname}*.html feedback page(s)
     # and their linked products, and the list of page filenames. Empty/None until the
     # pipeline feedback has been generated (see serve_dashboard's pipeline_dir argument).
@@ -1154,9 +1155,17 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
     # run: it may query the feedback database). None means "not computed yet".
     _default_comments: Optional[dict] = None
 
+    def _experiment(self) -> experiment.Experiment:
+        """Returns the served Experiment, set once by serve_dashboard before the HTTP
+        server starts accepting requests; never None while a request is being handled.
+        """
+        if self.__class__.exp is None:
+            raise RuntimeError("_DashboardHandler.exp is not set; serve_dashboard() must run first.")
+        return self.__class__.exp
+
     def _exp_toml(self):
         """Returns the experiment toml of the served experiment, loading it if needed."""
-        return experiment_state.attached_toml(self.__class__.exp)
+        return experiment_state.attached_toml(self._experiment())
 
     def _serve_comments(self):
         """GET /api/comments: general note + per-station comments for the Comments tab.
@@ -1167,7 +1176,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         exp_toml = self._exp_toml()
         if self.__class__._default_comments is None:
             try:
-                self.__class__._default_comments = review.default_station_comments(self.__class__.exp)
+                self.__class__._default_comments = review.default_station_comments(self._experiment())
             except Exception as exc:  # defaults must never break the dashboard
                 logger.warning(f"Could not compute the default station comments: {exc}")
                 self.__class__._default_comments = {}
@@ -1195,7 +1204,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         try:
             # Reload from disk before writing: the paused workflow process may have
             # recorded parameters since this server loaded the toml (lost-update guard).
-            exp_toml = experiment_state.attached_toml(self.__class__.exp, fresh=True)
+            exp_toml = experiment_state.attached_toml(self._experiment(), fresh=True)
             exp_toml.record_comments(general=general, stations=stations)
             exp_toml.save()
         except (experiment_state.ExperimentTomlError, OSError) as exc:
@@ -1218,7 +1227,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._serve_json({"ok": False, "error": str(exc)})
             return
 
-        exp = self.__class__.exp
+        exp = self._experiment()
         # Find the source and get the SourceType enum class from it
         target_src = None
         for src in exp.sources:
@@ -1256,7 +1265,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._serve_json({"ok": False, "error": str(exc)})
             return
 
-        exp = self.__class__.exp
+        exp = self._experiment()
         if new_ref not in exp.antennas.names:
             self._serve_json({"ok": False, "error": f"Antenna '{new_ref}' not in this experiment"})
             return
@@ -1277,7 +1286,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
-    def _serve_json(self, data: dict):
+    def _serve_json(self, data: dict | list):
         """Serve a JSON response."""
         body = json.dumps(data, default=str).encode("utf-8")
         self.send_response(200)

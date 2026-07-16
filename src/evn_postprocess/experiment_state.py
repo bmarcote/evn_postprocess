@@ -25,7 +25,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
@@ -349,7 +349,10 @@ class ExperimentToml:
         """Returns the tomlkit table for a section, creating it if absent."""
         if name not in self.document:
             self.document[name] = tomlkit.table()
-        return self.document[name]
+        # Safe: this class only ever stores a Table under a top-level section key,
+        # either just above or by a previous call; tomlkit's own __getitem__ return
+        # type is a broader union since a document key can hold any TOML item type.
+        return cast(tomlkit.items.Table, self.document[name])
 
     def record_parameters(self, **values: Any) -> None:
         """Records post-processing decisions/results into [postprocess].
@@ -438,11 +441,15 @@ class ExperimentToml:
             return
         if 'pi' not in self.document:
             self.document['pi'] = tomlkit.aot()
+        # Safe: just created above, or from a previous call to this same method; tomlkit's
+        # own __getitem__ return type is a broader union since a document key can hold any
+        # TOML item type.
+        pi_aot = cast(tomlkit.items.AoT, self.document['pi'])
         for entry in new_entries:
             table = tomlkit.table()
             table['name'] = entry.name
             table['email'] = entry.email
-            self.document['pi'].append(table)
+            pi_aot.append(table)
         self._refresh_parsed()
 
     def record_sources(self, classifications: dict[str, str]) -> None:
@@ -465,13 +472,18 @@ class ExperimentToml:
                 continue  # user-set: never overridden by a heuristic
             if name not in table:
                 table[name] = tomlkit.table()
-            table[name]['type'] = srctype
-            table[name]['guessed'] = True
+            # Safe: just created above, or from a previous call to this same method (see
+            # _section_table's cast for why tomlkit's own __getitem__ return type is broader).
+            source_table = cast(tomlkit.items.Table, table[name])
+            source_table['type'] = srctype
+            source_table['guessed'] = True
         self._refresh_parsed()
 
     def _refresh_parsed(self) -> None:
         """Re-parses the section attributes from the (mutated) tomlkit document."""
-        self.__init__(self.path, self.document)  # noqa: PLC2801 -- deliberate re-init
+        # ExperimentToml has no subclasses, so re-invoking __init__ directly here is safe
+        # despite mypy's general (LSP-motivated) caution about the pattern.
+        self.__init__(self.path, self.document)  # type: ignore[misc]  # noqa: PLC2801 -- deliberate re-init
 
     def save(self, path: Path | None = None) -> None:
         """Writes the document atomically (temp file in the same directory, then rename).

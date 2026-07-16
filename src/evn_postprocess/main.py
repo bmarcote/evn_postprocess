@@ -116,7 +116,7 @@ help_edit = """[bold]Edit some of the parameters related to the experiment[/bold
 
 
 help_info = """[bold]Shows the info related to the given experiment
-(all what postprocess knows until the presentmoment).[/bold]
+(all what postprocess knows until the present moment).[/bold]
 
 It will also write this information down into a 'notes.md' file is this does not exist.
 
@@ -212,7 +212,7 @@ def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
                 a_pass.sources[src_name].type = src_type
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
                                      formatter_class=RawTextRichHelpFormatter)
     parser.add_argument('-e', '--expname', type=str, default=None, \
@@ -480,12 +480,13 @@ def main():
                 rprint(f"[bold]Operating mode[/bold]: {exp.mode.value}")
             # Show the values sourced from the experiment toml, marked with
             # their origin so they are distinguishable from vex/lis metadata.
-            toml_lines = experiment_state.summary_lines(exp.exp_toml)
-            if toml_lines:
-                rprint(f"\n[bold]From the experiment file "
-                       f"{exp.exp_toml.path.name}:[/bold]")
-                for line in toml_lines:
-                    print(f"  {line}")  # plain print: lines may contain [brackets]
+            if exp.exp_toml is not None:
+                toml_lines = experiment_state.summary_lines(exp.exp_toml)
+                if toml_lines:
+                    rprint(f"\n[bold]From the experiment file "
+                           f"{exp.exp_toml.path.name}:[/bold]")
+                    for line in toml_lines:
+                        print(f"  {line}")  # plain print: lines may contain [brackets]
     elif args.subpar == 'list' or args.subpar == 'last':
         try:
             workflow.list_tasks(expname, print_docs=True)

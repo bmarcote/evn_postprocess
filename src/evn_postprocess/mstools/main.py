@@ -5,7 +5,7 @@ import traceback
 import argparse
 from rich.console import Console
 from rich_argparse import RichHelpFormatter
-from . import misc, msdata, operations
+from . import misc, mounts, msdata, operations
 
 console = Console()
 
@@ -138,13 +138,13 @@ def main():
                 case 'srcname':
                     operations.change_source_name(args.msfile, args.src_name, args.new_name)
                 case 'print_mounts':
-                    operations.print_mounts(args.msfile)
+                    mounts.print_mounts(args.msfile)
                 case 'modify_mounts':
-                    operations.modify_mounts(args.msfile, args.antenna, args.mount)
+                    mounts.modify_mounts(args.msfile, args.antenna, args.mount)
                 case 'ysfocus':
-                    operations.fix_yebes_mount(args.msfile)
+                    mounts.fix_yebes_mount(args.msfile)
                 case 'hofocus':
-                    operations.fix_hobart_mount(args.msfile)
+                    mounts.fix_hobart_mount(args.msfile)
                 case _:
                     console.print(f"[bold red]Option '{args.tool}' does not exist[/bold red]")
                     sys.exit(1)

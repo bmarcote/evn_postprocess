@@ -11,7 +11,7 @@ import glob
 import shutil
 import traceback
 from pathlib import Path
-from typing import Callable
+from typing import Callable, overload
 from dataclasses import dataclass
 from loguru import logger
 from rich import print as rprint
@@ -45,7 +45,7 @@ def _backends(exp: experiment.Experiment) -> _mode.Backends:
     somehow absent (a step reached directly on a pre-Phase-2 checkpoint), it is
     re-detected from the OS so selection never fails for lack of a stored value.
     """
-    return _mode.backends_for((exp.mode if getattr(exp, 'mode', None) is not None else _mode.detect()))
+    return _mode.backends_for(exp.mode if exp.mode is not None else _mode.detect())
 
 _RICH_TAG_RE = re.compile(r'\[/?[\w\s#.,;:!?=-]+\]')
 _stdout_console = Console(highlight=False)
@@ -238,6 +238,10 @@ _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
 _STEP_ALIASES = {'archive': 'distribute'}
 
 
+@overload
+def _resolve_step_alias(name: str) -> str: ...
+@overload
+def _resolve_step_alias(name: None) -> None: ...
 def _resolve_step_alias(name: str | None) -> str | None:
     """Maps a deprecated step name to its current name (warns once), passing others through."""
     if name in _STEP_ALIASES:
@@ -637,8 +641,18 @@ def _apply_toml_msops(exp: experiment.Experiment) -> None:
     Mirrors dialog.PolicyDriven.askMSoperations, sourcing the values from the toml
     [postprocess] section instead of the policy (the toml wins per the precedence rule).
     Antennas named in the toml but not part of the observation log a warning.
+
+    Raises:
+        RuntimeError: If weight_threshold is unset. The caller (msops) only calls this
+            after _toml_msops_available confirmed it, but _exp_toml reloads fresh from
+            disk, so a concurrent edit (e.g. from the dashboard) between the two calls
+            could remove it; this must not silently pass None into FlagWeight.
     """
     post = _exp_toml(exp).postprocess
+    if post.weight_threshold is None:
+        raise RuntimeError(f"{exp.expname}: postprocess.weight_threshold is no longer set in "
+                           "the experiment toml (it may have changed since the availability "
+                           "check); re-run msops.")
     for a_pass in exp.correlator_passes:
         existing = a_pass.flagged_weights
         if existing and existing.threshold == post.weight_threshold and existing.percentage >= 0:
@@ -1289,14 +1303,14 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
             return
 
         ms_files = [p.msfile for p in exp.correlator_passes]
-        lis_files = [p.lisfile for p in exp.correlator_passes]
+        pass_lisfiles = [p.lisfile for p in exp.correlator_passes]
 
         if len([f for f in ms_files if f.exists()]) < len(ms_files):
             _reset_from('j2ms2', "MS file(s) missing on disk")
             return
 
         # Timestamp check: MS must be newer than lis files
-        if _oldest_mtime(ms_files) < _newest_mtime(lis_files):
+        if _oldest_mtime(ms_files) < _newest_mtime(pass_lisfiles):
             _remove_stale(ms_files)
             _reset_from('j2ms2', "MS file(s) older than lis input(s)")
             return
@@ -1316,7 +1330,7 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
     # (msops itself modifies the MS files in place and has no distinct output file to check;
     # the FITS-IDI files are produced by the separate tconvert step.)
     if 'tconvert' in step_names and all_steps[step_names.index('tconvert')].done:
-        idi_files = []
+        idi_files: list[Path] = []
         for p in (exp.correlator_passes or []):
             idi_files.extend(Path('.').glob(f"{p.fitsidifile}*"))
         ms_files = [p.msfile for p in exp.correlator_passes] if exp.correlator_passes else []
