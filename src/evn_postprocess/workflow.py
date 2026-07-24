@@ -260,7 +260,6 @@ def create_folder_structure() -> experiment.Dirs:
     return inputs.create_folder_structure()
 
 
-
 def initialize_experiment(expname: str, supsci: str, mode: Mode) -> experiment.Experiment:
     """Initializes an experiment object with all the metadata derived from the .vex file.
 
