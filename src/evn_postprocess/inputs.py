@@ -18,12 +18,9 @@ All parse failures raise :class:`InputsError` naming the file (and line, when th
 parser provides it).
 """
 from __future__ import annotations
-
 import datetime as dt
 from pathlib import Path
-
 from loguru import logger
-
 from . import experiment
 from . import experiment_state
 from . import lisfiles
@@ -32,7 +29,7 @@ from . import vex
 
 
 # Extensions under which the observation vex file may appear, in preference order.
-VEX_EXTENSIONS = ('vix', 'vex', 'vox', 'vax')
+VEX_EXTENSIONS = ('vox', 'vix', 'vex', 'vax')
 # The canonical local name the rest of the package expects (Experiment.vixfile).
 VEX_DATETIME_FORMAT = '%Yy%jd%Hh%Mm%Ss'
 

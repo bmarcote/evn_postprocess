@@ -6,7 +6,6 @@ perform required changes in intermediate files.
 
 """
 from __future__ import annotations
-
 import os
 import re
 import glob
@@ -15,6 +14,7 @@ import random
 import traceback
 from typing import Optional, Union
 from pathlib import Path
+from itertools import product
 from collections import defaultdict
 from datetime import datetime, timedelta
 import shutil
@@ -27,17 +27,11 @@ from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
 from concurrent.futures import ThreadPoolExecutor
-
-# casatasks (CASA) is only present in the polconvert-verification environment; the
-# post_polconvert step raises a clear error when it is needed but missing.
-try:
-    import casatasks
-except ImportError:
-    casatasks = None
+import casatasks
 from . import experiment, utils, mstools
-from . import lisfiles  # cycle: lisfiles imports this module; both only use each other at call time
+from . import lisfiles
 from . import servers as _servers
-from . import plotting  # module-form: cycle via experiment; names resolved at call time
+from . import plotting
 # polconvert_main kept for future use once version compatibility is resolved.
 # from .scripts.polconvert import main as polconvert_main
 from .scripts import find_idi_with_time as find_idi_mod
@@ -60,10 +54,8 @@ _LINEAR_RATIO_LOW: float = 0.5
 _PARALLEL_POLS: frozenset[str] = frozenset({'RR', 'LL', 'XX', 'YY'})
 _CROSS_POLS: frozenset[str] = frozenset({'RL', 'LR', 'XY', 'YX'})
 
-# --- tConvert configuration ------------------------------------------------------------
 # _TCONVERT_BIN = "tConvert"  # This will be the one to use once we certify the following one works
 _TCONVERT_BIN = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert"
-
 # Temporary workaround (see _tconvert_in_eee): the system tConvert is currently broken, so by
 # default the tconvert step runs on eee instead. Where the MS / FITS-IDI files are staged there:
 _EEE_TCONVERT_TEMP = Path("/data0/temp")
@@ -72,24 +64,22 @@ _EEE_TCONVERT_TEMP = Path("/data0/temp")
 _EEE_RSYNC_TIMEOUT_S = int(os.environ.get("EVN_EEE_RSYNC_TIMEOUT_S", str(6 * 3600)))
 _EEE_TCONVERT_TIMEOUT_S = int(os.environ.get("EVN_EEE_TCONVERT_TIMEOUT_S", str(8 * 3600)))
 
-# --- PolConvert configuration ----------------------------------------------------------
-# PolConvert is run locally (see :func:`polconvert`). It occasionally crashes with a
-# segmentation fault (a known upstream bug under revision); because it runs in a subprocess,
+# It occasionally crashes with a segmentation fault; because it runs in a subprocess,
 # a crash returns a negative exit code instead of killing post-processing, so the same
 # attempt is simply retried up to this many extra times before moving on.
-_POLCONVERT_SEGFAULT_RETRIES: int = 2
+_POLCONVERT_SEGFAULT_RETRIES: int = 3
 # A converted solution is accepted when, in every IF, the parallel-to-cross fringe-peak
 # amplitude ratio (RR+LL)/(RL+LR) on the reference baseline exceeds this value. A failed/linear
 # solution leaves the four products comparable (ratio ~1); a real conversion lifts it well above.
-_POLCONVERT_MIN_RATIO: float = 3.0
+_POLCONVERT_MIN_RATIO: float = 2
 # The reference antenna is chosen as the flattest-bandpass antenna among the *well-detected*
 # ones: only antennas whose lag SNR reaches this fraction of the best candidate's SNR compete
 # on flatness. Without the gate, flatness (a coefficient of variation) is dominated by noise on
 # weak antennas, which would pick a low-SNR station over a strong, equally-flat one.
 _POLCONVERT_REFANT_SNR_FRACTION: float = 0.5
 # Default bandpass-solution parameters written into the PolConvert input file.
-_POLCONVERT_CHANAVG: int = 16
-_POLCONVERT_TIMEAVG_S: int = 20
+_POLCONVERT_CHANAVG: int = 32
+_POLCONVERT_TIMEAVG_S: int = 60
 _POLCONVERT_SOLVE_WEIGHT: float = 0.1
 
 
@@ -119,7 +109,7 @@ def archive(exp: experiment.Experiment) -> bool:
 
 
 def getdata(exp: experiment.Experiment) -> bool:
-    """Gets the data into eee from all existing .lis files from the given experiment.
+    """Gets the data from all existing .lis files from the given experiment.
 
     Args:
         exp (experiment.Experiment): Experiment object with correlator passes.
@@ -1496,25 +1486,31 @@ def polconvert(exp: experiment.Experiment) -> bool:
             scatter = _refant_bandpass_scatter(exp, refant, scan_key, sorted(subbands))
             logger.info(f"PolConvert attempt: linants={lin_ants}, refant={refant} "
                         f"(bandpass scatter {scatter:.3f}), exclude={exclude_ants}, IFs={do_ifs}.")
-            template_file = _write_polconvert_template(
-                exp, ref_idi, lin_ants, refant, exclude_ants, do_ifs, time_range,
-                _POLCONVERT_CHANAVG, _POLCONVERT_TIMEAVG_S, _POLCONVERT_SOLVE_WEIGHT, logdir)
-            tried += 1
+            for time_avg, chan_avg, solve_weight in product((60, 30, 20, 10), (16, 32, 8), (0.01, 0.00001, 0.1, 0.001)):
+                template_file = _write_polconvert_template(exp, ref_idi, lin_ants, refant, exclude_ants, do_ifs,
+                                                            time_range, time_avg=time_avg, chan_avg=chan_avg,
+                                                           solve_weight=solve_weight, logdir=logdir)
+                tried += 1
 
-            if _run_polconvert_cli(template_file, '--compute') != 0:
-                continue
-            if not _check_fringe_peaks(logdir):
-                logger.info(f"Solution with refant {refant} on scan {scan.scanno} is not good "
-                            "enough; trying the next reference antenna.")
-                continue
+                if _run_polconvert_cli(template_file, '--compute') != 0:
+                    # Trying second time as Ivan's code failes every other time due to mem issues...
+                    if _run_polconvert_cli(template_file, '--compute') != 0:
+                        continue
 
-            logger.info(f"Good PolConvert solution: scan {scan.scanno}, refant {refant}. "
-                        "Applying it to all FITS-IDI files.")
-            if _run_polconvert_cli(template_file, '--apply') != 0:
-                logger.error("PolConvert --apply failed after a good --compute. Stopping.")
-                return False
-            exp.store()
-            return True
+                if not _check_fringe_peaks(logdir):
+                    logger.info(f"Solution with refant {refant} on scan {scan.scanno} is not good "
+                                "enough; trying the next reference antenna.")
+                    continue
+
+                logger.info(f"Good PolConvert solution: scan {scan.scanno}, refant {refant}. "
+                            "Applying it to all FITS-IDI files.")
+                if _run_polconvert_cli(template_file, '--apply') != 0:
+                    if _run_polconvert_cli(template_file, '--apply') != 0:
+                        logger.error("PolConvert --apply failed after a good --compute. Stopping.")
+                        return False
+
+                exp.store()
+                return True
 
     logger.error(f"PolConvert could not reach a good solution after {tried} attempt(s) over "
                  f"{len(ff_scans)} fringe-finder scan(s). Inspect {logdir} or run it manually.")
