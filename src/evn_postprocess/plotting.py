@@ -26,16 +26,7 @@ from . import experiment  # cycle: experiment->process->plotting; module-form + 
 from . import experiment_state
 from . import review
 from .experiment_state import STATION_STATUSES
-
-try:
-    from jiveplot import jplotter, command  # noqa: F401  (re-exported for module callers)
-    _JIVEPLOT_AVAILABLE = True
-except ModuleNotFoundError:
-    # jiveplot is only required for standardplots / web-dashboard rendering.
-    # Defer the failure so the rest of the package (and the tests) can import without it.
-    jplotter = None
-    command = None
-    _JIVEPLOT_AVAILABLE = False
+from jiveplot import jplotter, command  # noqa: F401  (re-exported for module callers)
 
 
 # program default(s)
@@ -65,8 +56,8 @@ def mkerrf(pfx):
         print("{0} {1}".format(pfx, msg))
         sys.exit(-1)
     return actualerrf
-if _JIVEPLOT_AVAILABLE:
-    jplotter.hvutil.mkerrf = mkerrf
+
+jplotter.hvutil.mkerrf = mkerrf
 
 def chunkert(f, l, cs, verbose=True):
     while f<l:
@@ -113,14 +104,14 @@ class Jplot:
         # Determine the best subband for time plots
         self.subbandNo = self._find_best_subband()
         print(f"Subband {self.subbandNo} selected for amp & phase VS time plot.")
-    
+
     def cleanup(self):
         """Clean up temporary files."""
         try:
             os.unlink(self.tempFileName)
         except OSError:
             pass  # File might not exist
-    
+
     def _find_best_subband(self) -> int:
         """Find the subband with most antenna coverage."""
         ants_spws = self._get_observed_subbands()
@@ -683,12 +674,14 @@ def _build_dashboard_html() -> str:
   /* Tabs (right panel) */
   .tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.8rem; border-bottom: 1px solid var(--border); }
   /* flex: 0 0 auto + white-space: nowrap keep every tab label fully visible: buttons
-     never shrink to zero width or clip their text when another tab is selected. */
+     never shrink to zero width or clip their text when another tab is selected.
+     No opacity dimming: unselected tab names must stay fully readable at all times. */
   .tab { flex: 0 0 auto; white-space: nowrap; background: transparent; color: var(--text);
-         border: none; border-bottom: 2px solid transparent; padding: 0.5rem 1rem;
-         font-size: 1.1rem; cursor: pointer; font-family: inherit; opacity: 0.6; }
-  .tab:hover { opacity: 1; }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; opacity: 1; }
+         border: none; border-radius: 6px 6px 0 0; padding: 0.5rem 1rem;
+         font-size: 1.1rem; cursor: pointer; font-family: inherit; }
+  .tab:hover { background: var(--header-bg); }
+  /* Selected tab is filled with the window highlight color (--accent purple). */
+  .tab.active { background: var(--accent); color: var(--bg); font-weight: 600; }
   .tab-view { height: calc(100% - 3rem); }
   #pipeline-frame { width: 100%; height: 100%; min-height: 75vh; border: 1px solid var(--border);
                     border-radius: 4px; background: #fff; }
@@ -707,7 +700,7 @@ def _build_dashboard_html() -> str:
   <!-- Right panel: comments / standard-plots / pipeline tabs -->
   <div class="panel" id="plots-panel">
     <!-- Tab order: Comments, Standard Plots, Pipeline. All three buttons are always
-         visible; the selected one is marked with the .active underline (see .tab CSS).
+         visible; the selected one is filled with the accent color (see .tab.active CSS).
          Standard Plots is the default; loadPipeline() switches to Pipeline once its
          feedback page exists. -->
     <div class="tabs">
