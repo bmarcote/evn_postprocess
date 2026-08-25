@@ -2,10 +2,12 @@
 
 Covers the helpers that replaced the old "most scheduled stations" heuristic:
   * _scan_lag_score / _rank_fringefinder_scans   (scan picked by real lag SNR),
-  * _refant_bandpass_scatter / _rank_polconvert_refants
-                                                 (reference = non-linear, full-IF, flattest),
+  * _polconvert_solve_scans                      (fringe-finders with a fringe on the linear
+                                                 antenna, else the phase calibrators),
+  * _polconvert_time_ranges                      (last minute / scan minus its first minute),
+  * _polconvert_refant                           (reference = non-linear, full-IF, strongest),
   * _polconvert_exclude_ants, _check_fringe_peaks, _run_polconvert_cli (segfault retry),
-  * end-to-end process.polconvert() selection,
+  * end-to-end process.polconvert() selection and the bounds of its parameter search,
   * persistence of the new exp.lag_bandpass field.
 
 The scenario mirrors EZ041A: Ef is linear (PolConvert), Mc/O8 are circular full-band, Wb only
@@ -110,30 +112,115 @@ class TestRefantSelection:
         # Missing data -> inf (so antennas with data are always preferred).
         assert process._refant_bandpass_scatter(exp, "Nope", "18", IFS) == float("inf")
 
-    def test_rank_excludes_linear_and_partial_band_picks_flattest(self, tmp_path):
+    def test_refant_is_the_strongest_valid_fringe(self, tmp_path):
+        # Mc (SNR 419) beats O8 (286) even though the experiment refant order lists O8 first.
         exp = _make_exp(tmp_path)
-        refants = process._rank_polconvert_refants(exp, ["Ef"], set(IFS), "18")
-        assert "Ef" not in refants          # the linear antenna cannot reference itself
-        assert "Wb" not in refants          # does not cover all IFs to convert
-        assert "Cm" not in refants          # not observed
-        assert refants == ["Mc", "O8"]      # flattest bandpass first, despite refant priority
+        assert process._polconvert_refant(exp, ["Ef"], set(IFS), "18") == "Mc"
 
-    def test_snr_gate_keeps_weak_ultraflat_antenna_from_winning(self, tmp_path):
-        # Jb is observed, full-band and the *flattest* of all, but far weaker (SNR 113 vs 419).
-        # The SNR gate must keep it from outranking the strong, flat Mc (mirrors EZ041A).
+    def test_refant_skips_linear_partial_band_and_unobserved(self, tmp_path):
+        # Ef is the strongest of all (SNR 410) but is the antenna being converted; Wb is strong
+        # too (286) but only covers half the IFs; Cm never observed.
         exp = _make_exp(tmp_path)
-        exp.antennas.append(experiment.Antenna("Jb", observed=True, subbands=tuple(IFS)))
-        exp.lag_snr["18"]["Jb"] = {"RR": 113.0, "LL": 113.0, "RL": 5.0, "LR": 5.0}
-        exp.lag_bandpass["18"]["Jb"] = [1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000]
-        refants = process._rank_polconvert_refants(exp, ["Ef"], set(IFS), "18")
-        assert refants[0] == "Mc"               # strong + flat wins
-        assert refants.index("Mc") < refants.index("Jb")   # weak ultra-flat ranked below
+        exp.lag_snr["18"]["Mc"] = {"RR": 5.0, "LL": 5.0}      # demote the usual winner
+        exp.lag_snr["18"]["O8"] = {"RR": 6.0, "LL": 6.0}
+        refant = process._polconvert_refant(exp, ["Ef"], set(IFS), "18")
+        assert refant == "O8"                                  # strongest full-band, non-linear
+
+    def test_refant_is_none_when_nothing_qualifies(self, tmp_path):
+        exp = _make_exp(tmp_path)
+        assert process._polconvert_refant(exp, ["Ef", "Mc", "O8"], set(IFS), "18") is None
+
+    def test_refant_falls_back_to_experiment_order_without_lag_data(self, tmp_path):
+        exp = _make_exp(tmp_path)
+        exp.lag_snr = {}
+        # exp.refant is ["Ef", "O8", "Wb", "Mc"]; Ef is linear and Wb partial-band, so O8 wins.
+        assert process._polconvert_refant(exp, ["Ef"], set(IFS), "18") == "O8"
 
     def test_exclude_ants_drops_unobserved_and_partial_band(self, tmp_path):
         exp = _make_exp(tmp_path)
-        excl = process._polconvert_exclude_ants(exp, ["Ef"], "Mc", set(IFS))
+        excl = process._polconvert_exclude_ants(exp, ["Ef"], "Mc", set(IFS), "18")
         assert excl == ["Cm", "Wb"]
         assert "Ef" not in excl and "Mc" not in excl and "O8" not in excl
+
+    def test_exclude_ants_drops_weak_fringes(self, tmp_path):
+        # O8 is full-band but below _POLCONVERT_SOLVE_MIN_SNR on this scan -> out of the solve.
+        exp = _make_exp(tmp_path)
+        exp.lag_snr["18"]["O8"] = {"RR": 2.0, "LL": 1.5, "RL": 0.5, "LR": 0.5}
+        excl = process._polconvert_exclude_ants(exp, ["Ef"], "Mc", set(IFS), "18")
+        assert excl == ["Cm", "O8", "Wb"]
+
+    def test_exclude_ants_keeps_weak_refant_and_linear_antennas(self, tmp_path):
+        # The reference and the antennas being converted are never excluded on SNR grounds.
+        exp = _make_exp(tmp_path)
+        exp.lag_snr["18"]["Mc"] = {"RR": 1.0, "LL": 1.0}
+        exp.lag_snr["18"]["Ef"] = {"RR": 1.0, "LL": 1.0}
+        excl = process._polconvert_exclude_ants(exp, ["Ef"], "Mc", set(IFS), "18")
+        assert "Mc" not in excl and "Ef" not in excl
+
+    def test_exclude_ants_skips_snr_filter_without_lag_data(self, tmp_path):
+        # A --no-lag run has no SNR at all: every antenna would read 0.0, so the filter is off.
+        exp = _make_exp(tmp_path)
+        exp.lag_snr = {}
+        excl = process._polconvert_exclude_ants(exp, ["Ef"], "Mc", set(IFS), "18")
+        assert excl == ["Cm", "Wb"]
+
+
+# --- solve-scan selection ----------------------------------------------------------------
+
+class TestSolveScanSelection:
+    def test_uses_fringefinder_scans_with_a_linear_fringe(self, tmp_path):
+        exp = _make_exp(tmp_path)
+        scans = process._polconvert_solve_scans(exp, ["Ef"])
+        # Only No0018 was correlated; No0003 has no lag SNR at all.
+        assert [s.scanno for s in scans] == ["No0018"]
+
+    def test_falls_back_to_phase_calibrator_scans(self, tmp_path):
+        # Ef shows no fringe on any fringe-finder scan, but does on a phase-cal scan.
+        exp = _make_exp(tmp_path)
+        exp.scans.append(experiment.Scan("No0025", dt.datetime(2026, 6, 25, 14, 10), 300,
+                                         "J1112+07", stations_scheduled=("Ef", "Mc", "O8"),
+                                         stations_observed=("Ef", "Mc", "O8")))
+        exp.lag_snr["18"]["Ef"] = {"RR": 2.0, "LL": 2.0}          # no fringe on the FF scan
+        exp.lag_snr["25"] = {"Ef": {"RR": 50.0, "LL": 50.0}, "Mc": {"RR": 60.0, "LL": 60.0}}
+        scans = process._polconvert_solve_scans(exp, ["Ef"])
+        assert [s.scanno for s in scans] == ["No0025"]
+
+    def test_empty_when_the_linear_antenna_never_fringes(self, tmp_path):
+        exp = _make_exp(tmp_path)
+        exp.lag_snr["18"]["Ef"] = {"RR": 1.0, "LL": 1.0}
+        assert process._polconvert_solve_scans(exp, ["Ef"]) == []
+
+    def test_falls_back_to_plain_ranking_without_lag_data(self, tmp_path):
+        exp = _make_exp(tmp_path)
+        exp.lag_snr = {}
+        scans = process._polconvert_solve_scans(exp, ["Ef"])
+        assert [s.scanno for s in scans] == ["No0003", "No0018"]   # scheduled-station order
+
+
+# --- solve time ranges -------------------------------------------------------------------
+
+class TestSolveTimeRanges:
+    def test_last_minute_then_scan_without_its_first_minute(self, tmp_path):
+        exp = _make_exp(tmp_path)
+        scan = exp.scans[1]                       # No0018: 13:40:00 + 220 s -> 13:43:40
+        ranges = process._polconvert_time_ranges(scan, exp.obsdate)
+        assert ranges == [[0, 13, 42, 40, 0, 13, 43, 40],     # last minute
+                          [0, 13, 41, 0, 0, 13, 43, 40]]      # all but the first minute
+
+    def test_short_scan_keeps_its_full_range(self, tmp_path):
+        exp = _make_exp(tmp_path)
+        scan = experiment.Scan("No0099", dt.datetime(2026, 6, 25, 13, 40), 45, "4C39.25",
+                               stations_scheduled=("Ef", "Mc"))
+        assert process._polconvert_time_ranges(scan, exp.obsdate) == \
+            [[0, 13, 40, 0, 0, 13, 40, 45]]
+
+    def test_day_counter_rolls_over_midnight(self, tmp_path):
+        exp = _make_exp(tmp_path)
+        scan = experiment.Scan("No0099", dt.datetime(2026, 6, 25, 23, 58), 300, "4C39.25",
+                               stations_scheduled=("Ef", "Mc"))
+        ranges = process._polconvert_time_ranges(scan, exp.obsdate)
+        assert ranges == [[1, 0, 2, 0, 1, 0, 3, 0],
+                          [0, 23, 59, 0, 1, 0, 3, 0]]
 
 
 # --- solution quality check -------------------------------------------------------------
@@ -222,6 +309,46 @@ class TestPolconvertIntegration:
         # time_range must be scan No0018 (13:4x), not the phantom No0003 (09:xx).
         assert captured["time_range"][1] == 13
         assert modes == ["--compute", "--apply"]          # computed, accepted, then applied
+
+    def test_search_space_is_bounded_and_ordered(self, tmp_path, monkeypatch):
+        """A search that never converges stays inside the declared parameter space.
+
+        The old search also looped over every candidate reference antenna, so a non-converging
+        run took hours; the space is now one reference antenna x two time ranges x
+        doweight x timeavg x chanavg per scan.
+        """
+        exp = _make_exp(tmp_path)
+        attempts: list[tuple] = []
+
+        def fake_write(exp, ref_idi, lin_ants, refant, exclude_ants, do_ifs, time_range,
+                       chan_avg, time_avg, solve_weight, logdir,
+                       output_file=Path('polconvert_inputs.toml')):
+            attempts.append((refant, tuple(time_range), solve_weight, time_avg, chan_avg))
+            return Path('polconvert_inputs.toml')
+
+        monkeypatch.setattr(process, "_write_polconvert_template", fake_write)
+        monkeypatch.setattr(process, "_run_polconvert_cli", lambda tmpl, mode: 0)
+        monkeypatch.setattr(process, "_check_fringe_peaks", lambda logdir='polconvert_logs': False)
+        monkeypatch.setattr(process.find_idi_mod, "find_idi_with_time",
+                            lambda idi_files, aipstime, verbose=False: "ez041a_1_1.IDI1")
+        monkeypatch.setattr(process.glob, "glob",
+                            lambda pat: [] if "PCONVERT" in pat else
+                            (["ez041a_1_1.IDI1"] if "IDI" in pat else []))
+
+        assert process.polconvert(exp) is False          # never converges
+
+        # One usable scan (No0018) x 2 time ranges x 3 doweights x 4 timeavgs x 3 chanavgs.
+        assert len(attempts) == 1 * 2 * 3 * 4 * 3 == 72
+        assert {a[0] for a in attempts} == {"Mc"}                      # a single reference antenna
+        assert len({a[1] for a in attempts}) == 2                      # the two time ranges
+        assert {a[2] for a in attempts} == {0.1, 0.01, 0.001}          # doweight
+        assert {a[3] for a in attempts} == {10, 20, 30, 60}            # time averaging (s)
+        assert {a[4] for a in attempts} == {8, 16, 32}                 # channel averaging
+        # Cheapest-first within a time range, doweight slowest-varying.
+        assert attempts[0][2:] == (0.1, 10, 8)
+        assert attempts[1][2:] == (0.1, 10, 16)
+        assert attempts[3][2:] == (0.1, 20, 8)
+        assert attempts[12][2:] == (0.01, 10, 8)
 
 
 # --- persistence ------------------------------------------------------------------------

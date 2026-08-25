@@ -72,15 +72,24 @@ _POLCONVERT_SEGFAULT_RETRIES: int = 3
 # amplitude ratio (RR+LL)/(RL+LR) on the reference baseline exceeds this value. A failed/linear
 # solution leaves the four products comparable (ratio ~1); a real conversion lifts it well above.
 _POLCONVERT_MIN_RATIO: float = 2
-# The reference antenna is chosen as the flattest-bandpass antenna among the *well-detected*
-# ones: only antennas whose lag SNR reaches this fraction of the best candidate's SNR compete
-# on flatness. Without the gate, flatness (a coefficient of variation) is dominated by noise on
-# weak antennas, which would pick a low-SNR station over a strong, equally-flat one.
-_POLCONVERT_REFANT_SNR_FRACTION: float = 0.5
 # Default bandpass-solution parameters written into the PolConvert input file.
 _POLCONVERT_CHANAVG: int = 32
 _POLCONVERT_TIMEAVG_S: int = 60
 _POLCONVERT_SOLVE_WEIGHT: float = 0.1
+# --- PolConvert solution search --------------------------------------------------------
+# An antenna only joins the solve if its fringe on the solve scan reaches this lag SNR. It is
+# lower than _POL_MIN_SNR because that one gates the *diagnosis* of linear feeds (where a wrong
+# call is costly), while here a baseline just has to carry usable signal.
+_POLCONVERT_SOLVE_MIN_SNR: float = 3.0
+# Minutes trimmed off the scan before solving: antennas are often still settling at the start.
+# A scan must last longer than this for the trim to leave a usable range.
+_POLCONVERT_TRIM_MIN: int = 1
+# Parameter space of the search, tried in this nesting order for each (scan, time range). It is
+# deliberately small: the previous search also looped over every candidate reference antenna and
+# took hours to give up when no solution existed.
+_POLCONVERT_DOWEIGHTS: tuple[float, ...] = (0.1, 0.01, 0.001)
+_POLCONVERT_TIMEAVGS_S: tuple[int, ...] = (10, 20, 30, 60)
+_POLCONVERT_CHANAVGS: tuple[int, ...] = (8, 16, 32)
 
 
 def archive(exp: experiment.Experiment) -> bool:
@@ -484,8 +493,8 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
     as a detection (every antenna SNR > 7).
 
     For the fringe-finder scans it additionally records, per antenna, the parallel-hand
-    fringe-peak amplitude in each IF (``exp.lag_bandpass``), which drives the PolConvert
-    reference-antenna choice (flattest bandpass; see :func:`_rank_polconvert_refants`).
+    fringe-peak amplitude in each IF (``exp.lag_bandpass``), reported alongside the PolConvert
+    reference antenna as a bandpass-flatness diagnostic (see :func:`_refant_bandpass_scatter`).
 
     Args:
         exp: Experiment object. Results stored in ``exp.lag_snr``, ``exp.lag_bandpass``
@@ -615,8 +624,8 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
 
     # Per-antenna bandpass on the fringe-finder scans: the parallel-hand (RR/LL) fringe-peak
     # amplitude in each IF, taken on the antenna's strongest baseline for that IF. The PolConvert
-    # reference antenna is later chosen as the non-linear antenna whose amplitudes vary least
-    # across IFs (flattest bandpass); see _rank_polconvert_refants.
+    # reference antenna is chosen on fringe strength, and this is logged next to it as a
+    # bandpass-flatness diagnostic; see _refant_bandpass_scatter.
     parallel_idx = [i for i, l in enumerate(pol_labels) if l in _PARALLEL_POLS]
     bp_amp: dict[tuple[int, int], np.ndarray] = {}  # (scan, antenna) -> per-IF amplitude
     for (scan, a1i, a2i, ddid), spec_sum in acc_if_sum.items():
@@ -1156,34 +1165,52 @@ def _get_all_fringefinder_scans(exp: experiment.Experiment) -> list[experiment.S
     return ff_scans
 
 
-def _scan_to_aips_timerange(scan: experiment.Scan, obsdate, trim_start_min: int = 1, trim_end_min: int = 0) -> list[int]:
-    """Convert a scan's time range to AIPS format with optional trimming.
+def _aips_timerange(start: datetime, end: datetime, obsdate) -> list[int]:
+    """Convert a start/end datetime pair to the AIPS 8-element time range.
 
-    AIPS format: [day_start, hour, minute, second, day_end, hour_end, minute_end, second_end]
-    where day is days since the beginning of the observation (0 if same day).
+    AIPS format: ``[day, hour, minute, second, day, hour, minute, second]`` where day counts
+    from the beginning of the observation (0 on the first day).
 
     Args:
-        scan: Scan object with starttime (datetime) and duration_s (int).
-        obsdate: Observation start date (datetime.date).
-        trim_start_min: Minutes to remove from the scan start.
-        trim_end_min: Minutes to remove from the scan end.
+        start: Range start.
+        end: Range end.
+        obsdate: Observation start date (datetime.date), the origin of the day counter.
 
     Returns:
         8-element list in AIPS time format.
     """
     obs_midnight = datetime.combine(obsdate, datetime.min.time())
-    start = scan.starttime + timedelta(minutes=trim_start_min)
-    end = scan.starttime + timedelta(seconds=scan.duration_s) - timedelta(minutes=trim_end_min)
 
-    def _to_aips(t):
-        total_sec = int((t - obs_midnight).total_seconds())
-        days = total_sec // 86400
-        remainder = total_sec % 86400
-        hours = remainder // 3600
-        remainder = remainder % 3600
-        return [days, hours, (remainder // 60), (remainder % 60)]
+    def _to_aips(t: datetime) -> list[int]:
+        days, rem = divmod(int((t - obs_midnight).total_seconds()), 86400)
+        hours, rem = divmod(rem, 3600)
+        return [days, hours, rem // 60, rem % 60]
 
     return _to_aips(start) + _to_aips(end)
+
+
+def _polconvert_time_ranges(scan: experiment.Scan, obsdate) -> list[list[int]]:
+    """Tentative time ranges to solve the PolConvert bandpass on, best-first, for one scan.
+
+    Both candidates drop the first minute of the scan, where antennas are frequently still
+    settling: first the last minute alone (short, and the most stable part of the scan), then
+    everything after that first minute. A scan no longer than the trim cannot give either, so
+    it contributes its full range unchanged.
+
+    Args:
+        scan: Scan object (starttime + duration_s as scheduled in the vex).
+        obsdate: Observation start date (datetime.date).
+
+    Returns:
+        List of 8-element AIPS time ranges, in the order they should be tried.
+    """
+    trim = timedelta(minutes=_POLCONVERT_TRIM_MIN)
+    start = scan.starttime
+    end = scan.starttime + timedelta(seconds=scan.duration_s)
+    if scan.duration_s <= trim.total_seconds():
+        return [_aips_timerange(start, end, obsdate)]
+    return [_aips_timerange(end - trim, end, obsdate),
+            _aips_timerange(start + trim, end, obsdate)]
 
 
 def _write_polconvert_template(exp: experiment.Experiment, ref_idi: str, lin_ants: list, refant: str,
@@ -1245,6 +1272,21 @@ def _scan_number(scan: experiment.Scan) -> Optional[int]:
         return None
 
 
+def _ant_scan_snr(exp: experiment.Experiment, ant: str, scan_key: str) -> float:
+    """Best-polarization lag SNR of *ant* on one scan (0.0 when it has no lag data).
+
+    Args:
+        exp: Experiment object (reads ``exp.lag_snr``).
+        ant: Antenna name.
+        scan_key: MS scan number as a string (see :func:`_scan_number`).
+
+    Returns:
+        The maximum SNR over polarizations, or 0.0 if the antenna or the scan is unknown.
+    """
+    snrs = exp.lag_snr.get(scan_key, {}).get(ant, {})
+    return max(snrs.values()) if snrs else 0.0
+
+
 def _scan_lag_score(exp: experiment.Experiment, scan: experiment.Scan) -> tuple[int, float]:
     """Score a fringe-finder scan from the lag-MS SNR: ``(#antennas detected, summed SNR)``.
 
@@ -1299,57 +1341,99 @@ def _refant_bandpass_scatter(exp: experiment.Experiment, ant: str, scan_key: str
     return float(np.std(arr) / mean) if mean > 0 else float('inf')
 
 
-def _rank_polconvert_refants(exp: experiment.Experiment, lin_ants: list[str],
-                             subbands: set[int], scan_key: str) -> list[str]:
-    """PolConvert reference-antenna candidates, best-first.
+def _polconvert_refant(exp: experiment.Experiment, lin_ants: list[str], subbands: set[int],
+                       scan_key: str) -> Optional[str]:
+    """Reference antenna for the PolConvert solve: the strongest fringe on the solve scan.
 
-    A candidate must be (1) observed, (2) NOT one of the linear antennas being converted
-    (otherwise the conversion would reference itself), and (3) cover every IF (subband) that
-    has to be converted. The best reference is then the flattest bandpass (smallest per-IF
-    amplitude scatter) *among the well-detected candidates* — those whose lag SNR reaches
-    ``_POLCONVERT_REFANT_SNR_FRACTION`` of the best candidate's SNR. Gating on SNR first is
-    essential: the flatness metric is noise-dominated for weak antennas, so without it a
-    low-SNR station can edge out a strong, equally-flat one (e.g. on EZ041A pure flatness picks
-    Jb at SNR 113 over Mc at SNR 419). Below-gate candidates are kept as lower-priority
-    fallbacks ordered by SNR; the experiment ``refant`` order is the final tie-breaker. Without
-    any lag data the result degrades gracefully to that ``refant`` order.
+    A candidate must be (1) observed, (2) NOT one of the linear antennas being converted (the
+    conversion cannot reference itself), and (3) cover every IF that has to be converted. The
+    candidate with the highest lag SNR on this scan wins; the experiment ``refant`` order breaks
+    ties and decides on its own when no lag data is available.
+
+    Args:
+        exp: Experiment object.
+        lin_ants: Linear-polarization antennas being converted.
+        subbands: IFs (0-indexed) that have to be converted.
+        scan_key: MS scan number of the solve scan, as a string.
+
+    Returns:
+        The reference antenna name, or None when no antenna qualifies.
     """
-    ifs = sorted(subbands)
-    snr_by_ant = exp.lag_snr.get(scan_key, {})
-
-    def _snr(ant: str) -> float:
-        d = snr_by_ant.get(ant, {})
-        return max(d.values()) if d else 0.0
-
     candidates = [a.name for a in exp.antennas
                   if a.observed and a.name not in lin_ants and subbands.issubset(set(a.subbands))]
     if not candidates:
-        return []
+        return None
     priority = {name: i for i, name in enumerate(exp.refant or [])}
-    # gate must be computed before the sort: list.sort() empties the list while it runs,
-    # so it cannot be inlined into _key.
-    gate = max(_POL_MIN_SNR, _POLCONVERT_REFANT_SNR_FRACTION * max(_snr(a) for a in candidates))
+    return max(candidates, key=lambda a: (_ant_scan_snr(exp, a, scan_key),
+                                          -priority.get(a, len(priority))))
 
-    def _key(ant: str):
-        sensitive = _snr(ant) >= gate
-        # Sensitive antennas first, ranked by flatness; the rest after, ranked by SNR.
-        return (0 if sensitive else 1,
-                _refant_bandpass_scatter(exp, ant, scan_key, ifs) if sensitive else 0.0,
-                -_snr(ant), priority.get(ant, len(priority)))
 
-    candidates.sort(key=_key)
-    return candidates
+def _polconvert_solve_scans(exp: experiment.Experiment, lin_ants: list[str]) -> list[experiment.Scan]:
+    """Scans on which the PolConvert bandpass can be solved, best-first.
+
+    The fringe-finder scans where at least one linear antenna being converted shows a strong
+    fringe (lag SNR >= ``_POL_MIN_SNR``); if no fringe-finder scan qualifies, the phase
+    calibrator scans that do. Both are ordered by :func:`_scan_lag_score` (most antennas
+    detected, then summed SNR). Without any lag data nothing can be filtered, so the plain
+    fringe-finder ranking is returned.
+
+    Args:
+        exp: Experiment object.
+        lin_ants: Linear-polarization antennas being converted.
+
+    Returns:
+        Scans to try, in order; empty when no scan shows a fringe on the linear antenna(s).
+    """
+    if not exp.lag_snr:
+        return _rank_fringefinder_scans(exp)
+
+    def _with_linear_fringe(sources: list[str]) -> list[experiment.Scan]:
+        scans = [s for s in exp.scans if s.source in sources
+                 and max((_ant_scan_snr(exp, a, str(_scan_number(s))) for a in lin_ants),
+                         default=0.0) >= _POL_MIN_SNR]
+        return sorted(scans, key=lambda s: _scan_lag_score(exp, s), reverse=True)
+
+    if ff_scans := _with_linear_fringe(exp.sources.fringefinder):
+        return ff_scans
+    if cal_scans := _with_linear_fringe(exp.sources.calibrator):
+        logger.info("No fringe-finder scan shows a strong fringe on the linear antenna(s); "
+                    "falling back to the phase-calibrator scans.")
+        return cal_scans
+    return []
 
 
 def _polconvert_exclude_ants(exp: experiment.Experiment, lin_ants: list[str], refant: str,
-                             subbands: set[int]) -> list[str]:
-    """Antennas to exclude from the PolConvert solve: those not observed, plus observed ones
-    (other than the reference or a linear antenna) that did not record every IF to convert."""
+                             subbands: set[int], scan_key: Optional[str]) -> list[str]:
+    """Antennas to leave out of the PolConvert solve.
+
+    Dropped: antennas that did not observe, those that did not record every IF the linear
+    antenna covers, and those whose fringe on the solve scan is below
+    ``_POLCONVERT_SOLVE_MIN_SNR``. The reference antenna and the linear antennas being
+    converted are always kept, whatever their coverage or SNR.
+
+    Args:
+        exp: Experiment object.
+        lin_ants: Linear-polarization antennas being converted.
+        refant: Reference antenna of the solve.
+        subbands: IFs (0-indexed) that have to be converted.
+        scan_key: MS scan number of the solve scan, as a string. The SNR filter is skipped
+            when it is None or the scan has no lag data at all (e.g. a ``--no-lag`` run),
+            since every antenna would then read as 0.0 and be excluded.
+
+    Returns:
+        Sorted list of antenna names to exclude.
+    """
+    # None whenever the SNR filter must be skipped, so the lookup below stays well-typed.
+    snr_key = scan_key if (scan_key is not None and exp.lag_snr.get(scan_key)) else None
     exclude: list[str] = []
     for ant in exp.antennas:
         if not ant.observed:
             exclude.append(ant.name)
-        elif ant.name not in lin_ants and ant.name != refant and not subbands.issubset(set(ant.subbands)):
+        elif ant.name in lin_ants or ant.name == refant:
+            continue
+        elif not subbands.issubset(set(ant.subbands)):
+            exclude.append(ant.name)
+        elif snr_key is not None and _ant_scan_snr(exp, ant.name, snr_key) < _POLCONVERT_SOLVE_MIN_SNR:
             exclude.append(ant.name)
     return sorted(set(exclude))
 
@@ -1414,20 +1498,25 @@ def _run_polconvert_cli(template_file: Path, mode: str) -> int:
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
-    """Run PolConvert locally, auto-selecting the scan and reference antenna.
+    """Run PolConvert locally, auto-selecting the scan, time range and reference antenna.
 
-    Linear-polarization antennas (``exp.antennas.polconvert``) are converted to circular using:
+    Linear-polarization antennas (``exp.antennas.polconvert``) are converted to circular. The
+    search is deliberately narrow, so that failing to converge costs minutes rather than hours:
 
-      * the fringe-finder scan with the most detected antennas and the highest lag SNR
-        (:func:`_rank_fringefinder_scans`), and
-      * a reference antenna that is circular (not one of the linear antennas), records every IF
-        to convert, and has the flattest bandpass across those IFs
-        (:func:`_rank_polconvert_refants`).
+      * scans: fringe-finder scans where a linear antenna actually shows a strong fringe,
+        falling back to the phase calibrators (:func:`_polconvert_solve_scans`);
+      * time ranges: two per scan, the last minute and everything after the first minute
+        (:func:`_polconvert_time_ranges`);
+      * reference antenna: one per scan, the circular full-band antenna with the strongest
+        fringe (:func:`_polconvert_refant`), with weak / partial-band antennas excluded from
+        the solve (:func:`_polconvert_exclude_ants`);
+      * solution parameters: ``doweight`` x time averaging x channel averaging
+        (``_POLCONVERT_DOWEIGHTS`` x ``_POLCONVERT_TIMEAVGS_S`` x ``_POLCONVERT_CHANAVGS``).
 
-    For each (scan, reference) candidate it runs ``polconvert.py --compute`` (retrying transient
-    segfaults), checks the FRINGE.PEAKS ``(RR+LL)/(RL+LR)`` ratio per IF, and on success applies
-    the solution to every FITS-IDI file with ``--apply``. A candidate that does not yield a good
-    solution falls through to the next reference antenna, then the next scan.
+    Each combination runs ``polconvert.py --compute`` (retrying transient segfaults) and is
+    accepted on the FRINGE.PEAKS ``(RR+LL)/(RL+LR)`` ratio per IF. The first accepted solution
+    is applied to every FITS-IDI file with ``--apply``; otherwise the search moves on to the
+    next parameter set, then the next time range, then the next scan.
 
     Args:
         exp: Experiment object.
@@ -1455,41 +1544,42 @@ def polconvert(exp: experiment.Experiment) -> bool:
         logger.error("No FITS-IDI files found for PolConvert.")
         return False
 
-    ff_scans = _rank_fringefinder_scans(exp)
-    if not ff_scans:
-        logger.error("No fringe-finder scans found for PolConvert.")
+    scans = _polconvert_solve_scans(exp, lin_ants)
+    if not scans:
+        logger.error(f"No fringe-finder or phase-calibrator scan shows a fringe on {', '.join(lin_ants)}; "
+                     "cannot solve PolConvert automatically.")
         return False
 
     logdir = 'polconvert_logs'
     tried = 0
-    for scan in ff_scans:
+    for scan in scans:
         scan_key = str(_scan_number(scan))
-        time_range = _scan_to_aips_timerange(scan, exp.obsdate)
-        ref_idi = find_idi_mod.find_idi_with_time(idi_files=idi_files, aipstime=time_range[:4],
-                                                  verbose=False)
-        if ref_idi is None:
-            logger.debug(f"No FITS-IDI covers scan {scan.scanno} ({time_range[:4]}); skipping.")
-            continue
-
-        refants = _rank_polconvert_refants(exp, lin_ants, subbands, scan_key)
-        if not refants:
+        refant = _polconvert_refant(exp, lin_ants, subbands, scan_key)
+        if refant is None:
             logger.warning(f"No circular reference antenna covers all IFs on scan {scan.scanno}.")
             continue
 
+        exclude_ants = _polconvert_exclude_ants(exp, lin_ants, refant, subbands, scan_key)
+        scatter = _refant_bandpass_scatter(exp, refant, scan_key, sorted(subbands))
         n_det, snr_sum = _scan_lag_score(exp, scan)
-        logger.info(f"PolConvert: scan {scan.scanno} on {scan.source} "
-                    f"({n_det} antennas detected, SNR sum {snr_sum}); "
-                    f"reference-antenna order: {', '.join(refants)}.")
+        logger.info(f"PolConvert: scan {scan.scanno} on {scan.source} ({n_det} antennas detected, "
+                    f"SNR sum {snr_sum}); linants={lin_ants}, refant={refant} "
+                    f"(SNR {_ant_scan_snr(exp, refant, scan_key):.1f}, bandpass scatter {scatter:.3f}), "
+                    f"exclude={exclude_ants}, IFs={do_ifs}.")
 
-        for refant in refants:
-            exclude_ants = _polconvert_exclude_ants(exp, lin_ants, refant, subbands)
-            scatter = _refant_bandpass_scatter(exp, refant, scan_key, sorted(subbands))
-            logger.info(f"PolConvert attempt: linants={lin_ants}, refant={refant} "
-                        f"(bandpass scatter {scatter:.3f}), exclude={exclude_ants}, IFs={do_ifs}.")
-            for time_avg, chan_avg, solve_weight in product((60, 30, 20, 10), (16, 32, 8), (0.01, 0.00001, 0.1, 0.001)):
-                template_file = _write_polconvert_template(exp, ref_idi, lin_ants, refant, exclude_ants, do_ifs,
-                                                            time_range, time_avg=time_avg, chan_avg=chan_avg,
-                                                           solve_weight=solve_weight, logdir=logdir)
+        for time_range in _polconvert_time_ranges(scan, exp.obsdate):
+            ref_idi = find_idi_mod.find_idi_with_time(idi_files=idi_files, aipstime=time_range[:4],
+                                                      verbose=False)
+            if ref_idi is None:
+                logger.debug(f"No FITS-IDI covers {time_range[:4]} on scan {scan.scanno}; skipping.")
+                continue
+
+            for solve_weight, time_avg, chan_avg in product(_POLCONVERT_DOWEIGHTS, _POLCONVERT_TIMEAVGS_S,
+                                                            _POLCONVERT_CHANAVGS):
+                template_file = _write_polconvert_template(exp, ref_idi, lin_ants, refant, exclude_ants,
+                                                           do_ifs, time_range, time_avg=time_avg,
+                                                           chan_avg=chan_avg, solve_weight=solve_weight,
+                                                           logdir=logdir)
                 tried += 1
 
                 if _run_polconvert_cli(template_file, '--compute') != 0:
@@ -1498,12 +1588,13 @@ def polconvert(exp: experiment.Experiment) -> bool:
                         continue
 
                 if not _check_fringe_peaks(logdir):
-                    logger.info(f"Solution with refant {refant} on scan {scan.scanno} is not good "
-                                "enough; trying the next reference antenna.")
+                    logger.debug(f"Scan {scan.scanno} {time_range}: no good solution with "
+                                 f"doweight={solve_weight}, timeavg={time_avg}s, chanavg={chan_avg}.")
                     continue
 
-                logger.info(f"Good PolConvert solution: scan {scan.scanno}, refant {refant}. "
-                            "Applying it to all FITS-IDI files.")
+                logger.info(f"Good PolConvert solution: scan {scan.scanno}, refant {refant}, "
+                            f"time range {time_range}, doweight={solve_weight}, timeavg={time_avg}s, "
+                            f"chanavg={chan_avg}. Applying it to all FITS-IDI files.")
                 if _run_polconvert_cli(template_file, '--apply') != 0:
                     if _run_polconvert_cli(template_file, '--apply') != 0:
                         logger.error("PolConvert --apply failed after a good --compute. Stopping.")
@@ -1513,7 +1604,7 @@ def polconvert(exp: experiment.Experiment) -> bool:
                 return True
 
     logger.error(f"PolConvert could not reach a good solution after {tried} attempt(s) over "
-                 f"{len(ff_scans)} fringe-finder scan(s). Inspect {logdir} or run it manually.")
+                 f"{len(scans)} scan(s). Inspect {logdir} or run it manually.")
     return False
 
 
