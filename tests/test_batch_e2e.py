@@ -144,3 +144,28 @@ def test_step_failure_notifies_and_is_resumable(tmp_path, engine, monkeypatch):
     assert workflow.run_workflow(exp) is False                  # -> caller exits non-zero
     assert any('FAILED' in body for _, body in notified)        # operator notified
     assert 'tconvert' not in {s.name for s in exp.steps if s.done}  # resumable
+
+
+def test_resume_continues_after_last_done_step_not_at_earlier_gap(tmp_path, engine, monkeypatch):
+    """A step fixed by hand and followed by an explicit later run must not be re-queued.
+
+    Reproduces the reported bug: polconvert fails, the operator runs it manually and then
+    `postprocess run post_polconvert`, so polconvert stays pending while post_polconvert is
+    done.  The next plain `postprocess run` must continue at standardplots2, not go back.
+    """
+    exp = make_exp(tmp_path)
+    monkeypatch.setattr(workflow, 'polconvert', lambda e: False)   # always fails in the workflow
+    assert workflow.run_workflow(exp) is False
+    done = {s.name for s in exp.steps if s.done}
+    assert 'tconvert' in done and 'polconvert' not in done
+
+    # Operator fixes PolConvert outside the workflow and runs only the next step explicitly.
+    workflow.run_workflow(exp, from_step='post_polconvert', to_step='post_polconvert')
+    done = {s.name for s in exp.steps if s.done}
+    assert 'post_polconvert' in done and 'polconvert' not in done  # the gap stays pending
+
+    # Plain resume: continues after post_polconvert, bypassing the polconvert gap.
+    engine.clear()
+    assert workflow.run_workflow(exp) is True
+    assert 'polconvert' not in engine
+    assert engine[0] == 'standardplots2'

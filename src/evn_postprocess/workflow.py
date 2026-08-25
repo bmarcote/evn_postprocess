@@ -1458,9 +1458,11 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
                  from_step: str | None = None, to_step: str | None = None):
     """Run the workflow for the given experiment.
 
-    When from_step is None the workflow resumes: steps already marked done are skipped and
-    execution begins at the first pending step.  When from_step is given the workflow re-runs
-    from that step, resetting the done flag for it and all subsequent steps.
+    When from_step is None the workflow resumes: execution begins at the step right after the
+    last one marked done.  Pending steps *before* that frontier (left behind when the operator
+    fixed a failed step by hand and continued from a later one) are bypassed, not re-run.  When
+    from_step is given the workflow re-runs from that step, resetting the done flag for it and
+    all subsequent steps.
 
     Args:
         exp: The experiment object.
@@ -1505,7 +1507,7 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
 
         steps_to_run = all_steps[from_idx:(step_names.index(to_step) + 1 if to_step is not None else len(all_steps))]
     else:
-        # Resume: restore stored done state and only queue steps that are not yet done
+        # Resume: restore stored done state and continue after the last completed step
         if stored_steps:
             stored_done = {s.name: s.done for s in stored_steps}
             for s in all_steps:
@@ -1513,7 +1515,20 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
         _validate_outputs(exp, all_steps)
         exp.steps = all_steps
         exp.store()
-        steps_to_run = [s for s in all_steps if not s.done]
+        # Resume from the step *after* the last one marked done, NOT from the first pending one.
+        # An operator who runs a failed step by hand and then continues with a later one (e.g.
+        # polconvert manually, then `postprocess run post_polconvert`) leaves a gap of pending
+        # steps behind that frontier; re-running them would redo work that has already been
+        # superseded. They are reported as bypassed instead. `postprocess run STEP` remains the
+        # explicit way to go back.
+        last_done = max((i for i, s in enumerate(all_steps) if s.done), default=-1)
+        bypassed = [s.name for s in all_steps[:last_done + 1] if not s.done]
+        if bypassed:
+            logger.info(f"[yellow]Resuming after '{all_steps[last_done].name}' (the last completed step). "
+                        f"Bypassing earlier steps never completed through the workflow: "
+                        f"{', '.join(bypassed)}. Use `postprocess run {bypassed[0]}` to re-run from "
+                        f"there.[/yellow]")
+        steps_to_run = all_steps[last_done + 1:]
 
     if not steps_to_run:
         rprint("[yellow]No pending steps — the post-processing is already complete.[/yellow]")
