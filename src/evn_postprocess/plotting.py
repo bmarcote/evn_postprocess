@@ -12,6 +12,8 @@ import collections
 import mimetypes
 import http.server
 import threading
+import datetime as dt
+from importlib import resources
 from operator import methodcaller
 from functools import reduce, partial
 from urllib.parse import unquote
@@ -528,6 +530,30 @@ def _find_available_port(start: int = 8050, end: int = 8150) -> int:
     raise RuntimeError(f"No available port found in range {start}-{end}")
 
 
+def _format_scan_timerange(scan) -> str:
+    """Return the observing time range of *scan*, as scheduled in the vex $SCHED block.
+
+    Used as the tooltip of every row of the dashboard scan-overview table. The end time
+    repeats the date only when the scan crosses midnight, and a scan whose duration could
+    not be parsed from the vex file (duration_s == 0) shows its start time alone.
+
+    Args:
+        scan: experiment.Scan object (starttime + duration_s come straight from the vex).
+
+    Returns:
+        e.g. "21/05/2024 10:23:00-10:29:00 UTC (6.0 min)"; "" if the scan has no start time.
+    """
+    if scan.starttime is None:
+        return ""
+    start_str = scan.starttime.strftime('%d/%m/%Y %H:%M:%S')
+    if not scan.duration_s:
+        return f"{start_str} UTC"
+    end = scan.starttime + dt.timedelta(seconds=scan.duration_s)
+    end_str = end.strftime('%H:%M:%S' if end.date() == scan.starttime.date() else '%d/%m/%Y %H:%M:%S')
+    duration = f"{scan.duration_s} s" if scan.duration_s < 60 else f"{scan.duration_s / 60:.1f} min"
+    return f"{start_str}-{end_str} UTC ({duration})"
+
+
 def _build_experiment_summary(exp) -> dict:
     """Extract experiment metadata into a plain dict for the dashboard JSON API.
 
@@ -596,7 +622,8 @@ def _build_experiment_summary(exp) -> dict:
     for scan in exp.scans:
         scheduled = set(scan.stations_scheduled)
         observed = set(scan.stations_observed)
-        row: dict = {"scanno": scan.scanno, "source": scan.source, "antennas": {}}
+        row: dict = {"scanno": scan.scanno, "source": scan.source, "antennas": {},
+                     "timerange": _format_scan_timerange(scan)}
         for ant in all_antennas:
             if ant in scheduled:
                 row["antennas"][ant] = "observed" if ant in observed else "missing"
@@ -610,476 +637,55 @@ def _build_experiment_summary(exp) -> dict:
     return summary
 
 
-def _build_dashboard_html() -> str:
+# Dashboard page skeleton (HTML + CSS + JS). A plain text file so it can be edited
+# without touching Python; see _build_dashboard_html for the placeholder contract.
+_DASHBOARD_TEMPLATE = "dashboard.html.template"
+_DASHBOARD_PLACEHOLDER_RE = re.compile(r"\{\{[A-Z_]+\}\}")
+
+
+def _build_dashboard_html(exp) -> str:
     """Return the full HTML/CSS/JS for the experiment dashboard single-page app.
 
-    The page fetches /api/summary and /api/plots from the embedded HTTP server,
-    then renders an experiment overview on the left column and a plot viewer with
-    selectors on the right column.
+    The page skeleton lives in ``templates/dashboard.html.template`` and is read from
+    there at serve time, so its markup, CSS and JS can be edited as ordinary text
+    without touching this module.
+
+    Placeholders in that file use double braces (``{{EXPNAME}}``) instead of the single
+    braces of the other templates: the file is full of JavaScript that uses ``{...}``
+    blocks and ``${...}`` template literals, and only the exact tokens listed in
+    *replacements* below are substituted, so the JS is never touched.
+
+    Everything else the page shows is fetched at runtime from /api/summary and
+    /api/plots; the placeholders cover only what must already be right before the first
+    fetch returns (the browser tab title and the header).
+
+    Args:
+        exp: experiment.Experiment object supplying the placeholder values.
 
     Returns:
-        HTML string.
+        HTML string with every placeholder replaced.
+
+    Raises:
+        RuntimeError: if the template still holds an unknown ``{{NAME}}`` placeholder, or
+            no longer mentions every experiment_state.STATION_STATUSES value.
     """
-    html = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EVN Post-Processing Dashboard</title>
-<style>
-  :root { --bg: #1e1e2e; --surface: #2a2a3c; --border: #3a3a4c; --text: #e0e0e8;
-           --accent: #7c8dff; --green: #50c878; --red: #ff6b6b; --dim: #888; --header-bg: #252538; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); }
-  header { background: var(--header-bg); padding: 1rem 2rem; border-bottom: 2px solid var(--accent);
-           display: flex; align-items: center; gap: 1rem; }
-  header h1 { font-size: 1.4rem; font-weight: 600; }
-  header h1 span { color: var(--accent); }
-  .container { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 1rem; height: calc(100vh - 60px); }
-  .panel { background: var(--surface); border-radius: 8px; border: 1px solid var(--border);
-           overflow-y: auto; padding: 1rem; }
-  .panel h2 { font-size: 1.1rem; color: var(--accent); margin-bottom: 0.8rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
-  .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; }
-  .info-grid .label { color: var(--dim); font-weight: 500; white-space: nowrap; }
-  .info-grid .value { word-break: break-all; }
-  .info-grid .value a { color: var(--accent); text-decoration: none; }
-  .section { margin-top: 1rem; }
-  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin: 2px; }
-  .tag-green { background: #1a3a2a; color: var(--green); }
-  .tag-red { background: #3a1a1a; color: var(--red); }
-  .tag-blue { background: #1a2a3a; color: var(--accent); }
-  .tag-dim { background: #2a2a2a; color: var(--dim); }
-  /* Scan table */
-  .scan-table-wrap { overflow-x: auto; max-height: 400px; overflow-y: auto; margin-top: 0.5rem; }
-  .scan-table { border-collapse: collapse; font-size: 0.75rem; width: 100%; }
-  .scan-table th, .scan-table td { padding: 3px 6px; border: 1px solid var(--border); text-align: center; white-space: nowrap; }
-  .scan-table th { background: var(--header-bg); position: sticky; top: 0; z-index: 1; }
-  .scan-table .cell-obs { background: #1a4a2a; color: var(--green); font-weight: bold; }
-  .scan-table .cell-warn { background: #4a3a1a; color: #f0c040; font-weight: bold; }
-  .scan-table .cell-miss { background: #4a1a1a; color: var(--red); font-weight: bold; }
-  .scan-table .cell-na { color: var(--border); }
-  .src-fringefinder { color: #48dbfb; font-weight: 600; }
-  .src-target { color: #ff9f43; font-weight: 600; }
-  .src-calibrator { color: #feca57; font-weight: 600; }
-  .src-other { color: var(--dim); }
-  .scan-table th.ant-missing { color: var(--red); }
-  /* Right panel: plots */
-  .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
-  .controls label { font-size: 0.85rem; color: var(--dim); }
-  .controls select { background: var(--bg); color: var(--text); border: 1px solid var(--border);
-                     border-radius: 4px; padding: 4px 8px; font-size: 0.85rem; }
-  #plot-img { max-width: 100%; border-radius: 4px; border: 1px solid var(--border); display: block; margin: 0 auto; }
-  #plot-placeholder { text-align: center; color: var(--dim); padding: 3rem; }
-  .footer-note { text-align: center; color: var(--dim); font-size: 0.8rem; margin-top: 1rem; }
-  /* Tabs (right panel) */
-  .tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.8rem; border-bottom: 1px solid var(--border); }
-  /* flex: 0 0 auto + white-space: nowrap keep every tab label fully visible: buttons
-     never shrink to zero width or clip their text when another tab is selected.
-     No opacity dimming: unselected tab names must stay fully readable at all times. */
-  .tab { flex: 0 0 auto; white-space: nowrap; background: transparent; color: var(--text);
-         border: none; border-radius: 6px 6px 0 0; padding: 0.5rem 1rem;
-         font-size: 1.1rem; cursor: pointer; font-family: inherit; }
-  .tab:hover { background: var(--header-bg); }
-  /* Selected tab is filled with the window highlight color (--accent purple). */
-  .tab.active { background: var(--accent); color: var(--bg); font-weight: 600; }
-  .tab-view { height: calc(100% - 3rem); }
-  #pipeline-frame { width: 100%; height: 100%; min-height: 75vh; border: 1px solid var(--border);
-                    border-radius: 4px; background: #fff; }
-</style>
-</head>
-<body>
-<header>
-  <h1><span>EVN Post-Processing Dashboard</span></h1>
-</header>
-<div class="container">
-  <!-- Left panel: experiment summary -->
-  <div class="panel" id="summary-panel">
-    <h2>Experiment Summary</h2>
-    <div id="summary-content"><p style="color:var(--dim)">Loading...</p></div>
-  </div>
-  <!-- Right panel: comments / standard-plots / pipeline tabs -->
-  <div class="panel" id="plots-panel">
-    <!-- Tab order: Comments, Standard Plots, Pipeline. All three buttons are always
-         visible; the selected one is filled with the accent color (see .tab.active CSS).
-         Standard Plots is the default; loadPipeline() switches to Pipeline once its
-         feedback page exists. -->
-    <div class="tabs">
-      <button class="tab" id="tab-comments" onclick="showTab('comments')">Comments</button>
-      <button class="tab active" id="tab-plots" onclick="showTab('plots')">Standard Plots</button>
-      <button class="tab" id="tab-pipeline" onclick="showTab('pipeline')">Pipeline</button>
-    </div>
-    <!-- Comments tab: general experiment note + per-station notes and status,
-         persisted into the experiment toml [comments] section. -->
-    <div class="tab-view" id="view-comments" style="display:none">
-      <div style="margin-bottom:1rem">
-        <label for="comment-general"><b>General experiment note</b> (shown in the PI letter):</label><br>
-        <textarea id="comment-general" rows="3" style="width:100%"></textarea>
-      </div>
-      <table class="scan-table" id="comments-table" style="width:100%">
-        <thead><tr><th>Station</th><th>Status</th><th style="width:70%">Note</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <div style="margin-top:1rem">
-        <button id="btn-save-comments" onclick="saveComments()">Save comments</button>
-        <span id="comments-saved-msg" style="color:var(--green); display:none; margin-left:1rem">Saved.</span>
-      </div>
-    </div>
-    <!-- Standard plots tab -->
-    <div class="tab-view" id="view-plots">
-      <div class="controls">
-        <div><label for="sel-type">Plot type:</label><br>
-          <select id="sel-type"><option value="">-- select --</option></select></div>
-        <div><label for="sel-scan">Scan:</label><br>
-          <select id="sel-scan"><option value="">all</option></select></div>
-      </div>
-      <div id="plot-area">
-        <p id="plot-placeholder">Select a plot type above to view.</p>
-      </div>
-    </div>
-    <!-- Pipeline feedback tab (only shown once the pipeline feedback page exists) -->
-    <div class="tab-view" id="view-pipeline" style="display:none">
-      <div class="controls" id="pipeline-controls"></div>
-      <p id="pipeline-placeholder" style="display:none; text-align:center; color:var(--dim); padding:3rem">
-        The pipeline feedback page is not available yet. It is generated after the EVN pipeline runs.</p>
-      <iframe id="pipeline-frame" title="Pipeline feedback"></iframe>
-    </div>
-    <div class="footer-note">Press Ctrl+C in the terminal to stop the dashboard server.</div>
-  </div>
-</div>
-<script>
-const API = '';
-let plotFiles = [];
-let summaryData = null;
+    html = resources.files("evn_postprocess.templates").joinpath(_DASHBOARD_TEMPLATE).read_text(encoding="utf-8")
+    replacements = {"{{EXPNAME}}": exp.expname}
+    for placeholder, value in replacements.items():
+        html = html.replace(placeholder, value)
 
-async function loadSummary() {
-  try {
-    const resp = await fetch(API + '/api/summary');
-    if (!resp.ok) { throw new Error('Server returned ' + resp.status); }
-    summaryData = await resp.json();
-    if (summaryData.error) { throw new Error(summaryData.error); }
-    const expTitle = document.getElementById('exp-title');
-    if (expTitle) expTitle.textContent = summaryData.expname || '';
-    renderSummary(summaryData);
-  } catch (e) {
-    document.getElementById('summary-content').innerHTML = '<p style="color:var(--red)">Failed to load summary: ' + e.message + '</p>';
-    console.error('loadSummary error:', e);
-  }
-}
+    # An externally edited template must fail loudly here rather than serve a page that
+    # shows a raw '{{NAME}}' to the operator.
+    if unknown := _DASHBOARD_PLACEHOLDER_RE.findall(html):
+        raise RuntimeError(f"{_DASHBOARD_TEMPLATE} contains unknown placeholder(s): "
+                           f"{', '.join(sorted(set(unknown)))}. Known placeholders: "
+                           f"{', '.join(replacements)}.")
 
-function renderSummary(d) {
-  let h = '<div class="info-grid">';
-  h += row('Experiment', '<span style="color:#ff8c00;font-weight:bold">' + d.expname + '</span>');
-  h += row('Obs. date', d.obsdate + (d.timerange ? ' ' + d.timerange : ''));
-  if (d.eEVNname) h += row('e-EVN run', d.eEVNname);
-  (d.pi || []).forEach((p, i) => { h += row(i === 0 ? 'P.I.' : 'co-PI', `${p.name} (${p.email})`); });
-  h += row('Sup. Sci.', d.supsci);
-  if (d.credentials) { h += row('Username', d.credentials.username); h += row('Password', d.credentials.password); }
-  if (d.feedback_page) h += row('Feedback', `<a href="${d.feedback_page}" target="_blank">${d.feedback_page}</a>`);
-  if (d.archive_page) h += row('Archive', `<a href="${d.archive_page}" target="_blank">${d.archive_page}</a>`);
-  h += '</div>';
-
-  // Setup
-  if (d.correlator_passes && d.correlator_passes.length) {
-    h += '<div class="section"><h2>Setup</h2>';
-    d.correlator_passes.forEach((cp, i) => {
-      if (d.correlator_passes.length > 1) h += `<strong>Pass #${i+1}</strong><br>`;
-      h += '<div class="info-grid">';
-      if (cp.frequency) h += row('Frequency', cp.frequency);
-      if (cp.bandwidth) h += row('Bandwidth', `${cp.subbands}-${cp.bandwidth} subbands × ${cp.channels} ch`);
-      h += row('LIS file', cp.lisfile);
-      h += row('MS file', cp.msfile);
-      h += row('FITS-IDI files', cp.fitsidi);
-      if (cp.flag_threshold !== undefined && cp.flag_threshold !== null) {
-        const pct = (cp.flag_percentage !== undefined && cp.flag_percentage !== null && cp.flag_percentage >= 0)
-          ? `${cp.flag_percentage.toFixed(2)}% flagged` : 'not yet applied';
-        h += row('Weight flag', `threshold ${cp.flag_threshold} (${pct})`);
-      }
-      h += '</div>';
-    });
-    h += '</div>';
-  }
-
-  // Sources (editable type via dropdown)
-  const typeLabels = {fringefinder:'Fringe-finder', target:'Target', calibrator:'Phase-cal', other:'Other'};
-  const stAll = d.source_types || {};
-  h += '<div class="section"><h2>Sources</h2>';
-  h += '<table style="font-size:0.9rem;border-collapse:collapse">';
-  for (const [name, stype] of Object.entries(stAll)) {
-    h += `<tr><td style="padding:2px 8px"><span class="src-${stype}">${name}</span></td>`;
-    h += `<td style="padding:2px 4px"><select onchange="changeSourceType('${name}',this.value)" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85rem">`;
-    for (const [k,v] of Object.entries(typeLabels)) {
-      h += `<option value="${k}"${k===stype?' selected':''}>${v}</option>`;
-    }
-    h += '</select></td></tr>';
-  }
-  h += '</table></div>';
-
-  // Antennas
-  const a = d.antennas || {};
-  h += '<div class="section"><h2>Antennas</h2>';
-  h += `<div>Observed (${(a.observed||[]).length}): ${(a.observed||[]).map(n=>`<span class="tag tag-green">${n}</span>`).join(' ')}</div>`;
-  if ((a.not_observed||[]).length) h += `<div>Not observed: ${a.not_observed.map(n=>`<span class="tag tag-red">${n}</span>`).join(' ')}</div>`;
-  // Reference antenna: editable via dropdown (first refant pre-selected). The remaining
-  // refants stay as fallback order; changing the primary reorders the list and persists it.
-  const refList = d.refant || [];
-  const refPrimary = refList.length ? refList[0] : '';
-  const refOptions = (a.observed || []);
-  h += '<div>Ref. ant.: ';
-  h += `<select onchange="changeRefant(this.value)" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85rem">`;
-  if (!refOptions.length && refPrimary) h += `<option value="${refPrimary}" selected>${refPrimary}</option>`;
-  refOptions.forEach(n => { h += `<option value="${n}"${n===refPrimary?' selected':''}>${n}</option>`; });
-  h += '</select>';
-  if (refList.length > 1) h += ' <span style="color:var(--dim);font-size:0.8rem">(fallback: ' + refList.slice(1).join(', ') + ')</span>';
-  h += '</div>';
-  if ((a.polswap||[]).length) h += `<div>Polswap: ${a.polswap.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
-  if ((a.polconvert||[]).length) h += `<div>PolConvert: ${a.polconvert.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
-  if ((a.onebit||[]).length) h += `<div>1-bit: ${a.onebit.map(n=>`<span class="tag tag-dim">${n}</span>`).join(' ')}</div>`;
-  h += '</div>';
-
-  // Scan overview table
-  if (d.scans && d.scans.length && d.all_antennas) {
-    const hasSnr = d.lag_snr && Object.keys(d.lag_snr).length > 0;
-    h += '<div class="section"><h2>Scan Overview</h2>';
-    if (hasSnr) {
-      h += '<div style="font-size:0.8rem;margin-bottom:4px"><span class="tag tag-green">&#10003;</span> Observed (SNR &gt; 7) '
-         + '<span class="tag" style="background:#3a3a1a;color:#f0c040">&#10003;</span> Weak (3 &lt; SNR &lt; 7) '
-         + '<span class="tag tag-red">&#10003;</span> No signal (SNR &lt; 3) '
-         + '<span class="tag tag-red">&#10007;</span> Scheduled but missing '
-         + '<span style="color:var(--dim)">—</span> Not scheduled</div>';
-    } else {
-      // No lag SNR available (e.g. --no-lag): only report data presence per antenna/scan.
-      h += '<div style="font-size:0.8rem;margin-bottom:4px"><span class="tag tag-green">&#10003;</span> Has data '
-         + '<span class="tag tag-red">&#10007;</span> Scheduled but missing '
-         + '<span style="color:var(--dim)">—</span> Not scheduled</div>';
-    }
-    h += '<div style="font-size:0.8rem;margin-bottom:4px">Source type: '
-       + '<span class="src-fringefinder">Fringe-finder</span> · '
-       + '<span class="src-target">Target</span> · '
-       + '<span class="src-calibrator">Phase-cal</span></div>';
-    const notObs = new Set(a.not_observed || []);
-    const stMap = d.source_types || {};
-    h += '<div class="scan-table-wrap"><table class="scan-table"><thead><tr><th>Scan</th><th>Source</th>';
-    d.all_antennas.forEach(a => { h += notObs.has(a) ? `<th class="ant-missing">${a}</th>` : `<th>${a}</th>`; });
-    h += '</tr></thead><tbody>';
-    d.scans.forEach(s => {
-      const stype = stMap[s.source] || 'other';
-      const cls = 'src-' + stype;
-      h += `<tr><td class="${cls}">${s.scanno}</td><td class="${cls}">${s.source}</td>`;
-      d.all_antennas.forEach(a => {
-        const st = s.antennas[a];
-        if (st === 'observed') {
-          const scanInt = s.scanno.replace('No','').replace(/^0+/,'') || '0';
-          const snrData = d.lag_snr && d.lag_snr[scanInt] && d.lag_snr[scanInt][a];
-          let maxSnr = -1;
-          if (snrData) { for (const v of Object.values(snrData)) { if (v > maxSnr) maxSnr = v; } }
-          if (maxSnr < 0) h += '<td class="cell-obs">&#10003;</td>';
-          else if (maxSnr >= 7) h += '<td class="cell-obs" title="SNR '+maxSnr.toFixed(1)+'">&#10003;</td>';
-          else if (maxSnr >= 3) h += '<td class="cell-warn" title="SNR '+maxSnr.toFixed(1)+'">&#10003;</td>';
-          else h += '<td class="cell-miss" title="SNR '+maxSnr.toFixed(1)+'">&#10003;</td>';
-        }
-        else if (st === 'missing') h += '<td class="cell-miss">&#10007;</td>';
-        else h += '<td class="cell-na">—</td>';
-      });
-      h += '</tr>';
-    });
-    h += '</tbody></table></div></div>';
-  }
-
-  document.getElementById('summary-content').innerHTML = h;
-}
-
-function row(label, value) { return `<div class="label">${label}</div><div class="value">${value || '—'}</div>`; }
-
-async function loadPlots() {
-  const resp = await fetch(API + '/api/plots');
-  plotFiles = await resp.json();
-  populateSelectors();
-}
-
-function populateSelectors() {
-  const typeSet = new Set();
-  const scanSet = new Set();
-  const typeHasScans = {};  // type -> boolean: true if any file of that type contains a scan number
-  plotFiles.forEach(f => {
-    const m = f.match(/-(weight|auto|cross|ampphase)/);
-    if (m) {
-      typeSet.add(m[1]);
-      const hasScan = /-scan\d+/.test(f);
-      if (hasScan) typeHasScans[m[1]] = true;
-      if (!(m[1] in typeHasScans)) typeHasScans[m[1]] = typeHasScans[m[1]] || false;
-    }
-    const sm = f.match(/-scan(\d+)/);
-    if (sm) scanSet.add(sm[1]);
-  });
-  const selType = document.getElementById('sel-type');
-  const labels = {weight:'Weight', auto:'Auto-correlation (amp/chan)', cross:'Cross-correlation (anp/chan)',
-                  ampphase:'Amp+Phase vs time'};
-  typeSet.forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = labels[t]||t; selType.appendChild(o); });
-  const selScan = document.getElementById('sel-scan');
-  [...scanSet].sort((a,b)=>+a - +b).forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = `Scan ${s}`; selScan.appendChild(o); });
-  selType.addEventListener('change', onTypeChange);
-  selScan.addEventListener('change', updatePlot);
-  window._typeHasScans = typeHasScans;
-}
-
-function onTypeChange() {
-  const ptype = document.getElementById('sel-type').value;
-  const selScan = document.getElementById('sel-scan');
-  if (!ptype) { selScan.disabled = false; selScan.value = ''; updatePlot(); return; }
-  const hasScans = window._typeHasScans[ptype];
-  if (!hasScans) {
-    selScan.value = '';
-    selScan.disabled = true;
-  } else {
-    selScan.disabled = false;
-  }
-  updatePlot();
-}
-
-function updatePlot() {
-  const ptype = document.getElementById('sel-type').value;
-  const selScan = document.getElementById('sel-scan');
-  const pscan = selScan.value;
-  if (!ptype) { document.getElementById('plot-area').innerHTML = '<p id="plot-placeholder">Select a plot type above to view.</p>'; return; }
-  const hasScans = window._typeHasScans[ptype];
-  const matches = plotFiles.filter(f => {
-    if (!f.includes('-' + ptype)) return false;
-    if (hasScans && pscan && !f.includes('-scan' + pscan)) return false;
-    return true;
-  });
-  if (!matches.length) {
-    document.getElementById('plot-area').innerHTML = '<p id="plot-placeholder">No plots match the current selection.</p>';
-    return;
-  }
-  let html = '';
-  matches.forEach(f => { html += `<div style="margin-bottom:1rem"><p style="font-size:0.8rem;color:var(--dim);margin-bottom:4px">${f}</p><img id="plot-img" src="/plots/${f}" alt="${f}"></div>`; });
-  document.getElementById('plot-area').innerHTML = html;
-}
-
-async function changeSourceType(name, newType) {
-  const resp = await fetch(API + '/api/set_source_type', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({source: name, type: newType})
-  });
-  const result = await resp.json();
-  if (result.ok) { await loadSummary(); }
-  else { alert('Error: ' + (result.error || 'unknown')); }
-}
-
-async function changeRefant(newRef) {
-  const resp = await fetch(API + '/api/set_refant', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({refant: newRef})
-  });
-  const result = await resp.json();
-  if (result.ok) { await loadSummary(); }
-  else { alert('Error: ' + (result.error || 'unknown')); }
-}
-
-function showTab(name) {
-  for (const tab of ['pipeline', 'plots', 'comments']) {
-    document.getElementById('view-' + tab).style.display = (tab === name) ? 'block' : 'none';
-    document.getElementById('tab-' + tab).classList.toggle('active', tab === name);
-  }
-}
-
-/* Comments tab: statuses map to the dashboard traffic-light colours. */
-const STATUS_COLORS = {success: 'var(--green)', minor: '#f0c040', major: 'var(--red)'};
-
-function statusSelect(name, status) {
-  let html = `<select class="status-select" data-station="${name}" ` +
-             `style="color:${STATUS_COLORS[status]}" onchange="recolorStatus(this)">`;
-  for (const s of ['success', 'minor', 'major']) {
-    html += `<option value="${s}" ${s === status ? 'selected' : ''}>` +
-            `${{success: '● no problem', minor: '● issues reported', major: '● could not observe'}[s]}</option>`;
-  }
-  return html + '</select>';
-}
-
-function recolorStatus(sel) { sel.style.color = STATUS_COLORS[sel.value]; }
-
-async function loadComments() {
-  try {
-    const resp = await fetch(API + '/api/comments');
-    if (!resp.ok) return;
-    const data = await resp.json();
-    document.getElementById('comment-general').value = data.general || '';
-    const tbody = document.querySelector('#comments-table tbody');
-    tbody.innerHTML = '';
-    for (const [name, entry] of Object.entries(data.stations).sort()) {
-      const row = document.createElement('tr');
-      row.innerHTML = `<td><b>${name}</b></td><td>${statusSelect(name, entry.status)}</td>` +
-        `<td><textarea class="station-note" data-station="${name}" rows="2" style="width:100%">` +
-        `${entry.note || ''}</textarea></td>`;
-      tbody.appendChild(row);
-    }
-    for (const sel of document.querySelectorAll('.status-select')) recolorStatus(sel);
-  } catch (e) { console.error('loadComments error:', e); }
-}
-
-async function saveComments() {
-  const stations = {};
-  for (const sel of document.querySelectorAll('.status-select')) {
-    stations[sel.dataset.station] = {status: sel.value, note: ''};
-  }
-  for (const ta of document.querySelectorAll('.station-note')) {
-    if (stations[ta.dataset.station]) stations[ta.dataset.station].note = ta.value;
-  }
-  const resp = await fetch(API + '/api/set_comments', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({general: document.getElementById('comment-general').value, stations})
-  });
-  const result = await resp.json();
-  if (result.ok) {
-    const msg = document.getElementById('comments-saved-msg');
-    msg.style.display = ''; setTimeout(() => { msg.style.display = 'none'; }, 3000);
-  } else { alert('Error saving comments: ' + (result.error || 'unknown')); }
-}
-
-async function loadPipeline() {
-  const frame = document.getElementById('pipeline-frame');
-  const placeholder = document.getElementById('pipeline-placeholder');
-  try {
-    const resp = await fetch(API + '/api/pipeline');
-    if (!resp.ok) return;
-    const pages = await resp.json();
-    if (!pages || !pages.length) {
-      // No pipeline feedback yet (e.g. the pre-msops dashboard): the tab stays visible
-      // but shows a note instead of an empty frame; the standard plots stay selected.
-      frame.style.display = 'none';
-      placeholder.style.display = '';
-      return;
-    }
-    placeholder.style.display = 'none';
-    frame.style.display = '';
-    if (pages.length > 1) {
-      const controls = document.getElementById('pipeline-controls');
-      let sel = '<div><label for="sel-pipe">Pipeline pass:</label><br><select id="sel-pipe">';
-      pages.forEach(p => { sel += `<option value="${p}">${p}</option>`; });
-      sel += '</select></div>';
-      controls.innerHTML = sel;
-      document.getElementById('sel-pipe').addEventListener('change', e => {
-        frame.src = '/pipeline/' + encodeURIComponent(e.target.value);
-      });
-    }
-    frame.src = '/pipeline/' + encodeURIComponent(pages[0]);
-    // Pipeline feedback takes precedence: show it on top by default.
-    showTab('pipeline');
-  } catch (e) { console.error('loadPipeline error:', e); }
-}
-
-loadSummary();
-loadPlots();
-loadPipeline();
-loadComments();
-</script>
-</body>
-</html>"""
-    # Guard against vocabulary drift: the JS above hand-codes the station statuses
-    # (STATUS_COLORS / option labels); they must match experiment_state.STATION_STATUSES.
+    # Guard against vocabulary drift: the JS in the template hand-codes the station
+    # statuses (STATUS_COLORS / option labels); they must match STATION_STATUSES.
     for status in STATION_STATUSES:
         if f"'{status}'" not in html:
-            raise RuntimeError(f"Dashboard HTML is missing station status '{status}': "
+            raise RuntimeError(f"{_DASHBOARD_TEMPLATE} is missing station status '{status}': "
                                "update the Comments-tab JS to match "
                                "experiment_state.STATION_STATUSES.")
     return html
@@ -1385,7 +991,7 @@ def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -
     _DashboardHandler.experiment_summary = _build_experiment_summary(exp)
     _DashboardHandler.plots_dir = plots_dir
     _DashboardHandler.expname = exp.expname.lower()
-    _DashboardHandler.dashboard_html = _build_dashboard_html()
+    _DashboardHandler.dashboard_html = _build_dashboard_html(exp)
     _DashboardHandler.pipeline_dir = pipeline_dir if pipeline_pages else None
     _DashboardHandler.pipeline_pages = pipeline_pages
     # Reset the per-experiment cache: a second serve_dashboard call in the same
