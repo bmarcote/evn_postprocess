@@ -601,11 +601,6 @@ class Experiment:
         # (set via the --no-lag CLI option). The per-scan antenna data check then only reports
         # whether an antenna has data in each scan, without the lag signal-to-noise comparison.
         self.no_lag: bool = no_lag
-        # Temporary workaround for the broken local tConvert (set via --tConvert-in-eee /
-        # --no-tConvert-in-eee). When True the tconvert step runs on eee instead of locally
-        # (see process.tconvert). PolConvert is always run manually on eee (see
-        # process.polconvert). Runtime-only: decided from the CLI on each run, not persisted.
-        self.tconvert_in_eee: bool = True
         self._timerange: list[dt.datetime] | None = None
         # Policy carries the batch/msops decisions from a policy.toml (see
         # evn_postprocess.policy). None means "interactive defaults".

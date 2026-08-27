@@ -1156,8 +1156,7 @@ def list_exec_commands():
         rprint(f"  [bold green]{name:<18}[/bold green] {cmd.doc}")
 
 
-def run_isolated_task(task_name: str, expname: str | None = None,
-                      tconvert_in_eee: bool = True):
+def run_isolated_task(task_name: str, expname: str | None = None):
     """Run a single exec command independently.
 
     The experiment must have been initialized previously so that the stored
@@ -1166,12 +1165,9 @@ def run_isolated_task(task_name: str, expname: str | None = None,
     Args:
         task_name: Name of the exec command to run.
         expname: Experiment name (case-insensitive).
-        tconvert_in_eee: Whether the tconvert step runs on eee (workaround for the
-            broken local tConvert). Forwarded to the loaded experiment.
     """
     try:
         exp = experiment.Experiment.load(expname)
-        exp.tconvert_in_eee = tconvert_in_eee
     except FileNotFoundError:
         rprint(f"[bold red]Could not find the stored information for "
                f"{expname if expname is not None else Path().name}"
