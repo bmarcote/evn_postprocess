@@ -262,12 +262,6 @@ def main() -> None:
                         help='Path to a policy.toml file with the unattended decisions '
                              '(weight threshold, polswap/polconvert/onebit antennas, refant, '
                              'pause_after, skip_archive). See evn_postprocess.policy.')
-    parser.add_argument('--tConvert-in-eee', action=argparse.BooleanOptionalAction, default=True,
-                        help='Temporary workaround for the broken local tConvert: it runs '
-                             'the step on `eee` instead. It copies the MS files to '
-                             'jops@eee:/data0/temp/, runs tConvert there, and copies the '
-                             'FITS-IDI files back. Enabled by default; use --no-tConvert-in-eee to '
-                             'run locally.')
     parser.add_argument('--batch', action='store_true', default=False,
                         help='Run unattended: never invoke interactive dialogs or open the '
                              'standardplots dashboard. The runner stops with exit code 0 and '
@@ -436,8 +430,6 @@ def main() -> None:
                 rprint(f"[red]Could not parse policy file {args.policy}: {e}[/red]")
                 sys.exit(1)
             exp.store()
-        # tConvert workaround: run the step on eee unless explicitly disabled.
-        exp.tconvert_in_eee: bool = args.tConvert_in_eee
 
         if args.batch:
             workflow.set_batch_mode(True)
@@ -523,9 +515,7 @@ def main() -> None:
             sys.exit(1)
 
         try:
-            # tConvert workaround: run the step on eee unless explicitly disabled.
-            workflow.run_isolated_task(args.task_name, expname,
-                                       tconvert_in_eee=args.tConvert_in_eee)
+            workflow.run_isolated_task(args.task_name, expname)
         except (FileNotFoundError, KeyError, AttributeError) as e:
             rprint(f"[red]Error running task '{args.task_name}': {e}[/red]")
             sys.exit(1)

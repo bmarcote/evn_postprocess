@@ -54,36 +54,34 @@ _LINEAR_RATIO_LOW: float = 0.5
 _PARALLEL_POLS: frozenset[str] = frozenset({'RR', 'LL', 'XX', 'YY'})
 _CROSS_POLS: frozenset[str] = frozenset({'RL', 'LR', 'XY', 'YX'})
 
-# _TCONVERT_BIN = "tConvert"  # This will be the one to use once we certify the following one works
-_TCONVERT_BIN = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert"
-# Temporary workaround (see _tconvert_in_eee): the system tConvert is currently broken, so by
-# default the tconvert step runs on eee instead. Where the MS / FITS-IDI files are staged there:
-_EEE_TCONVERT_TEMP = Path("/data0/temp")
-# A few very large MS files move over the network here, so the usual 10-minute transfer/run
-# bounds are far too tight; give them generous (env-overridable) ceilings.
-_EEE_RSYNC_TIMEOUT_S = int(os.environ.get("EVN_EEE_RSYNC_TIMEOUT_S", str(6 * 3600)))
-_EEE_TCONVERT_TIMEOUT_S = int(os.environ.get("EVN_EEE_TCONVERT_TIMEOUT_S", str(8 * 3600)))
+_TCONVERT_BIN = "tConvert"  # This will be the one to use once we certify the following one works
+# _TCONVERT_BIN = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert"
 
 # It occasionally crashes with a segmentation fault; because it runs in a subprocess,
 # a crash returns a negative exit code instead of killing post-processing, so the same
 # attempt is simply retried up to this many extra times before moving on.
 _POLCONVERT_SEGFAULT_RETRIES: int = 3
+
 # A converted solution is accepted when, in every IF, the parallel-to-cross fringe-peak
 # amplitude ratio (RR+LL)/(RL+LR) on the reference baseline exceeds this value. A failed/linear
 # solution leaves the four products comparable (ratio ~1); a real conversion lifts it well above.
 _POLCONVERT_MIN_RATIO: float = 2
+
 # Default bandpass-solution parameters written into the PolConvert input file.
 _POLCONVERT_CHANAVG: int = 32
 _POLCONVERT_TIMEAVG_S: int = 60
 _POLCONVERT_SOLVE_WEIGHT: float = 0.1
+
 # --- PolConvert solution search --------------------------------------------------------
 # An antenna only joins the solve if its fringe on the solve scan reaches this lag SNR. It is
 # lower than _POL_MIN_SNR because that one gates the *diagnosis* of linear feeds (where a wrong
 # call is costly), while here a baseline just has to carry usable signal.
 _POLCONVERT_SOLVE_MIN_SNR: float = 3.0
+
 # Minutes trimmed off the scan before solving: antennas are often still settling at the start.
 # A scan must last longer than this for the trim to leave a usable range.
 _POLCONVERT_TRIM_MIN: int = 1
+
 # Parameter space of the search, tried in this nesting order for each (scan, time range). It is
 # deliberately small: the previous search also looped over every candidate reference antenna and
 # took hours to give up when no solution existed.
@@ -1093,52 +1091,52 @@ def tconvert(exp: experiment.Experiment) -> bool:
         return all(future.result() for future in futures)
 
 
-def _tconvert_pass_in_eee(exp: experiment.Experiment, remote: str,
-                          a_pass: experiment.CorrelatorPass) -> bool:
-    """Converts one correlator pass to FITS-IDI by running tConvert on eee.
-
-    Temporary workaround for the broken local tConvert: copies the pass MS (and its
-    small .lis) to ``<remote>:/data0/temp/<lisname>/``, runs the very same tConvert
-    command there, copies the produced FITS-IDI files back into the current directory,
-    and finally removes the remote temp directory (even if a step failed). Each pass
-    uses its own remote sub-directory so several passes can run concurrently.
-
-    Args:
-        exp: Experiment object (used for the log directory).
-        remote: ``user@host`` of eee.
-        a_pass: Correlator pass to convert.
-
-    Returns:
-        True on success.
-    """
-    chunk_arg = _tconvert_chunk_arg(a_pass)
-    remote_dir = _EEE_TCONVERT_TEMP / a_pass.lisfile.stem
-    try:
-        utils.ssh(remote, f"rm -rf {remote_dir} && mkdir -p {remote_dir}")
-        # rsync (not scp): the MS is a directory tree of many files, and rsync both moves
-        # such trees faster and can resume a partial transfer (--partial) of these very
-        # large files. The .lis is tiny and goes in the same call as the MS.
-        utils.rsync([str(a_pass.msfile), str(a_pass.lisfile)], f"{remote}:{remote_dir}/",
-                    timeout=_EEE_RSYNC_TIMEOUT_S)
-
-        # Run from inside the temp dir so the relative MS / FITS-IDI names in the .lis resolve.
-        cmd = f"cd {remote_dir} && /eee/bin/tConvert -v {a_pass.lisfile.name} -o {chunk_arg}"
-        output = utils.ssh(remote, cmd, stderr=subprocess.STDOUT, timeout=_EEE_TCONVERT_TIMEOUT_S)
-        log_fh, log_path = utils.open_unique_log(exp.dirs.logs / "tconvert.log")
-        try:
-            log_fh.write(output or "")
-        finally:
-            log_fh.close()
-        logger.debug(f"tConvert (eee) output for {a_pass.lisfile.name} written to {log_path}")
-
-        # Bring the (several) FITS-IDI files this pass produced back to the current directory.
-        utils.rsync(f"{remote}:{remote_dir}/{a_pass.fitsidifile}*", ".",
-                    timeout=_EEE_RSYNC_TIMEOUT_S)
-    finally:
-        utils.ssh(remote, f"rm -rf {remote_dir}")
-
-    return True
-
+#def _tconvert_pass_in_eee(exp: experiment.Experiment, remote: str,
+#                          a_pass: experiment.CorrelatorPass) -> bool:
+#    """Converts one correlator pass to FITS-IDI by running tConvert on eee.
+#
+#    Temporary workaround for the broken local tConvert: copies the pass MS (and its
+#    small .lis) to ``<remote>:/data0/temp/<lisname>/``, runs the very same tConvert
+#    command there, copies the produced FITS-IDI files back into the current directory,
+#    and finally removes the remote temp directory (even if a step failed). Each pass
+#    uses its own remote sub-directory so several passes can run concurrently.
+#
+#    Args:
+#        exp: Experiment object (used for the log directory).
+#        remote: ``user@host`` of eee.
+#        a_pass: Correlator pass to convert.
+#
+#    Returns:
+#        True on success.
+#    """
+#    chunk_arg = _tconvert_chunk_arg(a_pass)
+#    remote_dir = _EEE_TCONVERT_TEMP / a_pass.lisfile.stem
+#    try:
+#        utils.ssh(remote, f"rm -rf {remote_dir} && mkdir -p {remote_dir}")
+#        # rsync (not scp): the MS is a directory tree of many files, and rsync both moves
+#        # such trees faster and can resume a partial transfer (--partial) of these very
+#        # large files. The .lis is tiny and goes in the same call as the MS.
+#        utils.rsync([str(a_pass.msfile), str(a_pass.lisfile)], f"{remote}:{remote_dir}/",
+#                    timeout=_EEE_RSYNC_TIMEOUT_S)
+#
+#        # Run from inside the temp dir so the relative MS / FITS-IDI names in the .lis resolve.
+#        cmd = f"cd {remote_dir} && /eee/bin/tConvert -v {a_pass.lisfile.name} -o {chunk_arg}"
+#        output = utils.ssh(remote, cmd, stderr=subprocess.STDOUT, timeout=_EEE_TCONVERT_TIMEOUT_S)
+#        log_fh, log_path = utils.open_unique_log(exp.dirs.logs / "tconvert.log")
+#        try:
+#            log_fh.write(output or "")
+#        finally:
+#            log_fh.close()
+#        logger.debug(f"tConvert (eee) output for {a_pass.lisfile.name} written to {log_path}")
+#
+#        # Bring the (several) FITS-IDI files this pass produced back to the current directory.
+#        utils.rsync(f"{remote}:{remote_dir}/{a_pass.fitsidifile}*", ".",
+#                    timeout=_EEE_RSYNC_TIMEOUT_S)
+#    finally:
+#        utils.ssh(remote, f"rm -rf {remote_dir}")
+#
+#    return True
+#
 
 def _get_all_fringefinder_scans(exp: experiment.Experiment) -> list[experiment.Scan]:
     """Get all fringe-finder scans sorted by number of observing antennas (descending).
