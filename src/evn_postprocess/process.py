@@ -1754,18 +1754,17 @@ def protect_experiment_files(exp: experiment.Experiment) -> bool:
         logger.info("No protection required for this experiment.")
         return True
 
-    # Protect both the archived source data ("source") and the pipeline results/plots
-    # ("pipe") for the protected sources (typically the targets). Missing the "pipe"
+    # Protect both the archived source data and the pipeline results/plots
+    # for the protected sources (typically the targets). Missing the "pipe"
     # protection would leave the pipeline data for the target publicly accessible.
-    for protection in ("source", "pipe"):
-        try:
-            utils.shell_command("auth_pipe.py", ["-e", f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}",
-                                "-s", ' '.join(protected_sources), "-p", protection])
-        except ValueError:
-            logger.error(f"Could not protect experiment {protection} files in archive.")
-            return False
+    try:
+        utils.shell_command("auth_pipe.py", ["-e", f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}",
+                            "-s", ' '.join(protected_sources), "-p", "source"])
+    except ValueError:
+        logger.error(f"Could not protect experiment files in archive for {exp.expname.upper()}.")
+        return False
 
-    logger.info(f"Protected sources (source and pipeline data): {', '.join(protected_sources)}")
+    logger.info(f"Protected sources (target sources and pipeline data): {', '.join(protected_sources)}")
     return True
 
 
