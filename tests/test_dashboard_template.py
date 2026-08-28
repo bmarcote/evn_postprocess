@@ -111,3 +111,57 @@ class TestSummaryScans:
             '21/05/2024 10:23:00-10:29:00 UTC (6.0 min)',
             '21/05/2024 23:58:00-22/05/2024 00:08:00 UTC (10.0 min)',
         ]
+
+
+class TestProgressTab:
+    """The Progress tab shows the workflow steps and which of them have already run.
+
+    The step list itself comes from ``workflow.step_progress`` (the same source as
+    ``postprocess list``); these tests cover the contract between it, the ``/api/progress``
+    endpoint, and the template's JS.
+    """
+
+    def test_template_has_the_tab_and_its_view(self, tmp_path):
+        html = plotting._build_dashboard_html(_make_exp(tmp_path))
+        assert 'onclick="showTab(\'progress\')"' in html
+        assert 'id="view-progress"' in html
+        # showTab must know about the new view, or selecting it would leave it hidden.
+        assert "'pipeline', 'plots', 'comments', 'progress'" in html
+        assert "/api/progress" in html
+
+    def test_progress_reports_every_workflow_step_in_order(self, tmp_path):
+        from evn_postprocess import workflow
+        steps = workflow.step_progress(exp=_make_exp(tmp_path))
+        assert [s['name'] for s in steps] == [s.name for s in workflow._WORKFLOW_STEPS]
+        assert all(s['doc'] for s in steps)
+
+    def test_done_flags_come_from_the_experiment(self, tmp_path):
+        from dataclasses import replace
+        from evn_postprocess import workflow
+        exp = _make_exp(tmp_path)
+        exp.steps = [replace(s, done=(s.name in ('lisfiles', 'checklis')))
+                     for s in workflow._WORKFLOW_STEPS if s.name != 'initialize']
+        done = {s['name']: s['done'] for s in workflow.step_progress(exp=exp)}
+        assert done['lisfiles'] is True and done['checklis'] is True
+        assert done['j2ms2'] is False
+        # 'initialize' never reaches the stored step list: an Experiment proves it ran.
+        assert done['initialize'] is True
+
+    def test_unknown_experiment_reports_everything_pending(self, tmp_path, monkeypatch):
+        from evn_postprocess import workflow
+        monkeypatch.chdir(tmp_path)
+        steps = workflow.step_progress(expname='NOSUCHEXP')
+        assert steps and not any(s['done'] for s in steps)
+
+    def test_endpoint_serves_the_progress(self, tmp_path, monkeypatch):
+        import json as _json
+        monkeypatch.chdir(tmp_path)
+        exp = _make_exp(tmp_path)
+        served: list = []
+        handler = plotting._DashboardHandler.__new__(plotting._DashboardHandler)
+        monkeypatch.setattr(plotting._DashboardHandler, 'exp', exp)
+        monkeypatch.setattr(plotting._DashboardHandler, '_serve_json',
+                            lambda self, data: served.append(data))
+        handler._serve_progress()
+        assert served and {'name', 'doc', 'done'} <= set(served[0][0])
+        _json.dumps(served[0])  # must be JSON-serialisable as served

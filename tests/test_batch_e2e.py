@@ -19,7 +19,7 @@ from evn_postprocess import workflow
 
 STEP_NAMES = ['lisfiles', 'checklis', 'j2ms2', 'standardplots', 'msops', 'tconvert',
               'polconvert', 'post_polconvert', 'standardplots2', 'antab', 'pipeinputs',
-              'pipeline', 'postpipe', 'prearchive', 'distribute']
+              'pipeline', 'postpipe', 'prearchive', 'verification', 'distribute']
 
 
 def make_exp(tmp_path, expname='EB101'):
@@ -27,7 +27,6 @@ def make_exp(tmp_path, expname='EB101'):
                            pipe_in=Path('pipeline/in'), pipe_out=Path('pipeline/out'),
                            pipe_temp=Path('antenna_files'))
     exp = experiment.Experiment(expname, dt.date(2026, 4, 10), 'tester', dirs)
-    exp.write_log_file = lambda *a, **k: None
     return exp
 
 
@@ -85,7 +84,7 @@ def test_batch_run_pauses_at_postpipe_and_resumes(tmp_path, engine):
     # Resume: the remaining steps complete without a prompt.
     engine.clear()
     assert workflow.run_workflow(exp) is True
-    assert engine[-2:] == ['prearchive', 'distribute']
+    assert engine[-3:] == ['prearchive', 'verification', 'distribute']
     assert all(s.done for s in exp.steps)
 
 

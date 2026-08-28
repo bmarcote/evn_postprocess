@@ -86,6 +86,15 @@ class Retriever(ABC):
             RetrievalError: When no station files can be obtained at all.
         """
 
+    def fetch_support_scientist(self, exp) -> str:
+        """The support scientist assigned to *exp*, when the backend can look it up.
+
+        Called only when the program runs under a shared account, where the login name is
+        not a person (see evn_postprocess.mode.SUPSCI_USER). The default knows nobody; a
+        backend that can answer returns the name and never raises.
+        """
+        return ''
+
     def fetch_schedule_files(self, exp) -> None:
         """Best-effort fetch of the observing-schedule (.key/.sum) files at initialization.
 

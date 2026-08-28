@@ -84,6 +84,9 @@ class TestRunAntabEditorReturnsTrueOnSuccess:
         exp.dirs = Mock()
         exp.dirs.pipe_temp = pipe_temp
         exp.antennas = []  # no missing-antab warning
+        # Linked into antenna_files/ before the editor opens (see pipeline._link_vixfile).
+        exp.vixfile = Path("TESTEXP.vix")
+        exp.vixfile.write_text("VEX_rev = 1.5;\n")
 
         with patch("evn_postprocess.pipeline.utils.shell_command") as mock_shell:
             mock_shell.return_value = ""
@@ -110,6 +113,8 @@ class TestRunAntabEditoreEVNAssociatesOtherExperiments:
         exp.dirs = Mock()
         exp.dirs.pipe_temp = pipe_temp
         exp.antennas = []
+        exp.vixfile = tmp_path / "EZ041A" / "EZ041A.vix"
+        exp.vixfile.write_text("VEX_rev = 1.5;\n")
         return exp
 
     def test_builds_associated_command_when_idi_present(self, tmp_path: Path, monkeypatch):
@@ -316,7 +321,10 @@ class TestLowWeightWarningBeforeDashboard:
 
         monkeypatch.setattr(workflow, "_BATCH_MODE", False)
         monkeypatch.setattr(workflow, "_NOTIFIER", None)
+        # Neither the toml nor the lag diagnostics decide here: force the interactive path.
+        monkeypatch.setattr(workflow, "_toml_msops_available", lambda _e: False)
         monkeypatch.setattr(workflow, "_auto_msops_available", lambda _e: False)
+        monkeypatch.setattr(workflow, "_record_msops_in_toml", lambda _e: None)
         monkeypatch.setattr(workflow.process, "open_standardplot_files", _fake_dashboard)
         # Interactive dialog: accept defaults and report success.
         fake_gui = Mock()
@@ -325,7 +333,8 @@ class TestLowWeightWarningBeforeDashboard:
         # The downstream MS operations are not under test here.
         for fn in ("flag_weights", "ysfocus", "polswap", "onebit", "tconvert"):
             monkeypatch.setattr(workflow.process, fn, lambda _e: True)
-        monkeypatch.setattr(workflow.process, "print_exp", lambda _e, _d: True)
+        monkeypatch.setattr(workflow.process, "print_exp",
+                            lambda _e, display_in_terminal=True: True)
 
         try:
             assert workflow.msops(exp) is True

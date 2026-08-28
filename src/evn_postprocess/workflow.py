@@ -7,16 +7,17 @@ from the inputs, process, pipeline, and lisfiles modules.
 import re
 import sys
 import json
+import time
 import glob
 import shutil
-import traceback
 from pathlib import Path
 from typing import Callable, overload
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from loguru import logger
 from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.traceback import Traceback
 from . import experiment
 from . import experiment_state
@@ -27,6 +28,7 @@ from . import pipelines
 from . import process
 from . import retrieval
 from . import review
+from . import verification
 from . import pipeline
 from . import lisfiles
 from . import dialog
@@ -57,6 +59,9 @@ _stderr_console = Console(stderr=True, highlight=False)
 # from the CLI entry point.
 _BATCH_MODE = False
 REVIEW_FLAG_FILENAME = "REVIEW_REQUIRED"
+# Step after which the run stops for a human review, unless a Policy overrides it
+# with its own pause_after list (see _pause_steps).
+DEFAULT_PAUSE_AFTER = "postpipe"
 
 # Module-level notifier for sending messages at key interaction points.
 # Set via :func:`set_notifier` from the CLI entry point.
@@ -89,8 +94,8 @@ def set_notifier(notifier: _comms.Notifier) -> None:
     _NOTIFIER = notifier
 
 
-def _review_flag_path(exp: experiment.Experiment) -> Path:
-    """Returns the path of the ``REVIEW_REQUIRED`` marker for *exp*.
+def _review_flag_path() -> Path:
+    """Returns the path of the ``REVIEW_REQUIRED`` marker.
 
     The marker lives at the root of the experiment work directory so an
     operator can spot it without descending into ``logs/`` or ``pipeline/``.
@@ -110,7 +115,7 @@ def _write_review_flag(exp: experiment.Experiment, step: str, reason: str) -> No
         step: The step name that triggered the pause / review.
         reason: Free-form explanation written into the marker for the operator.
     """
-    flag = _review_flag_path(exp)
+    flag = _review_flag_path()
     try:
         flag.write_text(
             f"step: {step}\nexperiment: {exp.expname}\nreason: {reason}\n",
@@ -123,59 +128,31 @@ def _write_review_flag(exp: experiment.Experiment, step: str, reason: str) -> No
 
 def _clear_review_flag(exp: experiment.Experiment) -> None:
     """Removes the ``REVIEW_REQUIRED`` marker if present (idempotent)."""
-    _review_flag_path(exp).unlink(missing_ok=True)
+    _review_flag_path().unlink(missing_ok=True)
 
 
-def _notify_step_failure(exp: experiment.Experiment, step: str, reason: str) -> None:
-    """Announces a hard step failure: terminal + configured comms, resumable state kept.
+def _notify_step_failure(exp: experiment.Experiment, step: str, reason: str,
+                         elapsed: float | None = None) -> None:
+    """Announces a hard step failure on every channel, keeping the state resumable.
 
     A failure is deliberately distinct from the clean review-pause (which writes a marker
     and exits 0): the step is NOT marked done, so re-running `postprocess run` resumes from
     it, and the caller returns False so the process exits non-zero (PRD stories 35-36).
+
+    Args:
+        exp: Experiment object.
+        step: Name of the step that failed.
+        reason: Short explanation, recorded in the log and sent to the operator.
+        elapsed: Seconds the step ran before failing, when known.
     """
-    logger.error(f"Step {step} failed: {reason}.")
-    reporting.announce(f"Step '{step}' failed: {reason}. "
-                       f"Fix the cause and re-run `postprocess run` to resume from here.",
-                       style='bold red')
+    duration = f" after {_format_duration(elapsed)}" if elapsed is not None else ""
+    logger.error(f"Step '{step}' FAILED{duration}: {reason}.")
+    resume = f"Fix the cause and re-run `postprocess run` in {Path.cwd()} to resume from '{step}'."
+    reporting.announce(resume, style='bold red')
     utils.notify(f"{exp.expname} post-processing", f"FAILED at step {step}: {reason}")
-    if _NOTIFIER is not None:
-        _comms.notify_operator(exp, f"post-processing FAILED at step {step}",
-                               f"{reason}. The run stopped; re-run `postprocess run` to resume "
-                               f"from '{step}' once fixed.", _NOTIFIER)
-
-
-def _signal_pause(exp: experiment.Experiment, step: str) -> None:
-    """Signals a "stop and review" condition after a successful step.
-
-    In interactive mode this prints the historical Rich panel and the desktop
-    notification. In batch mode it writes a marker file (so the scheduler can
-    detect the pause without parsing logs) and stays silent.
-    """
-    piletter = f"{exp.expname.lower()}.piletter"
-    pause_reason = (f"Step '{step}' finished successfully. Review {piletter} and the pipeline "
-                     f"output, then run `postprocess run` or `postprocess review ok` to continue.")
-
-    if _BATCH_MODE:
-        _write_review_flag(exp, step, pause_reason)
-        if _NOTIFIER is not None:
-            _comms.notify_step_pause(exp, step, pause_reason, _NOTIFIER)
-        return
-
-    # Send comms notification (email / mattermost) if configured
-    if _NOTIFIER is not None:
-        _comms.notify_step_pause(exp, step, pause_reason, _NOTIFIER)
-
-    body = (f"[bold]Please do the following before continuing:[/bold]\n\n"
-            f"  1. Check the pipeline output plots and logs.\n"
-            f"  2. Review the PI letter ([bold cyan]{piletter}[/bold cyan]).\n"
-            f"     Non-observing antennas and PolConvert remarks have been\n"
-            f"     filled in automatically \u2014 verify and edit if needed.\n\n"
-            f"[bold]When ready, run one of:[/bold]\n\n"
-            f"  [bold green]postprocess run[/bold green]           \u2014 finalize and archive everything\n"
-            f"  [bold green]postprocess run {step}[/bold green]  \u2014 re-run this step's diagnostics\n")
-    Console().print(Panel(body, title=f"[bold yellow]Paused after '{step}' \u2014 review needed[/bold yellow]",
-                          border_style="yellow", padding=(1, 2)))
-    utils.notify(f"{exp.expname} post-processing", f"Paused after '{step}' \u2014 review pipeline results")
+    _comms.notify_operator(exp, f"failed at '{step}'",
+                           f"The post-processing **stopped at the `{step}` step**{duration}:\n\n"
+                           f"{reason}", resume, _NOTIFIER)
 
 
 @dataclass
@@ -230,6 +207,10 @@ _WORKFLOW_STEPS = [Task('initialize', 'initialize_experiment',
                    Task('postpipe', 'pipeline_diagnostics', 'Runs diagnostics on the pipeline outputs.'),
                    Task('prearchive', 'pre_archive', "Prepares the experiment for archiving. Attaches the Tsys "
                         "information to the FITS-IDI files."),
+                   Task('verification', 'verify', "Verifies the final FITS-IDI files before they "
+                        "are delivered: the ANTAB Tsys/gain-curve tables are there, no data was lost "
+                        "between the multi-part FITS-IDI files, and their content still matches the "
+                        "MS they were converted from."),
                    Task('distribute', 'archive', "Delivers the experiment through the mode's "
                         "distribution backend (supsci: credentials, PI letter, archive; regular: "
                         "verify the FITS-IDI files are in order). Deprecated alias: 'archive'.")]
@@ -249,15 +230,6 @@ def _resolve_step_alias(name: str | None) -> str | None:
         logger.warning(f"Step name '{name}' is deprecated; use '{current}'.")
         return current
     return name
-
-
-def create_folder_structure() -> experiment.Dirs:
-    """Creates the folder structure required for post-processing.
-
-    Thin alias of :func:`inputs.create_folder_structure` (the canonical
-    implementation), kept for existing callers.
-    """
-    return inputs.create_folder_structure()
 
 
 def initialize_experiment(expname: str, supsci: str, mode: Mode) -> experiment.Experiment:
@@ -281,7 +253,7 @@ def initialize_experiment(expname: str, supsci: str, mode: Mode) -> experiment.E
         experiment.Experiment: The initialized experiment.
     """
     logger.debug(f"Initializing experiment {expname} in mode '{mode.value}'")
-    dirs = create_folder_structure()
+    dirs = inputs.create_folder_structure()
 
     retrieval_backend = _mode.backends_for(mode).retrieval
     try:
@@ -344,8 +316,7 @@ def retrieve_lisfiles(exp: experiment.Experiment) -> bool:
 
         return True
     except Exception as e:
-        logger.error(f"Unexpected error retrieving .lis files: {e}")
-        traceback.print_exc()
+        logger.opt(exception=True).error(f"Unexpected error retrieving the .lis files: {e}")
         return False
 
 
@@ -375,8 +346,7 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
 
         return True
     except Exception as e:
-        logger.error(f"Unexpected error checking .lis files: {e}")
-        traceback.print_exc()
+        logger.opt(exception=True).error(f"Unexpected error checking the .lis files: {e}")
         return False
 
 
@@ -418,8 +388,7 @@ def create_msfile(exp: experiment.Experiment) -> bool:
             process.compute_lag_snr(exp)
         return True
     except Exception as e:
-        logger.error(f"Unexpected error creating MS files: {e}")
-        traceback.print_exc()
+        logger.opt(exception=True).error(f"Unexpected error creating the MS files: {e}")
         return False
 
 
@@ -514,18 +483,27 @@ def msops(exp: experiment.Experiment) -> bool:
                 if not gui.askMSoperations(exp):
                     return False
             except dialog.BatchInteractionError as exc:
-                logger.error(f"Cannot run msops in batch mode: {exc}")
                 _write_review_flag(exp, "msops", str(exc))
-                return False
+                raise StepFailed(f"the MS operations must be decided and this run is in "
+                                 f"batch mode ({exc}). Review the plots "
+                                 f"(`postprocess -e {exp.expname} info --serve`) and set "
+                                 f"them in the experiment .toml, or run without --batch.") from exc
 
     exp.store()
-    ok = process.flag_weights(exp) & process.ysfocus(exp) & process.polswap(exp) & process.onebit(exp) \
-        & process.print_exp(exp, False)
-    if ok:
-        # Whatever path decided the parameters (toml, auto, dialog, Mattermost reply),
-        # persist them into the experiment toml so the next run is silent (PRD story 22).
-        _record_msops_in_toml(exp)
-    return ok
+    # Sequential and short-circuiting: a failed operation must not be followed by the
+    # next one acting on a half-corrected MS.
+    for name, operation in (('ysfocus', process.ysfocus), ('flag_weights', process.flag_weights),
+                            ('polswap', process.polswap), ('onebit', process.onebit)):
+        logger.debug(f"msops: running {name}.")
+        if not operation(exp):
+            logger.error(f"msops: {name} failed; the remaining MS operations were not run.")
+            return False
+
+    process.print_exp(exp, display_in_terminal=False)
+    # Whatever path decided the parameters (toml, auto, dialog, Mattermost reply), persist
+    # them into the experiment toml so the next run is silent (PRD story 22).
+    _record_msops_in_toml(exp)
+    return True
 
 
 def tconvert(exp: experiment.Experiment) -> bool:
@@ -593,6 +571,16 @@ def _run_pipeline_stage(exp: experiment.Experiment, stage: str) -> bool:
         logger.error(f"Pipeline backend error at '{stage}': {e}")
         rprint(f"[red]{e}[/red]")
         return False
+
+
+class StepFailed(Exception):
+    """Raised by a step that cannot continue without the operator.
+
+    The message is what they are told, on every channel: the terminal, the desktop
+    notification and the chat. A step returning plain False stops the run just the same,
+    but can only say "the step reported a failure", so anything a human has to act on
+    (a manual antab_editor session, missing station files, a broken uvflg) raises this.
+    """
 
 
 class StepPaused(Exception):
@@ -860,8 +848,7 @@ def antfiles(exp: experiment.Experiment) -> bool:
                           f"experiments: {', '.join(missing)} (markers in ../EXPn). "
                           f"Re-run `postprocess run` once they are processed.")
                 _write_review_flag(exp, 'antab', reason)
-                if _NOTIFIER is not None:
-                    _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
+                _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
                 raise StepPaused(reason)
 
         # Station .log/.antabfs files come from the mode's retrieval backend
@@ -870,16 +857,14 @@ def antfiles(exp: experiment.Experiment) -> bool:
             backend = _backends(exp).retrieval
             retrieval.get_retriever(backend).fetch_station_files(exp)
         except retrieval.RetrievalError as e:
-            logger.error(f"Could not obtain the station files ({backend}): {e}")
-            rprint(f"[red]{e}[/red]")
-            return False
-        if any(s.lower() in ('br', 'kp', 'la', 'yy', 'mk') for s in exp.antennas.names):
-            jive_retrieval.get_vlba_antab(exp)
+            raise StepFailed(f"the station .log/.antabfs files could not be obtained "
+                             f"({backend}): {e}. Get them by hand into "
+                             f"`{exp.dirs.pipe_temp}` and run the step again.") from e
 
         if not pipeline.create_uvflg(exp):
-            logger.error("uvflg creation needs manual intervention.")
-            rprint("[bold red]STOPPED PROCESS:[/bold red] [red]uvflg creation needs manual intervention.[/red]")
-            return False
+            raise StepFailed("the uvflg could not be created from the station files; it "
+                             "needs manual intervention. Check the .log files in "
+                             f"`{exp.dirs.pipe_temp}` and create the .uvflg by hand.")
 
         # Show the operator what to fix (stations that did not observe, missed time
         # ranges, reduced bandwidths) right before the manual antab_editor session,
@@ -887,8 +872,9 @@ def antfiles(exp: experiment.Experiment) -> bool:
         review.announce_antab_summary(exp, _NOTIFIER)
 
         if not pipeline.run_antab_editor(exp):  # TODO: use the correct codes if eEVN or line
-            rprint("[bold yellow]STOPPED PROCESS:[/bold yellow] [yellow]antab_editor needs manual intervention.[/yellow]")
-            return False
+            raise StepFailed(f"`antab_editor.py` needs to be run by hand in "
+                             f"`{exp.dirs.pipe_temp}` (check the station summary above for "
+                             f"what to fix), and then run the step again.")
 
         for afile in exp.dirs.pipe_temp.glob("*.antab"):
             shutil.copy(afile, exp.dirs.pipe_in / afile.name)
@@ -904,8 +890,7 @@ def antfiles(exp: experiment.Experiment) -> bool:
                       f"{exp.eEVNname} (expected in ../{exp.eEVNname.upper()}/pipeline/in/). "
                       f"Re-run `postprocess run` once they exist.")
             _write_review_flag(exp, 'antab', reason)
-            if _NOTIFIER is not None:
-                _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
+            _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
             raise StepPaused(reason)
 
         eEVNpath = eevn.leader_antab_dir(exp)
@@ -1015,6 +1000,23 @@ def _record_final_in_toml(exp: experiment.Experiment) -> None:
                        f"toml (continuing): {e}")
 
 
+def verify(exp: experiment.Experiment) -> bool:
+    """Verifies the final FITS-IDI files, so nothing incomplete can reach the archive.
+
+    Runs the three checks of :mod:`evn_postprocess.verification` (ANTAB tables appended,
+    no data lost between the FITS-IDI chunks, FITS-IDI content matching the MS). A failure
+    stops the run before ``distribute``; the log names every problem found, and
+    ``postprocess run distribute`` is the deliberate way past it once they are understood.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True if every check passed.
+    """
+    return verification.verify(exp)
+
+
 def archive(exp: experiment.Experiment) -> bool:
     """Delivers the experiment through the mode's distribution backend.
 
@@ -1088,6 +1090,9 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
         'archive-pilet': ExecCommand(process.send_letters, "Archive the PI letter."),
         'append':        ExecCommand(process.append_antab,
                                      "Append the Tsys and GC to the FITS-IDI files."),
+        'verify':        ExecCommand(verification.verify,
+                                     "Verify the final FITS-IDI files (ANTAB tables, no data lost "
+                                     "between files, content matching the MS)."),
         'issues':        ExecCommand(process.antenna_feedback,
                                      "Report observed problems (station feedback / Grafana / RedMine)."),
         'nme':           ExecCommand(process.nme_report,
@@ -1116,24 +1121,77 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
 _EXEC_COMMANDS: dict[str, ExecCommand] = _build_exec_commands()
 
 
+def step_progress(exp: experiment.Experiment | None = None,
+                  expname: str | None = None) -> list[dict]:
+    """Returns the workflow steps in order, each with its name, doc, and done flag.
+
+    The single source of truth behind ``postprocess list`` and the dashboard Progress tab,
+    so the terminal and the browser can never show a different picture. The canonical order
+    and the documentation always come from ``_WORKFLOW_STEPS``; only the ``done`` flags come
+    from the stored state, so a step added to the program shows up immediately (as pending)
+    on an experiment checkpointed before it existed.
+
+    Args:
+        exp: An in-memory Experiment to read the done flags from. Takes precedence.
+        expname: Experiment name, used to load the stored checkpoint when *exp* is None.
+            A missing/unreadable checkpoint simply yields every step as pending.
+
+    Returns:
+        A list of ``{'name', 'doc', 'done'}`` dicts, in execution order.
+    """
+    stored = exp
+    if stored is None and expname is not None:
+        try:
+            stored = experiment.Experiment.load(expname)
+        except (FileNotFoundError, ValueError, RuntimeError, json.JSONDecodeError) as e:
+            logger.debug(f"No stored state for {expname} ({e}); reporting all steps as pending.")
+    done = {}
+    for entry in (stored.steps if stored is not None else []):
+        task = Task.from_dict(entry) if isinstance(entry, dict) else entry
+        done[task.name] = task.done
+    # 'initialize' is performed by the CLI, not by the workflow loop, so it never appears
+    # in the stored step list. Having an Experiment at all is the proof that it ran.
+    done.setdefault('initialize', stored is not None)
+    return [{'name': s.name, 'doc': s.doc, 'done': done.get(s.name, False)} for s in _WORKFLOW_STEPS]
+
+
 def list_tasks(expname: str, print_docs: bool = False):
-    """Lists all workflow steps and their status.
+    """Prints all workflow steps and whether each of them has already run.
 
     Args:
         expname: Experiment name.
         print_docs: Also print the documentation for each step.
     """
     rprint(f"\n\n[bold]Post-processing of {expname}:[/bold]")
-    exp = experiment.Experiment.load(expname)
-    if exp:
-        steps = [Task.from_dict(s) for s in exp.steps]
-    else:
-        steps = _WORKFLOW_STEPS
+    for step in step_progress(expname=expname):
+        colour = 'green' if step['done'] else 'red'
+        rprint(f"{'🟢' if step['done'] else '🔴'} [bold {colour}]{step['name']}[/bold {colour}]\n" +
+               (f"   [dim]{step['doc']}[/dim]" if print_docs else ""))
 
-    for s in steps:
-        rprint(f"{'🟢' if s.done else '🔴'}"
-               f" [bold {'green' if s.done else 'red'}]{s.name}[/bold {'green' if s.done else 'red'}]\n" +
-               (f"   [dim]{s.doc}[/dim]" if print_docs else ""))
+
+def build_run_help() -> str:
+    """Builds the rich-formatted help of ``postprocess run``, listing every workflow step.
+
+    Generated from ``_WORKFLOW_STEPS`` so the help can never drift from the steps the
+    program actually runs (the previous hand-written list named steps that do not exist).
+    """
+    lines = ["[bold]Runs the post-process from a given step[/bold].\n",
+             "Three different approaches can be used:\n",
+             "        [italic]postprocess run[/italic] (no param)",
+             "                Runs the entire post-process (or continues from the last step "
+             "that finalized properly).",
+             "        [italic]postprocess run STEP1[/italic]",
+             "                Runs from STEP1 until the end (or until manual interaction is "
+             "required).",
+             "        [italic]postprocess run STEP1 STEP2[/italic]",
+             "                Runs from STEP1 until STEP2 (both included).\n",
+             "The available steps, in order, are:"]
+    for step in _WORKFLOW_STEPS:
+        lines.append(f"  - [bold green]{step.name}[/bold green] : {step.doc}")
+    if _STEP_ALIASES:
+        lines.append("\n[dim]Deprecated aliases: "
+                     + ', '.join(f"{old} -> {new}" for old, new in _STEP_ALIASES.items()) + "[/dim]")
+    return '\n'.join(lines)
 
 
 def build_exec_help() -> str:
@@ -1190,9 +1248,12 @@ def run_isolated_task(task_name: str, expname: str | None = None):
         logger.info(f"Running {task_name} -> {'OK' if result else 'FAILED'}")
         exp.store()
         return result
+    except StepFailed as failure:  # a stop that needs a human, not a crash: no traceback
+        logger.error(f"The command '{task_name}' stopped: {failure}")
+        reporting.announce(str(failure), style='bold red')
+        sys.exit(1)
     except Exception as e:
-        logger.error(f"Error running command '{task_name}': {e}")
-        traceback.print_exc()
+        logger.opt(exception=True).error(f"Error running the command '{task_name}': {e}")
         sys.exit(1)
 
 
@@ -1389,13 +1450,6 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
             _reset_from('pipeline', "Pipeline output(s) older than input(s)")
 
 
-def _log_file_path(exp: experiment.Experiment) -> Path:
-    """Returns the loguru debug-log path: ``logs/logging_messages.log`` in the working
-    directory (see evn_postprocess.reporting; the replayable command log is a separate
-    file, ``logs/commands.sh``)."""
-    return reporting.debug_log_path()
-
-
 def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
     """Configure the loguru file sink for the debug log (logs/logging_messages.log).
 
@@ -1442,7 +1496,7 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
 
     try:
         logger.remove()  # Remove default stderr handler to avoid duplicate messages
-        logger.add(_log_file_path(exp), colorize=False, level=level, backtrace=True,
+        logger.add(reporting.debug_log_path(), colorize=False, level=level, backtrace=True,
                    diagnose=True, format=_file_format)
         logger.add(_console_sink, colorize=False, level=level, backtrace=True, diagnose=True,
                    format="{message}")
@@ -1450,163 +1504,280 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
         rprint(f"[yellow]Warning: Could not create debug log file: {e}[/yellow]")
 
 
+def _pause_steps(exp: experiment.Experiment) -> tuple[str, ...]:
+    """The steps after which the run stops for a human review.
+
+    Comes from ``Policy.pause_after`` when a policy is attached, otherwise the default
+    ('postpipe': review the pipeline results and the PI letter before archiving).
+    """
+    if exp.policy is not None and exp.policy.pause_after is not None:
+        return tuple(_resolve_step_alias(name) for name in exp.policy.pause_after)
+    return (DEFAULT_PAUSE_AFTER,)
+
+
+def _review_pause(exp: experiment.Experiment, step: str) -> str | None:
+    """Stops after *step* so the operator can review the results, and asks how to continue.
+
+    Announces on all configured channels (terminal panel, desktop notification, comms
+    notifier) with the exact command to open the dashboard, then waits for an answer. In
+    batch mode nothing is asked: a REVIEW_REQUIRED marker is written and the run ends
+    cleanly so a scheduler can detect the pause without parsing logs.
+
+    Args:
+        exp: Experiment object.
+        step: The step that just completed.
+
+    Returns:
+        None to continue with the remaining steps, 'quit' to end the run here, or the
+        name of the step to re-run from.
+    """
+    piletter = f"{exp.expname.lower()}.piletter"
+    open_cmd = f"postprocess -e {exp.expname} info --serve"
+    logger.info(f"Paused after '{step}': waiting for the operator to review the results.")
+    # Written once, in Markdown, and used for both channels: the terminal panel renders it
+    # and the notifier sends it verbatim, so the operator reads the same instructions in
+    # the chat as on the screen.
+    needed = (f"1. Open the dashboard: `{open_cmd}` (from `{Path.cwd()}`) and check the "
+              f"plots, the Pipeline tab, and fill in the **Comments** tab per station.\n"
+              f"2. Review the PI letter (`{piletter}`). Non-observing antennas and "
+              f"PolConvert remarks have been filled in automatically — verify and edit "
+              f"if needed.\n"
+              f"3. Answer in the terminal where the run is waiting: Enter to finalize and "
+              f"archive, a step name (e.g. `pipeline`) to re-run from it, or `quit` to "
+              f"stop here. With the terminal already gone, `postprocess run` finalizes.")
+    Console().print(Panel(Markdown(f"**Please review before continuing:**\n\n{needed}"),
+                          title=f"[bold yellow]Paused after '{step}' — results ready "
+                                "for review[/bold yellow]",
+                          border_style="yellow", padding=(1, 2)))
+    utils.notify(f"{exp.expname} post-processing", f"Paused after '{step}' — review the results")
+    _comms.notify_operator(exp, f"paused after '{step}'",
+                           f"The `{step}` step finished and the results are ready for your "
+                           f"review; the post-processing waits until you answer.",
+                           needed, _NOTIFIER)
+    if _BATCH_MODE:
+        _write_review_flag(exp, step,
+                           f"Review the dashboard ({open_cmd}) and the PI letter, then resume "
+                           f"with `postprocess run` (or `postprocess run STEP` to re-run from "
+                           f"STEP).")
+        return 'quit'
+
+    answer = _ask_review_confirmation()
+    if answer is None:
+        _clear_review_flag(exp)
+        logger.info(f"Review after '{step}' approved; continuing with the remaining steps.")
+    return answer
+
+
+def _announce_completion(exp: experiment.Experiment) -> None:
+    """Closes a finished run with everything the post-processing spotted.
+
+    The operator does not read the log of a run that went well, so the message that says
+    it finished is the one place where all the findings have to be: what was applied to
+    the data, which antennas did not observe, what was seen on the ones that did, and
+    which station files arrived for each. One Markdown text (:func:`review.final_summary`)
+    is rendered in the terminal panel and sent verbatim to the chat, so both say the same.
+
+    Nothing here can fail the run: it is written after the last step is already done.
+
+    Args:
+        exp: Experiment object.
+    """
+    if not (summary := review.final_summary(exp)):
+        return
+    try:
+        Console().print(Panel(Markdown(summary),
+                              title=f"[bold green]{exp.expname} — post-processing complete"
+                                    "[/bold green]", border_style="green", padding=(1, 2)))
+    except Exception as e:  # rendering must never be the last thing that breaks
+        logger.warning(f"Could not render the final summary ({e}); plain text:\n{summary}")
+    _comms.notify_operator(exp, "the post-processing is complete",
+                           f"The post-processing finished. This is what was spotted:\n\n"
+                           f"{summary}", "", _NOTIFIER)
+
+
+def _plan_steps(exp: experiment.Experiment, archive: bool,
+                from_step: str | None, to_step: str | None) -> list[Task]:
+    """Builds the full ordered step list and the sub-list this invocation must run.
+
+    ``initialize`` is always excluded (the CLI performs it), ``distribute`` when archiving
+    is off, and any step named in the config ``skip_steps``. The done flags are restored
+    from the stored state and, on a resume, re-validated against the files on disk.
+
+    Args:
+        exp: Experiment object (its ``steps`` are rewritten and stored).
+        archive: False to leave the 'distribute' step out.
+        from_step: Re-run from this step, resetting it and everything after it.
+        to_step: Stop after this step (only meaningful together with *from_step*).
+
+    Returns:
+        The steps this invocation must run, in order (a sub-list of the full plan, which
+        is left on ``exp.steps``).
+    """
+    all_steps = [replace(s) for s in _WORKFLOW_STEPS
+                 if (archive or s.name != 'distribute') and s.name != 'initialize']
+    # skip_steps from the prepared config (used in sweeps mode): bypass the named steps.
+    skip = set(getattr(_exp_toml(exp), 'skip_steps', []) or [])
+    if (skipped := [s.name for s in all_steps if s.name in skip]):
+        logger.info(f"Skipping steps from the config skip_steps: {', '.join(skipped)}.")
+        all_steps = [s for s in all_steps if s.name not in skip]
+
+    step_names = [s.name for s in all_steps]
+    stored_done = {task.name: task.done
+                   for task in (Task.from_dict(s) if isinstance(s, dict) else s
+                                for s in (exp.steps or []))}
+
+    if from_step is not None:
+        # Explicit restart: keep the done state before from_step, reset it from there on.
+        from_idx = step_names.index(from_step)
+        for i, step in enumerate(all_steps):
+            step.done = stored_done.get(step.name, False) if i < from_idx else False
+        exp.steps = all_steps
+        exp.store()
+        to_idx = step_names.index(to_step) + 1 if to_step is not None else len(all_steps)
+        return all_steps[from_idx:to_idx]
+
+    # Resume: restore the stored done state and continue after the last completed step.
+    for step in all_steps:
+        step.done = stored_done.get(step.name, False)
+    _validate_outputs(exp, all_steps)
+    exp.steps = all_steps
+    exp.store()
+    # Resume from the step *after* the last one marked done, NOT from the first pending one.
+    # An operator who runs a failed step by hand and then continues with a later one (e.g.
+    # polconvert manually, then `postprocess run post_polconvert`) leaves a gap of pending
+    # steps behind that frontier; re-running them would redo work that has already been
+    # superseded. They are reported as bypassed instead. `postprocess run STEP` remains the
+    # explicit way to go back.
+    last_done = max((i for i, s in enumerate(all_steps) if s.done), default=-1)
+    if (bypassed := [s.name for s in all_steps[:last_done + 1] if not s.done]):
+        logger.info(f"[yellow]Resuming after '{all_steps[last_done].name}' (the last completed "
+                    f"step). Bypassing earlier steps never completed through the workflow: "
+                    f"{', '.join(bypassed)}. Use `postprocess run {bypassed[0]}` to re-run from "
+                    f"there.[/yellow]")
+    return all_steps[last_done + 1:]
+
+
+def _run_step(exp: experiment.Experiment, step: Task) -> bool:
+    """Runs a single workflow step, tracing its start, outcome and duration in the log.
+
+    Every step passes through here, so ``logs/logging_messages.log`` always records when
+    each one started, whether it succeeded, and how long it took — no step can run
+    unlogged. The commands it executes are appended, under the step's name, to
+    ``logs/commands.sh`` (see evn_postprocess.reporting).
+
+    Args:
+        exp: Experiment object.
+        step: The step to run; its ``done`` flag is set (and the state stored) on success.
+
+    Returns:
+        True if the step succeeded.
+
+    Raises:
+        StepPaused: Propagated from the step (a clean wait state, not a failure).
+    """
+    reporting.set_current_step(step.name)
+    logger.info(f"[bold]Step '{step.name}' started[/bold] ({step.command}).")
+    started = time.monotonic()
+
+    command = globals().get(step.command)
+    if command is None:
+        _notify_step_failure(exp, step.name, "internal error: command not found")
+        return False
+
+    try:
+        succeeded = command(exp)
+    except StepFailed as failure:
+        _notify_step_failure(exp, step.name, str(failure), time.monotonic() - started)
+        return False
+
+    if not succeeded:
+        _notify_step_failure(exp, step.name, "the step reported a failure",
+                             time.monotonic() - started)
+        return False
+
+    step.done = True
+    exp.store()
+    logger.info(f"Step '{step.name}' completed successfully in "
+                f"{_format_duration(time.monotonic() - started)}.")
+    return True
+
+
+def _format_duration(seconds: float) -> str:
+    """Formats an elapsed time in seconds as a compact, human-readable string."""
+    if seconds < 60:
+        return f"{seconds:.1f} s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min {int(seconds % 60)} s"
+    return f"{int(seconds // 3600)} h {int((seconds % 3600) // 60)} min"
+
+
 def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool = False,
-                 from_step: str | None = None, to_step: str | None = None):
-    """Run the workflow for the given experiment.
+                 from_step: str | None = None, to_step: str | None = None) -> bool:
+    """Runs the post-processing workflow for the given experiment.
 
     When from_step is None the workflow resumes: execution begins at the step right after the
-    last one marked done.  Pending steps *before* that frontier (left behind when the operator
-    fixed a failed step by hand and continued from a later one) are bypassed, not re-run.  When
+    last one marked done. Pending steps *before* that frontier (left behind when the operator
+    fixed a failed step by hand and continued from a later one) are bypassed, not re-run. When
     from_step is given the workflow re-runs from that step, resetting the done flag for it and
     all subsequent steps.
 
     Args:
         exp: The experiment object.
-        archive: Whether to include the archive step.
+        archive: Whether to include the 'distribute' step.
         debug: Whether to enable debug logging.
         from_step: Re-run from this step name (optional).
         to_step: Stop after this step name (optional, only used with from_step).
 
     Returns:
-        bool: True if workflow completed successfully (or paused at postpipe), False otherwise.
+        bool: True if the workflow completed successfully or stopped cleanly (review pause,
+        e-EVN barrier); False if a step failed.
     """
-    if not (f := _log_file_path(exp)).exists():
-        exp.write_log_file(f)
-
     _setup_loguru(exp, debug)
+    logger.info(exp.log_header())
+    if exp.policy is not None and exp.policy.skip_archive:
+        archive = False
     if not archive:
-        logger.debug("The data will not be stored in the EVN archive.")
+        logger.info("The data will NOT be delivered to the EVN archive in this run.")
 
     from_step = _resolve_step_alias(from_step)
     to_step = _resolve_step_alias(to_step)
-    all_steps = [s for s in _WORKFLOW_STEPS if (archive or s.name != 'distribute') and s.name != 'initialize']
-    # skip_steps from the prepared config (used in sweeps mode): bypass the named steps.
-    skip = set(getattr(_exp_toml(exp), 'skip_steps', []) or [])
-    if skip:
-        skipped = [s.name for s in all_steps if s.name in skip]
-        if skipped:
-            logger.info(f"Skipping steps from the config skip_steps: {', '.join(skipped)}.")
-        all_steps = [s for s in all_steps if s.name not in skip]
-    step_names = [s.name for s in all_steps]
-
-    # Deserialize stored steps from JSON dicts into Task objects if needed
-    stored_steps = [Task.from_dict(s) if isinstance(s, dict) else s for s in (exp.steps or [])]
-
-    if from_step is not None:
-        # Explicit restart: preserve done state for steps before from_step, reset from it onwards
-        stored_done = {s.name: s.done for s in stored_steps}
-        from_idx = step_names.index(from_step)
-        for i, s in enumerate(all_steps):
-            s.done = stored_done.get(s.name, False) if i < from_idx else False
-        exp.steps = all_steps
-        exp.store()
-
-        steps_to_run = all_steps[from_idx:(step_names.index(to_step) + 1 if to_step is not None else len(all_steps))]
-    else:
-        # Resume: restore stored done state and continue after the last completed step
-        if stored_steps:
-            stored_done = {s.name: s.done for s in stored_steps}
-            for s in all_steps:
-                s.done = stored_done.get(s.name, False)
-        _validate_outputs(exp, all_steps)
-        exp.steps = all_steps
-        exp.store()
-        # Resume from the step *after* the last one marked done, NOT from the first pending one.
-        # An operator who runs a failed step by hand and then continues with a later one (e.g.
-        # polconvert manually, then `postprocess run post_polconvert`) leaves a gap of pending
-        # steps behind that frontier; re-running them would redo work that has already been
-        # superseded. They are reported as bypassed instead. `postprocess run STEP` remains the
-        # explicit way to go back.
-        last_done = max((i for i, s in enumerate(all_steps) if s.done), default=-1)
-        bypassed = [s.name for s in all_steps[:last_done + 1] if not s.done]
-        if bypassed:
-            logger.info(f"[yellow]Resuming after '{all_steps[last_done].name}' (the last completed step). "
-                        f"Bypassing earlier steps never completed through the workflow: "
-                        f"{', '.join(bypassed)}. Use `postprocess run {bypassed[0]}` to re-run from "
-                        f"there.[/yellow]")
-        steps_to_run = all_steps[last_done + 1:]
-
+    steps_to_run = _plan_steps(exp, archive, from_step, to_step)
     if not steps_to_run:
-        rprint("[yellow]No pending steps — the post-processing is already complete.[/yellow]")
+        logger.info("No pending steps — the post-processing is already complete.")
         return True
 
-    logger.debug(f"Running steps: {', '.join(s.name for s in steps_to_run)}")
-    rprint(f"[green]Running steps: {', '.join(s.name for s in steps_to_run)}[/green]")
-
-    for step in steps_to_run:
-        # Three channels (see evn_postprocess.reporting): a concise terminal line for the
-        # operator, verbose detail to the loguru debug file, and the exact commands this
-        # step runs appended (headed by its name) to logs/commands.sh.
-        reporting.set_current_step(step.name)
-        reporting.announce(f"-- {step.name}")
+    pause_after = _pause_steps(exp)
+    logger.info(f"Running steps: {', '.join(s.name for s in steps_to_run)}.")
+    for position, step in enumerate(steps_to_run):
         try:
-            if step.command not in globals():
-                _notify_step_failure(exp, step.name, "internal error: command not found")
+            if not _run_step(exp, step):
                 return False
-
-            if not globals()[step.command](exp):
-                _notify_step_failure(exp, step.name, "the step reported a failure")
-                return False
-
-            step.done = True
-            exp.store()
-            logger.info(f"Step {step.name} completed successfully")
         except StepPaused as pause:
-            # A clean wait state (e.g. an e-EVN barrier), NOT a failure: log and
-            # notify as "paused" so failure notifications stay trustworthy, and exit
-            # cleanly (return True -> exit code 0) for the scheduler. The step stays
-            # pending and re-runs on resume.
-            logger.info(f"Step {step.name} paused: {pause}")
+            # A clean wait state (e.g. an e-EVN barrier), NOT a failure: log and notify as
+            # "paused" so failure notifications stay trustworthy, and exit cleanly (True ->
+            # exit code 0) for the scheduler. The step stays pending and re-runs on resume.
+            logger.info(f"Step '{step.name}' paused: {pause}")
             utils.notify(f"{exp.expname} post-processing", f"Paused at {step.name}: {pause}")
             return True
         except Exception as e:
-            traceback.print_exc()
+            logger.opt(exception=True).error(f"Step '{step.name}' raised an unexpected error.")
             _notify_step_failure(exp, step.name, f"unexpected error: {e}")
             return False
 
-        # After postpipe, ask the user to review the dashboard before archiving
-        # (PRD stories 13, 20, 21): announce in the terminal AND via the notifier with
-        # the exact command to open, then confirm interactively — approving continues
-        # with the final steps in this same run; naming a step re-runs from it.
-        if step.name == 'postpipe':
-            if steps_to_run[steps_to_run.index(step) + 1:]:
-                piletter = f"{exp.expname.lower()}.piletter"
-                open_cmd = f"postprocess -e {exp.expname} info --serve"
-                body = (f"[bold]Please review before continuing:[/bold]\n\n"
-                        f"  1. Open the dashboard: [bold green]{open_cmd}[/bold green]\n"
-                        f"     (from [dim]{Path.cwd()}[/dim]; check the plots, the Pipeline\n"
-                        f"     tab, and fill in the [bold]Comments[/bold] tab per station).\n"
-                        f"  2. Review the PI letter ([bold cyan]{piletter}[/bold cyan]).\n"
-                        f"     Non-observing antennas and PolConvert remarks have been\n"
-                        f"     filled in automatically — verify and edit if needed.\n\n"
-                        f"[bold]Then answer below:[/bold] press Enter to finalize and archive,\n"
-                        f"type a step name (e.g. [bold green]pipeline[/bold green]) to re-run from it, "
-                        f"or type [bold green]quit[/bold green] to stop here.")
-                Console().print(Panel(body, title="[bold yellow]Pipeline Results Ready for Review[/bold yellow]",
-                                      border_style="yellow", padding=(1, 2)))
-                utils.notify(f"{exp.expname} post-processing", "Paused — review pipeline results before continuing")
-                if _NOTIFIER is not None:
-                    _comms.notify_step_pause(exp, 'postpipe',
-                                             f"Review the dashboard: run `{open_cmd}` in {Path.cwd()} "
-                                             f"(plots + Pipeline tab + Comments tab), and check the "
-                                             f"PI letter ({piletter}). Then answer in the terminal "
-                                             f"(or `postprocess run` to finalize).", _NOTIFIER)
-                if _BATCH_MODE:
-                    _write_review_flag(exp, 'postpipe',
-                                       f"Review the dashboard ({open_cmd}) and the PI letter, then "
-                                       f"resume with `postprocess run` (or `postprocess run STEP` "
-                                       f"to re-run from STEP).")
-                    return True
-                answer = _ask_review_confirmation()
-                if answer == 'quit':
-                    return True
-                if answer is not None:
-                    logger.info(f"Operator requested a re-run from step '{answer}'.")
-                    return run_workflow(exp, archive=archive, debug=debug,
-                                        from_step=answer, to_step=to_step)
-                _clear_review_flag(exp)
-                # approved: fall through and continue with the remaining steps
+        # A pause step (by default 'postpipe') stops the run for a human review, but only
+        # when there is still something left to do afterwards.
+        if step.name in pause_after and steps_to_run[position + 1:]:
+            answer = _review_pause(exp, step.name)
+            if answer == 'quit':
+                return True
+            if answer is not None:
+                logger.info(f"Operator requested a re-run from step '{answer}'.")
+                return run_workflow(exp, archive=archive, debug=debug,
+                                    from_step=answer, to_step=to_step)
 
-    logger.info(f"The processing of {exp.expname} seems to have finalized properly.")
+    reporting.set_current_step(None)
+    logger.info(f"The post-processing of {exp.expname} finalized properly "
+                f"({len(steps_to_run)} step(s) run).")
+    _announce_completion(exp)
     utils.notify(f"{exp.expname} post-processing", "Completed successfully")
     return True

@@ -9,16 +9,43 @@ import re
 import glob
 import shutil
 import subprocess
-import traceback
 from importlib import resources
 from loguru import logger
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from rich import print as rprint
+from . import experiment
 from . import utils
 from . import lisfiles
 from . import comment_tasav
 from . import feedback
+
+
+def _link_vixfile(exp) -> None:
+    """Symlinks the experiment .vix into ``antenna_files/``, beside the station files.
+
+    antab_editor.py runs from that directory, so having the vex schedule there means it —
+    and anyone working in there by hand — can reach it without stepping back out of the
+    directory. The link is relative, so it survives the experiment directory being moved.
+
+    Never fails the step: a missing vex, or the name already taken in ``antenna_files/``,
+    is a warning and nothing more.
+    """
+    link = exp.dirs.pipe_temp / exp.vixfile.name
+    if link.is_symlink() and not link.exists():
+        logger.warning(f"Replacing dangling symlink {link} (pointed to a missing file).")
+        link.unlink()
+    elif link.exists():
+        return
+
+    if not exp.vixfile.exists():
+        logger.warning(f"No {exp.vixfile} found to link into {exp.dirs.pipe_temp}.")
+        return
+    try:
+        link.symlink_to(os.path.relpath(exp.vixfile.resolve(), link.parent.resolve()))
+        logger.debug(f"Linked {exp.vixfile} into {exp.dirs.pipe_temp}.")
+    except OSError as e:
+        logger.warning(f"Could not link {exp.vixfile} into {exp.dirs.pipe_temp}: {e}")
 
 
 def run_antab_editor(exp) -> bool:
@@ -28,6 +55,9 @@ def run_antab_editor(exp) -> bool:
     once from the main experiment, passing the associated experiments via ``-a``
     together with the path to their FITS-IDI files, so a single, consistent set of
     Tsys/gain tables is produced for the whole session.
+
+    The experiment .vix is linked into ``antenna_files/`` first, so the vex schedule sits
+    beside the station files the editor works on (see :func:`_link_vixfile`).
 
     Returns:
         bool: True once the editor exits successfully (the editor itself runs
@@ -46,6 +76,7 @@ def run_antab_editor(exp) -> bool:
     if exp.eEVNname is not None:
         other_exps = [e for e in exp.eEVN_experiments() if e.upper() != exp.expname.upper()]
 
+    _link_vixfile(exp)
     original_cwd = os.getcwd()
     os.chdir(exp.dirs.pipe_temp)
     try:
@@ -238,23 +269,21 @@ def run_pipeline(exp) -> bool:
             
         logger.info(f"Setting the PIPEFITS environment variable to {os.environ.get('PIPEFITS')}")
         if len(pipepasses) > 1:
-            with ProcessPoolExecutor() as executor:
+            with ProcessPoolExecutor(utils.pass_workers(len(pipepasses))) as executor:
                 futures = [executor.submit(utils.shell_command, "EVN.py", [f"{exp.expname.lower()}_{i}.inp.txt"], stdout=None) 
                            for i in range(1, len(pipepasses) + 1)]
                 for i, future in enumerate(futures):
                     try:
                         future.result()
                     except Exception as e:
-                        logger.error(f"Pipeline pass {i+1} failed: {e}")
-                        traceback.print_exc()
+                        logger.opt(exception=True).error(f"Pipeline pass {i + 1} failed: {e}")
                         return False
         else:
             utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=None) #subprocess.PIPE)
 
         return True
     except Exception as e:
-        logger.error(f"Unexpected error running pipeline: {e}")
-        traceback.print_exc()
+        logger.opt(exception=True).error(f"Unexpected error running the pipeline: {e}")
         return False
     finally:
         # Always restore the working directory. Several early-return paths above
@@ -303,8 +332,8 @@ def comment_tasav_files(exp) -> bool:
 
         return True
     except Exception as e:
-        logger.error(f"Unexpected error creating comment/tasav files: {e}")
-        traceback.print_exc()
+        logger.opt(exception=True).error(f"Unexpected error creating the comment/tasav "
+                                         f"files: {e}")
         return False
 
 
@@ -317,9 +346,9 @@ def pipeline_feedback(exp) -> bool:
     """
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
     sources = [s.name for s in exp.sources]
-    # Network Monitoring Experiments (and the e-EVN test experiments) use the NME-formatted
-    # feedback page. These are identified by the experiment name starting with 'N' or 'F'.
-    is_nme = exp.expname[:1].upper() in ('N', 'F')
+    # Network Monitoring Experiments use the NME-formatted feedback page
+    # (see experiment.is_nme for the single definition of what an NME is).
+    is_nme = experiment.is_nme(exp.expname)
 
     # Always regenerate the feedback page(s): remove any pre-existing feedback HTML for this
     # experiment first. This guarantees the page reflects the latest products/comments on

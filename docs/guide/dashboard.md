@@ -1,8 +1,8 @@
 # Dashboard
 
 The web dashboard provides a visual overview of the experiment, its standard
-plots, the pipeline output, and — new — a station-comments review tab that feeds
-the PI letter.
+plots, the pipeline output, a station-comments review tab that feeds the PI letter,
+and the progress of the post-processing itself.
 
 ## Launching the dashboard
 
@@ -73,6 +73,19 @@ Click **Save comments** to persist. Saved entries always win over the
 auto-generated defaults on reload, and survive a re-run of earlier steps. The
 dashboard reloads the toml from disk immediately before saving, so edits made by
 a separate paused `postprocess run` process are never lost.
+
+### Progress
+
+The full list of post-processing steps, in execution order, and which of them have
+already run — the same information as `postprocess list`, from the same source
+(`workflow.step_progress`), so the terminal and the browser can never disagree.
+
+Each step shows a marker (🟢 done, 🔵 the next one to run, ⚫ still pending), its name,
+and what it does. A bar at the top summarises how far the post-processing has got.
+
+The done flags are re-read from the `{expname}.json` checkpoint on every request and the
+tab polls every 15 s while it is visible, so a dashboard left open in one terminal
+follows a run advancing in another.
 
 ## Experiment summary (`postprocess info`, no `--serve`)
 

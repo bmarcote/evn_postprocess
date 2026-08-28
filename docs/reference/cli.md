@@ -6,8 +6,7 @@
 postprocess [-h] [-e EXPNAME] [-jss SUPSCI] [-d DIR] [-a] [--no-lag] [--debug]
             [--refant REFANT [REFANT ...]]
             [--mode {supsci,regular,sweeps}] [--config FILE]
-            [--policy FILE] [--tConvert-in-eee | --no-tConvert-in-eee]
-            [--batch] [--comms FILE] [-v]
+            [--policy FILE] [--batch] [--comms FILE] [-v]
             {info,dashboard,list,last,run,exec,edit} ...
 ```
 
@@ -25,7 +24,6 @@ postprocess [-h] [-e EXPNAME] [-jss SUPSCI] [-d DIR] [-a] [--no-lag] [--debug]
 | `--mode {supsci,regular,sweeps}` | Operating mode. Auto-detected from the OS when omitted (see below); overrides and re-persists the mode stored on the experiment. |
 | `--config FILE` | Experiment toml used as the prepared config (sweeps mode). Optional: defaults to the conventional `{expname}.toml`. |
 | `--policy FILE` | Path to `policy.toml` for unattended decisions. |
-| `--tConvert-in-eee` / `--no-tConvert-in-eee` | Run `tConvert`/PolConvert on `eee` (default) or locally. |
 | `--batch` | Run unattended; write `REVIEW_REQUIRED` instead of blocking. |
 | `--comms FILE` | Path to `comms.toml` for notifications. Auto-searches if not given. |
 | `-v`, `--version` | Print version and exit. |
@@ -51,7 +49,7 @@ postprocess run [STEP1 [STEP2]]
 
 Runs the pipeline. Without arguments: from last successful step. With one step:
 from that step to the end. With two steps: from STEP1 to STEP2 (inclusive). See
-[Workflow Steps & Local Tools](steps.md) for the 16 step names. The final step is
+[Workflow Steps & Local Tools](steps.md) for the 17 step names. The final step is
 `distribute` (the deprecated name `archive` still works as an alias).
 
 #### `info`
@@ -63,6 +61,10 @@ postprocess info [--serve]
 Shows experiment metadata (including values sourced from the experiment toml,
 marked with their origin). With `--serve`: launches the web dashboard (see
 [Dashboard](../guide/dashboard.md)).
+
+Requires an experiment whose post-processing has already been started: `info`,
+`dashboard` and `edit` only report on (or amend) the stored `{expname}.json`; they
+never retrieve files or create a directory structure. Only `postprocess run` does.
 
 #### `dashboard`
 
@@ -84,7 +86,8 @@ postprocess last
 ```
 
 Shows all steps and which have been completed (identical output; `last` is a
-historical alias).
+historical alias). The same information is shown in the **Progress** tab of the
+web dashboard — both read `workflow.step_progress`.
 
 #### `exec`
 
