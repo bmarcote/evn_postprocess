@@ -1,0 +1,353 @@
+\documentclass{report}
+\usepackage{lscape}
+\pagestyle{empty}
+\usepackage[a4paper]{geometry}
+\usepackage{upgreek}
+
+\setlength\unitlength{0.1cm}\def\sqbox{\linethickness{0.01pt}
+  \begin{picture}(3,3)(0,0)\put(-0.75,-0.5){\dashbox{0.5}(3,3){}}\end{picture}}
+\def\phbox{$\phantom{\sqbox}$}
+\newcommand{\nobs}{\phbox} % phantom box
+\newcommand{\ntry}{$\bigcirc$}
+\newcommand{\okay}{$\bigotimes$} % cross
+\newcommand{\err}{\rule[-0.065cm]{0.3cm}{0.3cm}} % black dot (square)
+%%
+%% Default observing and session characteristics
+%%
+
+\def\obsband{K-band}  % C, L, X, S, K, Q
+%%\def\repnr{07/...} % yy/ss ; ss in Roman numerals - obsolete
+\def\obssrc{J0530+1331, J0741+3112, OJ287, and 4C39.25}  % source(s) observed
+\def\obslength{180} % duration of experiment in minutes
+\def\obsmode{2048 Gbps, 8 channels, 2 bit, dual pol.} % SCHED mode (somewhat obsolete)
+%%   [total bit-rate (Mbps)]-[# channels]-[# bits]
+\def\refant{Effelsberg} % reference antenna used for clock-search
+\def\obsdate{29/05/26} % dd/mm/yy
+\def\refdate{\obsdate; 149d 09h 00m} % dayofyear, hours minutes
+\def\expcode{N26K2}
+\def\repdate{22/06/26}  % dd/mm/yy
+\def\reporter{Benito Marcote} % support scientist
+\def\ssemail{marcote@jive.eu} % your email address
+%%
+%% Table header, no need to modify
+%%
+\begin{document}
+\begin{landscape}
+\hsize 23cm\vsize 17cm\voffset 2.5cm\hoffset -2.5cm
+\begin{table*}
+\begin{flushleft}\begin{tabular}[t]{lrr}
+{\huge Network Monitoring Report:}&{\huge\bf \obsband}&{\huge \expcode}\\
+\noalign{\smallskip}\hline\hline\noalign{\smallskip}
+\end{tabular}\end{flushleft}\begin{flushleft}\begin{tabular}{lll}
+{\bf Source:} \obssrc&{\bf Length:} \obslength~min.&
+{\bf Observing mode:} \obsmode\\
+{\bf Reference antenna:} \refant&{\bf Date of observations:} \obsdate&
+{\bf Reference date:} \refdate\\
+{\bf Experiment code:} \expcode&{\bf Date of report:}\hfill \repdate&
+{{\bf by:} \reporter}\\
+\end{tabular}\end{flushleft}\begin{flushleft}\begin{tabular}{lcllcl}
+&\okay & According to expectation, no special remarks&
+$\phantom{0000}$&\sqbox & Station did not observe (not scheduled)\\
+&\err  & Problem occured - see enclosed footnote(s)&
+$\phantom{0000}$&\ntry & Entry not applicable/investigated\\
+\end{tabular}\end{flushleft}
+
+\begin{flushleft}\begin{tabular}{l|ccccccccccccc}
+\hline\noalign{\smallskip}\hline\noalign{\smallskip}
+
+&Jb2&Ef&Mc&O6&T6&Ur&Tr&Mh&Hh&Kt&Ky&Ku&Kc\\
+\noalign{\smallskip}\hline\noalign{\smallskip}
+%%
+%% Entry of faults and numbers start here
+%% ======================================
+%%
+%% \okay  - according to expectation, no special remarks
+%% \sqbox - Did not observed (not scheduled)
+%% \err   - Problem occured - see enclosed footnote(s)
+%% \ntry  - Entry not applicable/investigated
+%%
+
+Station has observed
+&\okay % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\err % Ur
+&\okay % Tr
+&\okay % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+Station produced fringes (ftp)
+&\err % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\ntry % Ur
+&\okay % Tr
+&\okay % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+Station produced fringes (disk)
+&\okay % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\ntry % Ur
+&\okay % Tr
+&\okay % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+\noalign{\smallskip}
+\cline{2-14}
+\noalign{\smallskip}
+\cline{2-14}
+\noalign{\smallskip}
+Logs are available (within 72 hours)
+&\err  % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\ntry % Ur
+&\okay % Tr
+&\err  % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+Antabs on vlbeer (within 7 days)
+&\err  % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\err  % T6
+&\ntry % Ur
+&\okay % Tr
+&\err  % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+Feedback on www (within 7 days)
+&\err  % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\ntry % Ur
+&\okay % Tr
+&\err  % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+\noalign{\smallskip}
+GPS clock estimate gives fringes
+&\okay % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\ntry % Ur
+&\okay % Tr
+&\okay % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+\cline{2-14}
+% Find the values in ccsbeta, klxM file. Multiply by 10^6 to get ps/s
+Clock rate in psec/sec
+&$0.314$ % Jb2
+&$0.626$ % Ef
+&$-0.017$ % Mc
+&$-0.73$ % O6
+&$0.729$ % T6
+&$--$ % Ur
+&$0.065$ % Tr
+&$-0.176$ % Mh
+&$-0.02$ % Hh
+&$-0.258$ % Kt
+&$-0.995$ % Ky
+&$-0.278$ % Ku
+&$-1.205$ % Kc
+\\
+\cline{2-14}
+\noalign{\smallskip}
+Recording okay
+&\okay % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\ntry % Ur
+&\okay % Tr
+&\okay % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+\noalign{\smallskip}
+Polarization setup okay
+&\okay % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\ntry % Ur
+&\okay % Tr
+&\okay % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+Strong signal amplitude
+&\err  % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\ntry % Ur
+&\okay % Tr
+&\okay % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+Sampler statistics okay
+&\okay % Jb2
+&\okay % Ef
+&\okay % Mc
+&\okay % O6
+&\okay % T6
+&\ntry % Ur
+&\okay % Tr
+&\okay % Mh
+&\okay % Hh
+&\okay % Kt
+&\okay % Ky
+&\okay % Ku
+&\okay % Kc
+\\
+Please check BBC number(s):
+&  % Jb2
+&  % Ef
+&  % Mc
+&  % O6
+&  % T6
+&  % Ur
+&  % Tr
+&  % Mh
+&  % Hh
+&  % Kt
+&  % Ky
+&  % Ku
+&  % Kc
+\\
+\cline{2-14}
+\noalign{\smallskip}
+Previous reported problem(s) corrected
+&  % Jb2
+&  % Ef
+&  % Mc
+&  % O6
+&  % T6
+&  % Ur
+&  % Tr
+&  % Mh
+&  % Hh
+&  % Kt
+&  % Ky
+&  % Ku
+&  % Kc
+\\
+Problem(s) first reported
+&\ntry % Jb2
+&  % Ef
+&  % Mc
+&  % O6
+&  % T6
+&  % Ur
+&  % Tr
+&  % Mh
+&  % Hh
+&  % Kt
+&  % Ky
+&  % Ku
+&  % Kc
+\\
+\cline{2-14}
+See enclosed footnote(s):
+&a % Jb2
+&  % Ef
+&b % Mc
+&  % O6
+&  % T6
+&c % Ur
+&d % Tr
+&e % Mh
+&  % Hh
+&f % Kt
+&f % Ky
+&f % Ku
+&f % Kc
+\\
+\noalign{\smallskip}\hline
+\noalign{\smallskip{\bf Enclosure:} Footnotes \obsband\ \expcode}
+\end{tabular}\end{flushleft}
+\end{table*}
+%\vfill
+\clearpage
+\hoffset -2.5cm \voffset -1.5cm
+{\huge Footnotes to the Network Monitoring Report:\ {\bf \obsband}\ \expcode}
+\smallskip\hrule\hrule\vspace{1cm}\parindent=0pt\parskip=4pt
+
+{\bf General:}
+
+{\bf a) Jb2, Jodrell Bank Mark II:} Fringes found only on the disk correlation. The signal is significantly weaker than expected (by a factor of $\sim 1/3$). Pointing errors could explain this, but no feedback unveiling the origin of the issue has been provided before the submission of this report.
+
+{\bf b) Mc, Medicina:} Lost of the first scan due to a system restart.
+
+{\bf c) Ur, Urumqi:} Could not observe because the antenna gearbox has malfunctioned before the session and it is still under maintenance.
+
+{\bf d) Tr, Toru\`n:} Recorded with swapped polarizations (fixed during correlation).
+
+{\bf e) Mh, Metsah\"ovi:} Issues on the synchronization of the data transferred during the FTP test (and fixed after restarting).
+
+{\bf f) KVN:} The a-priori rates derived from the sent GPS clock were significantly off (but well within limits to fringe fit the data). We noticed that when such clocks are stored in the local system (both into the filesystem logs and to the EVN monitor), the values are significantly rounded, causing a step-function profile along the time.
+
+
+\vspace{0.7cm}\hrule\smallskip{\it Questions? \ssemail}
+\hfill{Report ends}
+\end{landscape}
+
+\end{document}

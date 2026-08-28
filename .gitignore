@@ -113,3 +113,5 @@ CLAUDE.md
 CLAUDE.md
 .claude
 uv.lock
+*.pyc\ntests/__pycache__\n*/*/*pyc
+.gitignore
