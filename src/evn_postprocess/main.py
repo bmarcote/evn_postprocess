@@ -15,6 +15,7 @@ from . import comms
 from . import distribution
 from . import experiment
 from . import experiment_state
+from . import inputs
 from . import lisfiles
 from . import mode as _mode
 from . import pipelines
@@ -45,79 +46,36 @@ in the past, it will automatically continue from the last successful step that r
 successful step.[/italic][/dim]
 """
 
-help_run = """[bold]Runs the post-process from a given step[/bold].
+# Every field ``postprocess edit`` accepts: name -> the one-line description shown in its
+# help. The source-type fields additionally map to the SourceType they set, below. Keeping
+# the CLI choices, the help text and the behaviour in one table stops them from drifting.
+EDITABLE_SOURCE_TYPES: dict[str, 'experiment.SourceType'] = {
+    'target': experiment.SourceType.target,
+    'phasecal': experiment.SourceType.calibrator,
+    'fringefinder': experiment.SourceType.fringefinder}
 
-        Three different approaches can be used:
+EDITABLE_FIELDS: dict[str, str] = {
+    'refant': "reference antenna(s) to use, in order of preference (space-separated codes).",
+    'target': "set the source type to target (also for phase-referenced check sources).",
+    'phasecal': "set the source type to phase calibrator.",
+    'fringefinder': "set the source type to fringe-finder."}
 
-        [italic]postprocess run[/italic] (no param)
-                            Runs the entire post-process (or from the last step that finalized properly).
-        [italic]postprocess run STEP1[/italic]
-                            Runs from STEP1 until the end (or until manual interaction is required).
-        [italic]postprocess run STEP1 STEP2[/italic]
-                            Runs from STEP1 until STEP2 (both included).
-
-
-        The available steps are:
-            - [bold green]init[/bold green] : Sets up the experiment, creates the required
-                                              folders, locates (or retrieves) the .vix/.vex
-                                                    file, and derives all metadata from it and the
-                                                    experiment toml.
-            - [bold green]checklis[/bold green] : Checks the existing .lis files.
-            - [bold green]j2ms2[/bold green] : Gets the data for all available .lis files and
-                                               runs j2ms2 to produce MS files.
-            - [bold green]standardplots[/bold green] : Runs standardplots.
-            - [bold green]msops[/bold green] : Runs the full MS operations like ysfocus, polswap,
-                                               flag_weights, etc.
-            - [bold green]tconvert[/bold green] : Runs tConvert on all available MS files to
-                                                  create the FITS-IDI files.
-            - [bold green]polconvert[/bold green] : Runs PolConvert on the FITS-IDI files
-                                                    (only if some antennas need it).
-            - [bold green]post_polconvert[/bold green] : if polConvert did run, then this step
-                                                         renames the new *.PCONVERT files and does
-                                                         standardplots on them.
-            - [bold green]standardplots2[/bold green] : Re-runs standardplots after all the MS
-                                                        operations have been performed.
-            - [bold green]antab[/bold green] : Retrieves the .antab file to be used in the pipeline.
-                                               If it was not generated, Opens antab_editor.py.
-                Needs to run again once you have run antab_editor.py manually.
-            - [bold green]pipeinputs[/bold green] : Prepares a draft input file for the pipeline
-                                                    and recovers all needed files.
-            - [bold green]pipeline[/bold green] : Runs the EVN Pipeline for all correlated passes.
-            - [bold green]postpipe[/bold green] : Runs all steps to be done after the pipeline:
-                                                  creates tasav, comment files, feedback.
-            - [bold green]prearchive[/bold green] : Appends Tsys/GC and re-archive FITS-IDI and
-                                              the PI letter. Asks to conduct the
-                                              last post-processing steps.
-            - [bold green]archive[/bold green] : Sets the credentials for the experiment,
-                                                 create the pipe letter and archive all the data.
-"""
-help_edit = """[bold]Edit some of the parameters related to the experiment[/bold].
-
-    Note that if you assign the values before they are read from the standard processing tasks,
-    they may be overwriten.
-
-    The following parameters are allowed:
-        - [bold green]refant[/bold green] : change the reference antenna(s) to the provided one(s)
-                                            (comma-separated).
-        - [bold green]calsour[/bold green] : change the sources used for standardplots.
-            If more than one, they must be comma-separated and with no spaces.
-        - [bold green]calibrator[/bold green] : Set the source type to calibrator (phase cal.)
-                                                for the given source.
-        - [bold green]target[/bold green] : Set the source type to target for the given source
-            (to be used also for phase-referenced check sources).
-        - [bold green]fringefinder[/bold green] : Set the source type to fringe-finder
-                                                  for the given source.
-        - [bold green]polconvert[/bold green] : marks the antennas to be pol converted.
-        - [bold green]polswap[/bold green] : marks the antennas to be pol swapped.
-        - [bold green]onebit[/bold green] :  marks the antennas to be corrected because
-                                             they observed with one bit.
-"""
+help_edit = "[bold]Edit some of the parameters of the experiment[/bold].\n\n" \
+            "Values assigned before the corresponding step reads them may be overwritten.\n" \
+            "Called with no value, the field lists the options available for it.\n\n" \
+            "The following fields can be edited:\n" + \
+            '\n'.join(f"  - [bold green]{name}[/bold green] : {doc}"
+                      for name, doc in EDITABLE_FIELDS.items()) + "\n"
 
 
 help_info = """[bold]Shows the info related to the given experiment
 (all what postprocess knows until the present moment).[/bold]
 
-It will also write this information down into a 'notes.md' file is this does not exist.
+Requires an experiment whose post-processing has already been started: it only reports
+what is stored, it never retrieves files or initializes anything (that is 'postprocess run').
+
+(The 'notes.md' file with the same summary is written by the workflow itself, at the
+msops step, not by this command.)
 
 With [bold green]--serve[/bold green] the information is shown in a web dashboard (served on a local port)
 instead of the terminal. Instructions on how to open it (SSH tunnel command) are printed.
@@ -130,16 +88,13 @@ standard plots, the review-comments editor and, once the EVN Pipeline has run, i
 feedback page. The SSH tunnel command needed to open it from your local browser is
 printed, and the server runs until you press Ctrl+C.
 
-[dim]This is the same dashboard reachable through 'postprocess info --serve'.[/dim]
+[dim]This is the same dashboard reachable through 'postprocess info --serve'. Like it,
+it requires an experiment whose post-processing has already been started.[/dim]
 """
 
-help_last = "[bold]Returns the last step that run successfully from post-process in this experiment.[/bold]"
-
-help_gui = 'Type of GUI to use for interactions with the user:\n' \
-           '- "terminal" (default): it uses the basic prompt in the terminal.\n' \
-           '- "tui": uses the Terminal-based User Interface.\n' \
-           '- "gui": uses the Graphical User Interface.'
-
+help_list = "[bold]Shows every step of the post-processing and which ones have already run " \
+            "in this experiment.[/bold]\n\n[dim]The same information is shown in the " \
+            "'Progress' tab of the web dashboard.[/dim]"
 
 def _apply_refant(exp: experiment.Experiment, refant_args: list[str]):
     """Validates and applies reference antenna override to the experiment.
@@ -148,33 +103,30 @@ def _apply_refant(exp: experiment.Experiment, refant_args: list[str]):
         exp: Experiment object.
         refant_args: List of antenna codes from CLI.
     """
-    known: set[str] = set(exp.antennas.names)
-    invalid: list[str] = [a for a in refant_args if a not in known]
-    if invalid:
-        rprint(f"[red]Unknown antenna(s): {', '.join(invalid)}[/red]")
-        rprint(f"[dim]Available antennas: {', '.join(known)}[/dim]")
-        sys.exit(1)
+    if (invalid := [a for a in refant_args if a not in exp.antennas.names]):
+        _fail(f"Unknown antenna(s): {', '.join(invalid)}.",
+              f"Available antennas: {', '.join(exp.antennas.names)}")
 
-    exp.refant: list[str] = list(refant_args)
-    # rprint(f"[green]Reference antenna(s) set to: {', '.join(exp.refant)}[/green]")
+    exp.refant = list(refant_args)
+    logger.info(f"Reference antenna(s) set to: {', '.join(exp.refant)}.")
 
 
 def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
-    """Handles the 'postprocess edit' subcommand.
+    """Handles the ``postprocess edit`` subcommand.
 
-    If values is empty, lists available options. Otherwise validates and applies the change.
+    With no *values* the available options for the field are listed; otherwise the values
+    are validated and applied (see EDITABLE_FIELDS for the accepted fields).
 
     Args:
         exp: Experiment object.
-        field: One of 'refant', 'target', 'phasecal', 'fringefinder'.
-        values: Values provided by the user (may be empty to list options).
+        field: One of the keys of EDITABLE_FIELDS.
+        values: Values provided by the operator (may be empty, to list the options).
     """
     if field == 'refant':
         if not values:
-            rprint("[bold]Available antennas:[/bold]" \
-                   f"{', '.join(('[green]'+ant.name+'[/green]' if ant.observed else \
-                      '[red]'+ant.name+'[/red]' for ant in exp.antennas))}")
-
+            rprint("[bold]Available antennas:[/bold] " +
+                   ', '.join(f"[{'green' if ant.observed else 'red'}]{ant.name}"
+                             f"[/{'green' if ant.observed else 'red'}]" for ant in exp.antennas))
             if exp.refant:
                 rprint(f"\n[dim]Current refant: {', '.join(exp.refant)}[/dim]")
             return
@@ -182,57 +134,47 @@ def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
         _apply_refant(exp, values)
         return
 
-    match field:
-        case 'target':
-            src_type: experiment.SourceType = experiment.SourceType.target
-        case 'phasecal':
-            src_type: experiment.SourceType = experiment.SourceType.calibrator
-        case 'fringefinder':
-            src_type: experiment.SourceType = experiment.SourceType.fringefinder
-        case _:
-            rprint(f"[bold red]The field ({field}) is not recognized.[/bold red]")
-            rprint("[dim]The available options are 'target', 'phasecal', or 'fringefinder'[/dim]")
-            sys.exit(1)
-
+    src_type = EDITABLE_SOURCE_TYPES[field]  # argparse already restricted the choices
     if not values:
         rprint("[bold]Available sources[/bold]:")
         for src in exp.sources:
             rprint(f"  {src.name}  [dim]({src.type.name})[/dim]")
-
         return
 
-    if (unknown_sources := [src_name for src_name in values if src_name not in exp.sources.names]):
-        rprint(f"[red]Unknown source{'s' if len(unknown_sources) > 1 else ''}" \
-               f"'{', '.join(unknown_sources)}'.[/red]")
-        rprint(f"[dim]Available sources: {', '.join(exp.sources.names)}[/dim]")
-        sys.exit(1)
+    if (unknown := [name for name in values if name not in exp.sources.names]):
+        _fail(f"Unknown source{'s' if len(unknown) > 1 else ''}: {', '.join(unknown)}.",
+              f"Available sources: {', '.join(exp.sources.names)}")
 
     for src_name in values:
         exp.sources[src_name].type = src_type
 
-    # Propagate type changes to per-pass sources
+    # The per-pass source lists are separate objects: propagate the change to them too.
     for a_pass in exp.correlator_passes:
-        if not a_pass.sources:
-            continue
-
         for src_name in values:
-            if src_name in a_pass.sources.names:
+            if a_pass.sources and src_name in a_pass.sources.names:
                 a_pass.sources[src_name].type = src_type
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
+    """Builds the full ``postprocess`` command-line parser.
+
+    The per-step and per-command help texts are generated from the workflow tables
+    (:func:`workflow.build_run_help` / :func:`workflow.build_exec_help`) so they can never
+    name a step or command that does not exist.
+    """
     parser = argparse.ArgumentParser(description=description, prog=__prog__, usage=usage,
                                      formatter_class=RawTextRichHelpFormatter)
-    parser.add_argument('-e', '--expname', type=str, default=None, \
-                        help='Name of the EVN experiment (case-insensitive).' \
-                        '\n[dim]By default recovered from the current working directory.[/dim]')
+    parser.add_argument('-e', '--expname', type=str, default=None,
+                        help='Name of the EVN experiment (case-insensitive).\n'
+                             '[dim]By default recovered from the current working directory.[/dim]')
     parser.add_argument('-jss', '--supsci', type=str, default=None,
-                        help='Surname of the EVN Support Scientist.\n' \
-                        '[dim]By default recovered assuming the user that is running this program.[/dim]')
+                        help='Surname of the EVN Support Scientist.\n'
+                             '[dim]By default recovered assuming the user that is running this '
+                             'program.[/dim]')
     parser.add_argument('-d', '--dir', type=str, default=None,
                         help='Directory to run the post-processing. By default in CWD.')
-    parser.add_argument('-a', '--no-archive', action='store_false', default=True,
-                        help='Skip the archive part of the files to the EVN archive '
+    parser.add_argument('-a', '--no-archive', dest='archive', action='store_false', default=True,
+                        help='Skip the delivery of the files to the EVN archive '
                              '(assuming you are a support scientist).')
     parser.add_argument('--no-lag', action='store_true', default=False,
                         help='Do not create the auxiliary lag-space MS nor compute the per-scan '
@@ -240,12 +182,11 @@ def main() -> None:
                              'whether each antenna has data in a scan, without the SNR comparison.')
     parser.add_argument('--debug', action='store_true', default=False,
                         help='Debug mode: shows a more verbose output')
-    # parser.add_argument('--j2ms2par', type=str, default=None,
-    #                     help='Additional attributes for j2ms2 (like the fo:XXXXX).')
     parser.add_argument('--refant', type=str, nargs='+', default=None,
                         help='Reference antenna(s) to use (space-separated two-letter codes).\n'
-                        'Overrides the auto-selected reference antenna after loading the experiment.')
-    parser.add_argument('--mode', type=str, default=None, choices=['supsci', 'regular', 'sweeps'],
+                             'Overrides the auto-selected reference antenna after loading the '
+                             'experiment.')
+    parser.add_argument('--mode', type=str, default=None, choices=[m.value for m in _mode.Mode],
                         help='Operating mode. Auto-detected from the OS user/group when omitted '
                              '("jops" or the "supsci" group -> supsci; the "sweeps" group -> '
                              'sweeps; otherwise regular).\n'
@@ -271,254 +212,341 @@ def main() -> None:
                         help='Path to a comms.toml file with the communication settings '
                              '(mode, username, email/mattermost config). If not provided, '
                              'auto-searches ./comms.toml and ~/.config/evn/comms.toml.')
-    parser.add_argument('-v', '--version', action='version',
-                        version='%(prog)s {}'.format(__version__))
-    subparsers = parser.add_subparsers(help='[bold]If no command is provided, the full postprocessing will run ' \
-                                       'from the last successful step.[/bold]', dest='subpar')
-    parser_info = subparsers.add_parser('info', help='Shows the metadata associated to the experiment',
-                                        description=help_info,
+    parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {__version__}')
+
+    subparsers = parser.add_subparsers(dest='subpar',
+                                       help='[bold]If no command is provided, the full '
+                                            'postprocessing will run from the last successful '
+                                            'step.[/bold]')
+    parser_info = subparsers.add_parser('info', help='Shows the metadata associated to the '
+                                        'experiment', description=help_info,
                                         formatter_class=parser.formatter_class)
     parser_info.add_argument('--serve', action='store_true', default=False,
                              help='Open the web dashboard with the experiment info and plots '
                                   'instead of printing to the terminal. Prints the SSH tunnel '
                                   'command needed to open it from your local browser.')
-    _ = subparsers.add_parser('dashboard',
-                              help='Open the web dashboard with the experiment info and plots.',
-                              description=help_dashboard, formatter_class=parser.formatter_class)
-    _ = subparsers.add_parser('list', help='Shows the different steps to be run and which ones have been run.',
-                              description=help_last,
-                              formatter_class=parser.formatter_class)
-    _ = subparsers.add_parser('last', help='Shows the different steps to be run and which ones have been run.',
-                              description=help_last,
+    subparsers.add_parser('dashboard',
+                          help='Open the web dashboard with the experiment info and plots.',
+                          description=help_dashboard,
+                          formatter_class=parser.formatter_class).set_defaults(serve=True)
+    for command in ('list', 'last'):  # 'last' is a long-standing alias of 'list'
+        subparsers.add_parser(command, help='Shows the different steps to be run and which ones '
+                              'have been run.', description=help_list,
                               formatter_class=parser.formatter_class)
     parser_run = subparsers.add_parser('run', help='Runs the post-processing from a given step.',
-                                       description=help_run, formatter_class=parser.formatter_class)
+                                       description=workflow.build_run_help(),
+                                       formatter_class=parser.formatter_class)
     parser_run.add_argument('steps', type=str, nargs='*', default=[],
                             help='Optional step range: [STEP1 [STEP2]]. '
-                            'Runs from STEP1 to end, or from STEP1 to STEP2 (inclusive).')
-    parser_exec = subparsers.add_parser('exec', help='Runs a single command from the post-processing workflow.',
-                                        description=workflow.build_exec_help(), formatter_class=parser.formatter_class)
+                                 'Runs from STEP1 to end, or from STEP1 to STEP2 (inclusive).')
+    parser_exec = subparsers.add_parser('exec', help='Runs a single command from the '
+                                        'post-processing workflow.',
+                                        description=workflow.build_exec_help(),
+                                        formatter_class=parser.formatter_class)
     parser_exec.add_argument('task_name', type=str, nargs='?', default=None,
-                             help='Name of the command to run. If not provided, lists all available commands.')
+                             help='Name of the command to run. If not provided, lists all '
+                                  'available commands.')
     parser_edit = subparsers.add_parser('edit', help='Edit experiment metadata.',
-                                        description=help_edit, formatter_class=parser.formatter_class)
-    parser_edit.add_argument('field', type=str, choices=['refant', 'target', 'phasecal', 'fringefinder'],
+                                        description=help_edit,
+                                        formatter_class=parser.formatter_class)
+    parser_edit.add_argument('field', type=str, choices=list(EDITABLE_FIELDS),
                              help='Metadata field to edit.')
     parser_edit.add_argument('values', type=str, nargs='*', default=[],
                              help='Value(s) to set. If omitted, lists available options.')
-    args = parser.parse_args()
+    return parser
 
-    # An explicit --config must exist if given (sweeps prepared config; optional).
-    if args.config is not None and not Path(args.config).is_file():
-        rprint(f"[red]--config file not found: {args.config}[/red]")
-        sys.exit(1)
 
-    _con = Console(stderr=False, highlight=False)
-    _err_con = Console(stderr=True, highlight=False)
-    def _initial_sink(message):
+def _fail(message: str, *hints: str) -> None:
+    """Prints an error (plus optional hints) and exits with a non-zero status."""
+    rprint(f"[bold red]{message}[/bold red]")
+    for hint in hints:
+        rprint(f"[dim]{hint}[/dim]")
+    sys.exit(1)
+
+
+def _setup_initial_logging(debug: bool) -> None:
+    """Routes loguru through Rich until the workflow installs its own file+console sinks.
+
+    Everything before ``run_workflow`` (loading the experiment, the CLI subcommands) logs
+    through this sink, so a message is never lost between the CLI and the workflow.
+    """
+    out, err = Console(stderr=False, highlight=False), Console(stderr=True, highlight=False)
+
+    def sink(message):
         record = message.record
-        if record["level"].no >= 40:
-            _err_con.print(f"[bold red]{record['level'].name}[/bold red]: {record['message']}")
+        if record["level"].no >= 40:  # WARNING is 30, ERROR is 40
+            err.print(f"[bold red]{record['level'].name}[/bold red]: {record['message']}")
         else:
-            _con.print(record["message"])
+            out.print(record["message"])
 
     logger.remove()
-    logger.add(_initial_sink, level="DEBUG" if args.debug else "INFO", colorize=False)
+    logger.add(sink, level="DEBUG" if debug else "INFO", colorize=False)
+
+
+def _enter_workdir(directory: Path) -> None:
+    """Creates (if needed) and moves into the experiment working directory."""
+    try:
+        directory.mkdir(exist_ok=True)
+        os.chdir(directory)
+    except (OSError, PermissionError) as e:
+        _fail(f"Could not create or access the directory {directory}: {e}")
+
+
+def _stored_experiment(expname: str) -> experiment.Experiment:
+    """Loads the experiment checkpoint, failing when the post-processing never started.
+
+    Used by the commands that report on (or edit) an experiment: they must never create
+    one. Only `postprocess run` initializes an experiment, because that is the command
+    that retrieves the vex file and builds the directory structure.
+    """
+    try:
+        return experiment.Experiment.load(expname)
+    except (FileNotFoundError, ValueError, RuntimeError, json.JSONDecodeError) as e:
+        _fail(f"No post-processing data for {expname}: {e}",
+              "Only `postprocess run` starts the post-processing of an experiment.")
+
+
+def _resolve_support_scientist(exp: experiment.Experiment, cli_supsci: str | None) -> None:
+    """Makes sure ``exp.supsci`` names a person, not the shared account.
+
+    ``exp.supsci`` is used well beyond the notifications: it picks the AIPS user number
+    for the pipeline input file, signs the pipeline feedback page, and addresses the
+    review messages. Under the shared 'jops' login it would be nobody, so the assignment
+    is read from the ``support`` field of the experiment's .jex file and kept in the
+    checkpoint (so the lookup happens once). ``-jss`` always wins: it names a person
+    explicitly.
+
+    Args:
+        exp: Experiment object, updated in place.
+        cli_supsci: The ``-jss`` value, or None.
+    """
+    if cli_supsci and cli_supsci != exp.supsci:
+        logger.info(f"Support scientist set to {cli_supsci} (from -jss).")
+        exp.supsci = cli_supsci
+    if exp.supsci.lower() != _mode.SUPSCI_USER:
+        return
+
+    supsci = retrieval.get_retriever(
+        _mode.backends_for(exp.mode).retrieval).fetch_support_scientist(exp)
+    if supsci:
+        logger.info(f"Support scientist of {exp.expname}, from its .jex file: {supsci}.")
+        exp.supsci = supsci
+    else:
+        logger.warning(f"Could not determine who the support scientist of {exp.expname} is; "
+                       f"keeping '{exp.supsci}'. Name them with -jss if needed.")
+
+
+def _load_experiment(expname: str, args) -> experiment.Experiment:
+    """Recovers the stored experiment, or initializes a new one when there is none.
+
+    On recovery the mode is re-resolved (``--mode`` wins, then the stored mode, then
+    auto-detection), the folder structure is re-created in case folders were removed by
+    hand, and the correlator passes are reloaded when the operator changed the .lis files.
+    Either way the support scientist is resolved to a person before the experiment is
+    stored (see :func:`_resolve_support_scientist`).
+
+    Args:
+        expname: Experiment name (upper case).
+        args: The parsed CLI arguments.
+
+    Returns:
+        The experiment, already stored on disk.
+    """
+    if Path(f"{expname.lower()}.json").exists():
+        logger.info(f"Recovering the previously-stored information for {expname}.")
+        exp = _stored_experiment(expname)
+        exp.mode = _mode.resolve(cli_mode=args.mode, stored_mode=exp.mode)
+        inputs.create_folder_structure()  # in case the operator removed some of them
+        # The operator may have changed the .lis files (the auxiliary {expname}-lag.lis is
+        # not a correlator pass and is excluded from the count).
+        if len(exp.correlator_passes) != len(lisfiles._pass_lisfiles(f"{expname.lower()}*.lis")):
+            logger.warning("The set of .lis files changed: reloading the correlator passes.")
+            if not lisfiles.get_passes_from_lisfiles(exp):
+                _fail("Could not reload the correlator passes from the .lis files.")
+    else:
+        supsci = args.supsci if args.supsci else experiment.retrieve_username()
+        if supsci == 'unknown':
+            _fail("Could not determine the support scientist from the current user.",
+                  "Name it explicitly with -jss/--supsci.")
+        # A fresh experiment: resolve the mode from --mode or auto-detection, and persist
+        # it so every later invocation reuses it (no re-detection).
+        resolved = _mode.resolve(cli_mode=args.mode, stored_mode=None)
+        logger.info(f"Initializing {expname} (operating mode: {resolved.value}).")
+        try:
+            exp = workflow.initialize_experiment(expname, supsci, resolved)
+        except (ValueError, FileNotFoundError, RuntimeError) as e:
+            _fail(f"Could not initialize {expname}: {e}")
+
+    _resolve_support_scientist(exp, args.supsci)
+    exp.store()
+    return exp
+
+
+def _apply_cli_options(exp: experiment.Experiment, args) -> None:
+    """Applies every CLI option that configures the experiment, and validates the backends.
+
+    Covers the experiment toml, the backend selection (failing fast on an unimplemented
+    one), ``--refant``, ``--no-lag``, ``--policy``, ``--batch`` and the comms notifier.
+    """
+    # The experiment toml is the prepared config. Runtime-only: never serialized into the
+    # JSON checkpoint (see experiment_state). --config names an explicit toml (sweeps);
+    # otherwise the conventional {expname}.toml is used.
+    try:
+        if args.config:
+            exp.exp_toml = experiment_state.load_toml(Path(args.config))
+        else:
+            experiment_state.attached_toml(exp, fresh=True)
+    except experiment_state.ExperimentTomlError as e:
+        _fail(f"Error in the experiment toml file: {e}")
+
+    # Fail fast on an invalid/unimplemented backend for the resolved mode: a bad mode must
+    # not surface only hours later at the pipeline step.
+    try:
+        backends = _mode.backends_for(exp.mode)
+        retrieval.get_retriever(backends.retrieval)  # the sweeps stubs raise here
+        pipelines.get_pipeline(backends.pipeline)
+        distribution.get_distributor(backends.distribution)
+    except (retrieval.RetrievalError, pipelines.PipelineError,
+            distribution.DistributionError) as e:
+        _fail(str(e))
+
+    if args.refant:
+        _apply_refant(exp, args.refant)
+        exp.store()
+
+    # --no-lag is sticky: once opted out it stays opted out across re-runs, so not passing
+    # the flag again does not silently re-enable the lag MS.
+    if args.no_lag and not exp.no_lag:
+        exp.no_lag = True
+        exp.store()
+
+    # The policy is attached to the experiment so the helpers that need it (dialog.
+    # PolicyDriven, workflow._pause_steps) can read it without threading it through
+    # every call.
+    if args.policy:
+        try:
+            exp.policy = Policy.load(args.policy)
+        except FileNotFoundError:
+            _fail(f"Policy file not found: {args.policy}")
+        except Exception as e:  # tomllib.TOMLDecodeError, etc.
+            _fail(f"Could not parse the policy file {args.policy}: {e}")
+        exp.store()
+
+    if args.batch:
+        workflow.set_batch_mode(True)
+        if exp.policy is None:  # so PolicyDriven always has fields to read
+            exp.policy = Policy(batch=True)
+
+
+def _print_info(exp: experiment.Experiment) -> None:
+    """Prints everything the program knows about the experiment to the terminal."""
+    exp.print_blessed(outputfile=None)
+    if exp.mode is not None:
+        rprint(f"[bold]Operating mode[/bold]: {exp.mode.value}")
+
+    # The values sourced from the experiment toml are marked with their origin, so they
+    # are distinguishable from the vex/lis metadata above.
+    if exp.exp_toml is not None:
+        toml_lines = experiment_state.summary_lines(exp.exp_toml)
+        if toml_lines:
+            rprint(f"\n[bold]From the experiment file {exp.exp_toml.path.name}:[/bold]")
+            for line in toml_lines:
+                print(f"  {line}")  # plain print: the lines may contain [brackets]
+
+
+def _configure_comms(exp: experiment.Experiment, args) -> None:
+    """Sets the workflow notifier, resolving who to notify about this experiment.
+
+    The recipient is the support scientist of the experiment (``exp.supsci``, already
+    resolved to a person by :func:`_resolve_support_scientist`), looked up in the
+    ``[[people]]`` directory of comms.toml. Notifications stay off, with a warning, when
+    nobody can be resolved.
+    """
+    config = comms.CommsConfig.load(args.comms)
+    if config.mode == "none":
+        return
+
+    config.username = comms.recipient_for(config, exp.supsci)
+    if not config.username:
+        logger.warning(f"Notifications ({config.mode}) are configured but nobody could be "
+                       "resolved to notify; they stay off for this run.")
+        return
+
+    logger.info(f"Notifications ({config.mode}) for {exp.supsci} will go to {config.username}.")
+    workflow.set_notifier(comms.make_notifier(config))
+
+
+def _run(exp: experiment.Experiment, args) -> None:
+    """Runs the workflow, exiting non-zero when a step failed.
+
+    A step failure returns False -> exit code 1. That is distinct from a clean review
+    pause or e-EVN barrier, which returns True -> exit code 0; the failed step stays the
+    resume point for the next ``postprocess run``.
+    """
+    from_step, to_step = None, None
+    if args.subpar == 'run' and args.steps:
+        if len(args.steps) > 2:
+            _fail("'run' accepts at most two step names (from [to]).")
+        from_step = args.steps[0]
+        to_step = args.steps[1] if len(args.steps) == 2 else None
+        valid, error_msg = workflow.validate_steps(from_step, to_step)
+        if not valid:
+            _fail(error_msg)
+
+    _configure_comms(exp, args)
+    if not workflow.run_workflow(exp, archive=args.archive, debug=args.debug,
+                                 from_step=from_step, to_step=to_step):
+        sys.exit(1)
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
+    _setup_initial_logging(args.debug)
+
+    # An explicit --config must exist if given (the sweeps prepared config; optional).
+    if args.config is not None and not Path(args.config).is_file():
+        _fail(f"--config file not found: {args.config}")
+
+    # Move into the working directory first: the experiment name defaults to its name.
+    _enter_workdir(Path(args.dir) if args.dir else Path('.'))
     try:
         expname = args.expname.upper() if args.expname else experiment.retrieve_expname()
     except (ValueError, FileNotFoundError) as e:
-        rprint("[bold red]Error retrieving experiment name[/bold red]")
-        rprint(f"[red]{e}[/red]")
-        rprint("[red]Please specify the experiment name with -e/--expname or run from the experiment directory[/red]")
-        sys.exit(1)
+        _fail(f"Could not determine the experiment name: {e}",
+              "Name it with -e/--expname, or run from the experiment directory.")
 
-    cwd: Path = Path(args.dir) if args.dir else Path('.')
-    if (not args.subpar) or (args.subpar in ('info', 'run', 'dashboard')):
-        try:
-            cwd.mkdir(exist_ok=True)
-            os.chdir(cwd)
-        except (OSError, PermissionError) as e:
-            rprint(f"[red]Error creating or accessing directory {cwd}: {e}[/red]")
-            sys.exit(1)
+    if args.subpar in ('list', 'last'):
+        workflow.list_tasks(expname, print_docs=True)
+        return
 
-        if Path(f"{expname.lower()}.json").exists():
-            rprint(f"[bold]Recovering previously-stored information for {expname}[/bold]")
-            try:
-                exp: experiment.Experiment = experiment.Experiment.load(expname)
-                # Resolve the mode: --mode overrides the stored one (re-persisted, with a
-                # warning on change); otherwise the stored mode is reused, or re-detected
-                # for a pre-Phase-2 checkpoint that has none.
-                resolved: _mode.Mode = _mode.resolve(cli_mode=args.mode, stored_mode=exp.mode)
-                if exp.mode != resolved:
-                    exp.mode: _mode.Mode = resolved
-                    exp.store()
-
-                # Just to avoid that some folders were deleted by the user
-                workflow.create_folder_structure()
-                # User may have changed the lis files... (exclude the auxiliary
-                # {expname}-lag.lis, which is not a correlator pass).
-                if len(exp.correlator_passes) != len(lisfiles._pass_lisfiles(f"{expname.lower()}*.lis")):
-                    rprint("[bold yellow]Reloading .lis files information...[/bold yellow]")
-                    if not lisfiles.get_passes_from_lisfiles(exp):
-                        rprint("[red]Error: Failed to reload .lis files[/red]")
-                        sys.exit(1)
-            except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-                rprint(f"[bold red]Error loading experiment data: {e}[/bold red]")
-                rprint("[red]The experiment file may be corrupted. Consider reinitializing the experiment by removing the json file.[/red]")
-                sys.exit(1)
-        else:
-            try:
-                supsci: str = args.supsci if args.supsci else experiment.retrieve_username()
-                if supsci == 'unknown':
-                    raise ValueError("Could not determine the username. Please specify it with --supsci.")
-
-                # A fresh experiment: resolve the mode from --mode or auto-detection, and
-                # persist it so every later invocation reuses it (no re-detection).
-                resolved = _mode.resolve(cli_mode=args.mode, stored_mode=None)
-                rprint(f"[dim]Operating mode: {resolved.value}[/dim]")
-                exp: experiment.Experiment = workflow.initialize_experiment(expname, supsci, resolved)
-                exp.store()
-            except (ValueError, FileNotFoundError, RuntimeError) as e:
-                rprint(f"[red]Error initializing experiment: {e}[/red]")
-                sys.exit(1)
-
-        # Attach the experiment toml as the prepared config. Runtime-only: it is never
-        # serialized into the JSON checkpoint (see experiment_state). --config names an
-        # explicit toml (sweeps); otherwise the conventional {expname}.toml is used.
-        try:
-            if args.config:
-                exp.exp_toml = experiment_state.load_toml(Path(args.config))
-            else:
-                experiment_state.attached_toml(exp, fresh=True)
-        except experiment_state.ExperimentTomlError as e:
-            rprint(f"[red]Error in the experiment toml file: {e}[/red]")
-            sys.exit(1)
-
-        # Fail fast on an invalid/unimplemented backend for the resolved mode: a bad
-        # mode must not surface only hours later at the pipeline step.
-        try:
-            backends: _mode.Backends = _mode.backends_for(exp.mode)
-            retrieval.get_retriever(backends.retrieval)  # sweeps stubs raise here
-            pipelines.get_pipeline(backends.pipeline)
-            distribution.get_distributor(backends.distribution)
-        except (retrieval.RetrievalError, pipelines.PipelineError,
-                distribution.DistributionError) as e:
-            rprint(f"[red]{e}[/red]")
-            sys.exit(1)
-
-        # Apply --refant override if provided
-        if args.refant:
-            _apply_refant(exp, args.refant)
-            exp.store()
-
-        # Apply --no-lag if requested. This is sticky: once opted out, it stays opted out
-        # across re-runs (not passing the flag again does not silently re-enable the lag MS).
-        if args.no_lag and not exp.no_lag:
-            exp.no_lag = True
-            exp.store()
-
-        # --policy / --batch wiring. We attach the policy onto the experiment so
-        # downstream helpers (e.g. dialog.PolicyDriven, workflow._signal_pause)
-        # can read it without threading the value through every call.
-        if args.policy:
-            try:
-                exp.policy: Policy = Policy.load(args.policy)
-            except FileNotFoundError:
-                rprint(f"[red]Policy file not found: {args.policy}[/red]")
-                sys.exit(1)
-            except Exception as e:  # tomllib.TOMLDecodeError, etc.
-                rprint(f"[red]Could not parse policy file {args.policy}: {e}[/red]")
-                sys.exit(1)
-            exp.store()
-
-        if args.batch:
-            workflow.set_batch_mode(True)
-            # Make sure exp.policy at least exists so PolicyDriven can read fields.
-            if exp.policy is None:
-                exp.policy = Policy(batch=True)
-
-        # --- Comms wiring: load config and set the workflow notifier ---
-        comms_config: comms.CommsConfig = comms.CommsConfig.load(args.comms)
-        if comms_config.mode != "none":
-            workflow.set_notifier(comms.make_notifier(comms_config))
-
-        if not args.subpar or args.subpar == 'run':
-            from_step, to_step = None, None
-            if args.subpar == 'run' and args.steps:
-                if len(args.steps) > 2:
-                    rprint("[red]Error: 'run' accepts at most two step names.[/red]")
-                    sys.exit(1)
-                from_step: str = args.steps[0]
-                to_step: str | None = args.steps[1] if len(args.steps) == 2 else None
-                valid, error_msg = workflow.validate_steps(from_step, to_step)
-                if not valid:
-                    rprint(f"[red]Error: {error_msg}[/red]")
-                    sys.exit(1)
-            # A step failure returns False -> exit non-zero (distinct from a clean review
-            # pause / e-EVN barrier, which returns True -> exit 0). The failed step stays
-            # the resume point for the next `postprocess run`.
-            ok: bool = workflow.run_workflow(exp, args.no_archive, debug=args.debug,
-                                       from_step=from_step, to_step=to_step)
-            if not ok:
-                sys.exit(1)
-        elif args.subpar == 'dashboard' or (args.subpar == 'info' and args.serve):
-            serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out)
-        else:  # args.subpar == 'info' without --serve: plain terminal output
-            exp.print_blessed(outputfile=None)
-            if exp.mode is not None:
-                rprint(f"[bold]Operating mode[/bold]: {exp.mode.value}")
-
-            # Show the values sourced from the experiment toml, marked with
-            # their origin so they are distinguishable from vex/lis metadata.
-            if exp.exp_toml is not None:
-                toml_lines: list[str] = experiment_state.summary_lines(exp.exp_toml)
-                if toml_lines:
-                    rprint(f"\n[bold]From the experiment file {exp.exp_toml.path.name}:[/bold]")
-                    for line in toml_lines:
-                        print(f"  {line}")  # plain print: lines may contain [brackets]
-    elif args.subpar == 'list' or args.subpar == 'last':
-        try:
-            workflow.list_tasks(expname, print_docs=True)
-        except (FileNotFoundError, KeyError) as e:
-            rprint(f"[red]Error listing tasks: {e}[/red]")
-            sys.exit(1)
-    elif args.subpar == 'edit':
-        try:
-            cwd.mkdir(exist_ok=True)
-            os.chdir(cwd)
-        except (OSError, PermissionError) as e:
-            rprint(f"[red]Error creating or accessing directory {cwd}: {e}[/red]")
-            sys.exit(1)
-
-        try:
-            exp = experiment.Experiment.load(expname)
-        except FileNotFoundError:
-            rprint(f"[red]No stored experiment found for {expname}. Run postprocess first.[/red]")
-            sys.exit(1)
-        except (json.JSONDecodeError, KeyError) as e:
-            rprint(f"[red]Error loading experiment data: {e}[/red]")
-            sys.exit(1)
-
+    if args.subpar == 'edit':
+        exp = _stored_experiment(expname)
         _handle_edit(exp, args.field, args.values)
         exp.store()
+        return
 
-    elif args.subpar == 'exec':
+    if args.subpar == 'exec':
         if args.task_name is None:
             workflow.list_exec_commands()
             sys.exit(1)
-
-        try:
-            cwd.mkdir(exist_ok=True)
-            os.chdir(cwd)
-        except (OSError, PermissionError) as e:
-            rprint(f"[red]Error creating or accessing directory {cwd}: {e}[/red]")
-            sys.exit(1)
-
         try:
             workflow.run_isolated_task(args.task_name, expname)
         except (FileNotFoundError, KeyError, AttributeError) as e:
-            rprint(f"[red]Error running task '{args.task_name}': {e}[/red]")
-            sys.exit(1)
+            _fail(f"Could not run the task '{args.task_name}': {e}")
+        return
+
+    # 'run' (or no command) is the only entry point that may initialize an experiment;
+    # 'info' and 'dashboard' merely report on one that has already been started.
+    exp = _load_experiment(expname, args) if args.subpar in (None, 'run') \
+        else _stored_experiment(expname)
+    _apply_cli_options(exp, args)
+
+    if args.subpar in (None, 'run'):
+        _run(exp, args)
+    elif args.serve:  # 'info --serve' and 'dashboard' are the same thing
+        serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out)
+    else:  # 'info' without --serve
+        _print_info(exp)
 
 
 if __name__ == '__main__':

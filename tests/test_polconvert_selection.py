@@ -253,8 +253,9 @@ class TestFringePeaksCheck:
 # --- subprocess runner with segfault retry ----------------------------------------------
 
 class _FakeProc:
-    def __init__(self, rc):
+    def __init__(self, rc, stdout=""):
         self.returncode = rc
+        self.stdout = stdout
         self.stderr = "boom"
 
 
@@ -366,3 +367,141 @@ def test_lag_bandpass_defaults_for_old_json(tmp_path):
     data.pop("lag_bandpass", None)                    # simulate an older JSON
     exp2 = experiment.Experiment.from_dict(data)
     assert exp2.lag_bandpass == {}
+
+
+# --- what PolConvert is handed, and what the log says about it ---------------------------
+
+def _captured_info():
+    """A (messages, remove) pair capturing loguru INFO output."""
+    from loguru import logger
+    messages: list[str] = []
+    sink = logger.add(lambda m: messages.append(m.record['message']), level='INFO')
+    return messages, lambda: logger.remove(sink)
+
+
+class TestAntennaCase:
+    """PolConvert matches names against the FITS-IDI ANTENNA table, which is upper case."""
+
+    def test_pc_ants_uppercases(self):
+        assert process._pc_ants(['Ef', 'Jb', 'T6']) == ['EF', 'JB', 'T6']
+
+    def test_template_gets_uppercase_antennas(self, tmp_path, monkeypatch):
+        # exp.antennas carries the mixed-case vex spelling; the file PolConvert reads must not.
+        monkeypatch.chdir(tmp_path)
+        exp = _make_exp(tmp_path)
+        out = process._write_polconvert_template(
+            exp, 'ez041a_1_1.IDI1', ['Ef'], 'Mc', ['Wb', 'O8'], [1, 2],
+            [0, 17, 0, 0, 0, 17, 5, 0], chan_avg=1, time_avg=20, solve_weight=0.0,
+            logdir='polconvert_logs', output_file=tmp_path / 'pc.toml')
+        content = out.read_text()
+        assert "linants = ['EF']" in content
+        assert "refant = 'MC'" in content
+        assert "exclude_ants = ['WB', 'O8']" in content
+        # and no mixed-case spelling leaked through ('O8' is unchanged by upper(), so it is
+        # not evidence either way and is left out).
+        for name in ("'Ef'", "'Mc'", "'Wb'"):
+            assert name not in content
+
+
+class TestReadableTimeRange:
+    def test_within_one_day(self):
+        assert process._aips_timerange_str([0, 17, 0, 0, 0, 17, 5, 0]) == '17:00:00 - 17:05:00'
+
+    def test_across_midnight_keeps_the_day(self):
+        assert process._aips_timerange_str([0, 23, 58, 0, 1, 0, 3, 0]) == \
+            '0/23:58:00 - 1/00:03:00'
+
+    def test_unexpected_shape_falls_back_to_the_raw_list(self):
+        assert process._aips_timerange_str([1, 2, 3]) == '[1, 2, 3]'
+
+
+class TestRunnerIsolation:
+    """The child process is where PolConvert's crashes have to stay, and it must be headless."""
+
+    def test_runs_headless_so_the_qt_plugin_is_never_loaded(self, monkeypatch):
+        # matplotlib's default backend here is 'qtagg'; loading it aborts the interpreter with
+        # "symbol lookup error: ... libqsvgicon.so: undefined symbol: _ZdlPvm" (rc=127) before
+        # PolConvert computes anything, which reads as a failed solution but is not one.
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen.update(kwargs)
+            return _FakeProc(0)
+
+        monkeypatch.setattr(process.subprocess, "run", fake_run)
+        process._run_polconvert_cli(Path("in.toml"), "--compute")
+        assert seen['env']['MPLBACKEND'] == 'Agg'
+
+    def test_child_output_is_not_captured_so_it_streams_live(self, monkeypatch):
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen.update(kwargs)
+            return _FakeProc(0)
+
+        monkeypatch.setattr(process.subprocess, "run", fake_run)
+        process._run_polconvert_cli(Path("in.toml"), "--compute")
+        assert not seen.get('capture_output')
+        assert 'stdout' not in seen and 'stderr' not in seen   # inherited from this process
+
+
+class TestFringeSnrSummary:
+    """The table is rendered in-process from the FRINGE.PEAKS files, and can never raise."""
+
+    def _fake_polconvert_module(self, monkeypatch, func):
+        """Puts a stub 'evn_support.polconvert' in sys.modules for the local import to find."""
+        import sys
+        import types
+        pkg = types.ModuleType('evn_support')
+        pkg.__path__ = []
+        mod = types.ModuleType('evn_support.polconvert')
+        mod.print_fringe_snr_table = func
+        monkeypatch.setitem(sys.modules, 'evn_support', pkg)
+        monkeypatch.setitem(sys.modules, 'evn_support.polconvert', mod)
+
+    def test_calls_the_printer_with_the_log_directory(self, monkeypatch):
+        called: list[str] = []
+        self._fake_polconvert_module(monkeypatch, lambda logdir: called.append(logdir))
+        process._log_fringe_snr_table('polconvert_logs')
+        assert called == ['polconvert_logs']
+
+    def test_a_missing_module_is_not_an_error(self, monkeypatch):
+        import sys
+        monkeypatch.setitem(sys.modules, 'evn_support.polconvert', None)   # forces ImportError
+        process._log_fringe_snr_table('polconvert_logs')                   # must not raise
+
+    def test_a_printer_that_blows_up_is_not_an_error(self, monkeypatch):
+        def boom(logdir):
+            raise RuntimeError('no FRINGE.PEAKS here')
+        self._fake_polconvert_module(monkeypatch, boom)
+        process._log_fringe_snr_table('polconvert_logs')                   # must not raise
+
+
+class TestComputeAttemptIsAnnounced:
+    """Each --compute says what it is about to try, so a failed search is still readable."""
+
+    def test_inputs_are_logged_before_each_attempt(self, tmp_path, monkeypatch):
+        exp = _make_exp(tmp_path)
+        monkeypatch.setattr(process, "_write_polconvert_template",
+                            lambda *a, **k: Path('polconvert_inputs.toml'))
+        monkeypatch.setattr(process, "_run_polconvert_cli", lambda tmpl, mode: 0)
+        monkeypatch.setattr(process, "_check_fringe_peaks", lambda logdir='polconvert_logs': True)
+        monkeypatch.setattr(process.find_idi_mod, "find_idi_with_time",
+                            lambda idi_files, aipstime, verbose=False: "ez041a_1_1.IDI1")
+        monkeypatch.setattr(process.glob, "glob",
+                            lambda pat: [] if "PCONVERT" in pat else
+                            (["ez041a_1_1.IDI1"] if "IDI" in pat else []))
+        monkeypatch.setattr(exp, "store", lambda: None)
+
+        messages, remove = _captured_info()
+        try:
+            assert process.polconvert(exp) is True
+        finally:
+            remove()
+
+        launch = [m for m in messages if m.startswith('PolConvert --compute [attempt')]
+        assert len(launch) == 1
+        assert 'refant=MC' in launch[0]                  # upper case, as PolConvert gets it
+        assert "linants=['EF']" in launch[0]
+        assert ' - ' in launch[0]                        # the readable time range
+        assert 'doweight=' in launch[0] and 'timeavg=' in launch[0] and 'chanavg=' in launch[0]

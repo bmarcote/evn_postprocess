@@ -57,3 +57,43 @@ def test_config_missing_file_errors(tmp_path):
                   cwd=str(tmp_path))
     assert result.returncode == 1
     assert 'config file not found' in (result.stderr + result.stdout).lower()
+
+
+class TestInfoNeedsAStartedExperiment:
+    """`info`, `dashboard` and `edit` report on an experiment; they never create one.
+
+    Running them in an empty directory used to go through the initialization path, which
+    retrieved the vex file and built the directory structure before failing.
+    """
+
+    def _run(self, tmp_path, monkeypatch, argv):
+        """Drives main() in-process (the only way to prove nothing initializes) and puts
+        loguru back to its default afterwards, since main() installs its own sinks."""
+        from loguru import logger
+        from evn_postprocess import main as main_mod
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, 'argv', ['postprocess', '-e', 'EB101'] + argv)
+
+        def must_not_initialize(*a, **k):
+            raise AssertionError(f"'{' '.join(argv)}' must not initialize an experiment")
+
+        monkeypatch.setattr(main_mod.workflow, 'initialize_experiment', must_not_initialize)
+        try:
+            with pytest.raises(SystemExit) as excinfo:
+                main_mod.main()
+            return excinfo.value.code
+        finally:
+            logger.remove()
+            logger.add(sys.stderr)
+
+    def test_info_exits_without_creating_anything(self, tmp_path, monkeypatch):
+        assert self._run(tmp_path, monkeypatch, ['info']) == 1
+        assert list(tmp_path.iterdir()) == []
+
+    def test_dashboard_exits_without_creating_anything(self, tmp_path, monkeypatch):
+        assert self._run(tmp_path, monkeypatch, ['dashboard']) == 1
+        assert list(tmp_path.iterdir()) == []
+
+    def test_edit_exits_without_creating_anything(self, tmp_path, monkeypatch):
+        assert self._run(tmp_path, monkeypatch, ['edit', 'refant']) == 1
+        assert list(tmp_path.iterdir()) == []

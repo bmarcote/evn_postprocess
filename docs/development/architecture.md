@@ -12,7 +12,7 @@ src/evn_postprocess/
 ├── experiment_state.py   # {expname}.toml load/resolve/write-back, precedence rule, skip_steps
 ├── inputs.py             # vex/lis/toml -> Experiment (no server contact)
 ├── source_classify.py    # Heuristic target/calibrator/fringefinder classification
-├── review.py             # Station summary, dashboard Comments defaults, feedback-DB lookup
+├── review.py             # Station/end-of-run summaries, dashboard Comments defaults, feedback-DB lookup
 ├── eevn.py               # e-EVN sibling conventions and synchronisation barriers
 ├── reporting.py          # 3 channels: terminal / logs/logging_messages.log / logs/commands.sh
 ├── servers.py            # computers.toml server config (imported only by the jive backends + tools)
@@ -27,9 +27,9 @@ src/evn_postprocess/
 ├── distribution/          # Delivery backends
 │   ├── __init__.py       #   Distributor ABC, registry, NoneDistributor (verifies FITS-IDI)
 │   └── jive.py             #   credentials, PI letter (+ review comments), archive, upload_feedback stub
-├── process.py            # MS operations, standardplots, tConvert (incl. sanctioned tConvert-in-eee ssh)
+├── process.py            # MS operations, standardplots, tConvert, PolConvert
 ├── pipeline.py            # Historical EVN.py / antab / feedback glue (wrapped by pipelines.aips)
-├── plotting.py            # Jplot wrapper, PS->PNG, web dashboard (incl. Comments tab)
+├── plotting.py            # Jplot wrapper, PS->PNG, web dashboard (Comments + Progress tabs)
 ├── dialog.py               # User interaction (Terminal / PolicyDriven)
 ├── comms.py                # Notifications (email / Mattermost)
 ├── policy.py               # Batch-mode policy dataclass
@@ -100,7 +100,7 @@ of the toml.
 
 ### State machine via Task list
 
-The workflow is a linear sequence of 16 `Task` objects (`workflow._WORKFLOW_STEPS`).
+The workflow is a linear sequence of 17 `Task` objects (`workflow._WORKFLOW_STEPS`).
 Each task wraps a function with signature `(Experiment) -> bool`. The runner
 iterates through tasks, calling each function, storing progress, and — for
 `postpipe` — handling the review pause/re-run-from-step/finalise flow. A step can
@@ -147,7 +147,7 @@ Modified MS + plots
 FITS-IDI
     ↓ pipeline backend (aips: EVN.py | none: skip)
 Pipeline products
-    ↓ postpipe review (dashboard incl. Comments tab) → prearchive
+    ↓ postpipe review (dashboard incl. Comments tab) → prearchive → verification
 FITS-IDI + Tsys/GC, {expname}.toml [postprocess] complete
     ↓ distribution backend (jive: archive + PI letter | none: leave in place)
 Archive-ready / delivered data

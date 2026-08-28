@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 import glob
 import json
 import socket
@@ -31,13 +30,12 @@ from .experiment_state import STATION_STATUSES
 from jiveplot import jplotter, command  # noqa: F401  (re-exported for module callers)
 
 
-# program default(s)
-NoWgt = True    # do not produce weight plots
-ScanNo = None    # automatic scan selection
-Version = "$Id: standardplots,v 1.1 2014-08-08 15:38:41 jive_cc Exp $"
 # Polarization colour scheme as per JIVE standard.
 # Single pol data gets coloured black.
 PolCMap = "ckey p[rr]=2 p[ll]=3 p[rl]=4 p[lr]=5 p[none]=1"
+# Visibility amplitude below which the data are considered empty (the antenna did not
+# record that subband/scan). Correlated data are orders of magnitude above this.
+EMPTY_DATA_LEVEL = 1e-5
 
 # function composition is really great
 compose = lambda *fns: lambda x: reduce(lambda a, f: f(a), reversed(fns), x)
@@ -51,12 +49,15 @@ mk_basenm = compose(partial(re.sub, r'\.ms', ''), os.path.basename, partial(re.s
 #     to "(<src>|<src>|....)" as regex alternatives for matching
 mk_calsrc = compose("({0})".format, "|".join, Map(re.escape), methodcaller('split', ','))
 
-# We need to capture errors and terminate in stead of going on.
-# replace the errorfunction from hvutil with one that terminates
 def mkerrf(pfx):
+    """Replaces jplotter's error function so a plotting error raises instead of exiting.
+
+    jplotter's own handler calls ``sys.exit()``, which would tear down the whole
+    post-processing run. Raising instead lets :meth:`Jplot.create_plot` catch it and
+    report a clean step failure that the operator can retry.
+    """
     def actualerrf(msg):
-        print("{0} {1}".format(pfx, msg))
-        sys.exit(-1)
+        raise RuntimeError(f"{pfx} {msg}")
     return actualerrf
 
 jplotter.hvutil.mkerrf = mkerrf
@@ -105,7 +106,7 @@ class Jplot:
 
         # Determine the best subband for time plots
         self.subbandNo = self._find_best_subband()
-        print(f"Subband {self.subbandNo} selected for amp & phase VS time plot.")
+        logger.debug(f"Subband {self.subbandNo} selected for the amp & phase vs time plots.")
 
     def cleanup(self):
         """Clean up temporary files."""
@@ -115,39 +116,47 @@ class Jplot:
             pass  # File might not exist
 
     def _find_best_subband(self) -> int:
-        """Find the subband with most antenna coverage."""
-        ants_spws = self._get_observed_subbands()
+        """Returns the subband observed by the most antennas (0 when the MS looks empty).
+
+        Used to pick the subband of the amplitude/phase-vs-time plots, so those plots show
+        a band that as many antennas as possible actually recorded.
+        """
         counting: collections.Counter = collections.Counter()
-        for antenna in ants_spws:
-            counting.update(ants_spws[antenna])
-        return counting.most_common()[0][0]
+        for subbands in self._get_observed_subbands().values():
+            counting.update(subbands)
+        return counting.most_common(1)[0][0] if counting else 0
 
     def _get_observed_subbands(self) -> dict[str, set[int]]:
-        """Get observed subbands for each antenna.
+        """Returns, per antenna, the set of subbands it actually observed.
+
+        A subband counts as observed when the antenna's autocorrelation in it carries
+        signal; a subband the antenna did not record stays at exactly zero.
 
         Returns:
-            dict mapping antenna name -> set of subband indices with non-zero data.
+            dict mapping antenna name -> set of DATA_DESC_ID values with data.
         """
-        ants_spws: dict[str, set[int]] = collections.defaultdict(set)
+        observed: dict[str, set[int]] = collections.defaultdict(set)
         with pt.table(self.measurementset, readonly=True, ack=False) as mstable:
             with pt.table(mstable.getkeyword('ANTENNA'), readonly=True, ack=False) as ms_ants:
-                antenna_names = ms_ants.getcol('NAME')
-
-            with pt.table(mstable.getkeyword('DATA_DESCRIPTION'), readonly=True, ack=False) as ms_spws:
-                spw_names = ms_spws.getcol('SPECTRAL_WINDOW_ID')
+                antenna_names = list(ms_ants.getcol('NAME'))
 
             for (start, nrow) in chunkert(0, len(mstable), 5000):
                 ants1 = mstable.getcol('ANTENNA1', startrow=start, nrow=nrow)
                 ants2 = mstable.getcol('ANTENNA2', startrow=start, nrow=nrow)
-                spws = mstable.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
+                ddids = mstable.getcol('DATA_DESC_ID', startrow=start, nrow=nrow)
                 msdata = mstable.getcol('DATA', startrow=start, nrow=nrow)
 
-                for antenna in antenna_names:
-                    for spw in spw_names:
-                        if (msdata[np.where((ants1 == antenna) & (ants2 == antenna) & (spws == spw))] < 1e-7).all():
-                            ants_spws[antenna].add(spw)
+                # Autocorrelations only: they tell whether the antenna recorded the subband
+                # at all, independently of whether it fringed against anybody.
+                auto = ants1 == ants2
+                if not np.any(auto):
+                    continue
 
-        return ants_spws
+                with_data = np.max(np.abs(msdata[auto]), axis=(1, 2)) > EMPTY_DATA_LEVEL
+                for ant_index, ddid in zip(ants1[auto][with_data], ddids[auto][with_data]):
+                    observed[antenna_names[int(ant_index)]].add(int(ddid))
+
+        return observed
 
     # ------------------------------------------------------------------
     #  Scan discovery & reference-antenna selection
@@ -199,7 +208,7 @@ class Jplot:
 
                     a1 = int(ant1_col[i])
 
-                    if a1 == int(ant2_col[i]) and np.max(np.abs(data_col[i])) > 1e-5:
+                    if a1 == int(ant2_col[i]) and np.max(np.abs(data_col[i])) > EMPTY_DATA_LEVEL:
                         aname = ant_names[a1]
                         result[scanno]['antennas'].add(aname)
                         result[scanno]['antenna_spws'][aname].add(int(spw_col[i]))
@@ -239,8 +248,8 @@ class Jplot:
         # Pick the candidate with the most subbands
         ant_spws = scan_info['antenna_spws']
         best = max(candidates, key=lambda a: len(ant_spws.get(a, set())))
-        print(f"  refant fallback: {self.refant} not in scan, using {best} "
-              f"({len(ant_spws.get(best, set()))} subbands)")
+        logger.info(f"Reference-antenna fallback: {self.refant} is not in this scan, using "
+                    f"{best} ({len(ant_spws.get(best, set()))} subbands).")
         return best
 
     def open_ms(self) -> Generator[str, None, None]:
@@ -263,7 +272,7 @@ class Jplot:
         Returns:
             Generator of jplotter commands.
         """
-        print(f"generating cross plots [anp/channel] scan {scanno}")
+        logger.info(f"Generating cross-correlation plots [amp&phase/channel], scan {scanno}.")
         yield "bl {0}* -auto".format(refant)
         yield "fq *;ch none"
         yield "avt vector;avc none"
@@ -277,7 +286,7 @@ class Jplot:
         yield "nxy 2 4"
         yield "refile {0}-cross-scan{1}.ps/cps".format(self.myBasename, scanno)
         yield "pl"
-        print(f"done cross plots scan {scanno}")
+        logger.debug(f"Done cross-correlation plots, scan {scanno}.")
 
     def amp_chan_auto_plot(self, scanno: int) -> Generator[str, None, None]:
         """Generate amplitude vs channel auto-correlation plots for one scan.
@@ -288,7 +297,7 @@ class Jplot:
         Returns:
             Generator of jplotter commands.
         """
-        print(f"generating auto plots [amp/channel] scan {scanno}")
+        logger.info(f"Generating auto-correlation plots [amp/channel], scan {scanno}.")
         yield "bl auto"
         yield "fq */p;ch none"
         yield "avt scalar;avc none"
@@ -303,7 +312,7 @@ class Jplot:
         yield "nxy 2 4"
         yield "refile {0}-auto-scan{1}.ps/cps".format(self.myBasename, scanno)
         yield "pl"
-        print(f"done auto plots scan {scanno}")
+        logger.debug(f"Done auto-correlation plots, scan {scanno}.")
 
     def amp_time_auto_plot(self, scanno: int) -> Generator[str, None, None]:
         """Generate amplitude vs time auto-correlation plots for one scan.
@@ -314,7 +323,7 @@ class Jplot:
         Returns:
             Generator of jplotter commands.
         """
-        print(f"generating auto plots [amp/time] scan {scanno}")
+        logger.info(f"Generating auto-correlation plots [amp/time], scan {scanno}.")
         yield "bl auto"
         yield "fq *;ch 0.1*last:0.9*last"
         yield "new all f bl t"
@@ -326,7 +335,7 @@ class Jplot:
         yield "sort bl"
         yield "refile {0}-amptime-scan{1}.ps/cps".format(self.myBasename, scanno)
         yield "pl"
-        print(f"done amp/time auto plots scan {scanno}")
+        logger.debug(f"Done auto-correlation amp/time plots, scan {scanno}.")
 
     def anp_time_cross_plot(self, refant: str, timesel: str, sbsel: str, label: str) -> Generator[str, None, None]:
         """Generate amplitude/phase vs time cross-baseline plots (all scans).
@@ -340,7 +349,7 @@ class Jplot:
         Returns:
             Generator of jplotter commands.
         """
-        print(f"generating cross plots [anp/time] all scans ({label})")
+        logger.info(f"Generating cross-correlation plots [amp&phase/time], all scans ({label}).")
         yield "bl {0}* -auto".format(refant)
         yield "fq {0}/p;ch 0.1*last:0.9*last".format(sbsel)
         yield "new all f bl t"
@@ -354,7 +363,7 @@ class Jplot:
         yield "ptsz 2"
         yield "refile {0}-ampphase-{1}.ps/cps".format(self.myBasename, label)
         yield "pl"
-        print(f"done amplitude/phase vs time plots ({label})")
+        logger.debug(f"Done amplitude/phase vs time plots ({label}).")
 
     def weight_plot(self) -> Generator[str, None, None]:
         """Generate weight plots for auto-correlations.
@@ -362,7 +371,7 @@ class Jplot:
         Returns:
             Generator of jplotter commands.
         """
-        print("generating weight plot")
+        logger.info("Generating the weight plot.")
         yield "ms {0}".format(self.measurementset)
         yield "bl auto; fq */p"
         yield "src none"
@@ -375,7 +384,7 @@ class Jplot:
         yield "refile {0}-weight.ps/cps".format(self.myBasename)
         yield "wt 0.1"
         yield "pl"
-        print("done weight plot")
+        logger.debug("Done weight plot.")
 
 
     def create_plot(self, sources: list[str], plots: Optional[List[str]] = None) -> bool:
@@ -397,7 +406,7 @@ class Jplot:
             True if successful, False otherwise.
         """
         if not sources:
-            print("ERROR: No calibrator sources provided for plotting.")
+            logger.error("No calibrator sources provided for plotting.")
             return False
 
         try:
@@ -411,10 +420,10 @@ class Jplot:
             # --- discover scans containing the requested sources ---
             scan_map = self.get_scans_for_sources(sources)
             if not scan_map:
-                print(f"WARNING: No scans found for sources {sources}. Skipping per-scan plots.")
+                logger.warning(f"No scans found for the sources {sources}. Skipping the per-scan plots.")
             else:
-                print(f"Found {len(scan_map)} scans for sources {sources}: "
-                      f"{list(scan_map.keys())}")
+                logger.info(f"Found {len(scan_map)} scans for the sources {', '.join(sources)}: "
+                            f"{', '.join(str(s) for s in scan_map)}.")
 
             # --- per-scan plots (cross + auto) ---
             for scanno, info in scan_map.items():
@@ -440,7 +449,7 @@ class Jplot:
             return True
 
         except Exception as e:
-            print(f"Error during plotting: {e}")
+            logger.opt(exception=True).error(f"Error during plotting: {e}")
             return False
         finally:
             self.cleanup()
@@ -722,6 +731,8 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._serve_plot_list()
             elif self.path == "/api/pipeline":
                 self._serve_json(self.pipeline_pages)
+            elif self.path == "/api/progress":
+                self._serve_progress()
             elif self.path == "/api/comments":
                 self._serve_comments()
             elif self.path.startswith("/plots/"):
@@ -765,6 +776,22 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
     def _exp_toml(self):
         """Returns the experiment toml of the served experiment, loading it if needed."""
         return experiment_state.attached_toml(self._experiment())
+
+    def _serve_progress(self):
+        """GET /api/progress: every workflow step and whether it has already run.
+
+        The done flags are re-read from the JSON checkpoint on each request (and only fall
+        back to the in-memory experiment when it cannot be read), so a dashboard opened in
+        one terminal shows the progress of a run advancing in another.
+        """
+        from . import workflow  # local import: workflow -> process -> plotting would cycle
+        exp = self._experiment()
+        try:
+            exp = experiment.Experiment.load(exp.expname)
+        except (FileNotFoundError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+            logger.debug(f"Could not re-read the stored state for the Progress tab ({exc}); "
+                         "reporting the in-memory steps.")
+        self._serve_json(workflow.step_progress(exp=exp))
 
     def _serve_comments(self):
         """GET /api/comments: general note + per-station comments for the Comments tab.
@@ -1015,7 +1042,7 @@ def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -
     original_sigint = signal.getsignal(signal.SIGINT)
 
     def _shutdown(signum, frame):
-        print("\nShutting down dashboard server...")
+        logger.info("Shutting down the dashboard server...")
         threading.Thread(target=server.shutdown).start()
 
     signal.signal(signal.SIGINT, _shutdown)
@@ -1025,16 +1052,3 @@ def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -
         signal.signal(signal.SIGINT, original_sigint)
         server.server_close()
         logger.info("Dashboard server stopped.")
-
-
-# Example usage at the bottom of the file:
-if __name__ == "__main__":
-    # Example: Create all standard plots for a fringe-finder
-    plotter = Jplot("experiment.ms", "Ef", "J0613+5209", weight_plots=True)
-    success = plotter.create_plot(sources=["J0613+5209"])
-
-    # Example: Create only specific plot types
-    # plotter = Jplot("experiment.ms", "Ef", "J0613+5209")
-    # success = plotter.create_plot(sources=["J0613+5209"], plots=['cross', 'time'])
-
-    print(f"Plotting {'succeeded' if success else 'failed'}")

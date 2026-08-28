@@ -14,7 +14,7 @@ and correlated data on disk.
 ## Features
 
 - **Semi-automatic workflow** — Runs the full post-correlation pipeline
-  (16 steps, `initialize` → `distribute`) with minimal user intervention.
+  (17 steps, `initialize` → `distribute`) with minimal user intervention.
 - **Operating modes** — A single `--mode` (auto-detected from the OS user/group)
   selects `supsci` (the JIVE support-scientist job), `regular` (all local, no server
   contact, nothing archived), or `sweeps` (future), so the same core runs at JIVE or

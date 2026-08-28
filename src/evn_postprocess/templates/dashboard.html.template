@@ -63,6 +63,19 @@
   .tab-view { height: calc(100% - 3rem); }
   #pipeline-frame { width: 100%; height: 100%; min-height: 75vh; border: 1px solid var(--border);
                     border-radius: 4px; background: #fff; }
+  /* Progress tab: one row per workflow step, in execution order. */
+  .progress-summary { font-size: 0.9rem; color: var(--dim); margin-bottom: 0.8rem; }
+  .progress-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden;
+                  margin: 0.4rem 0 1rem; }
+  .progress-bar > div { height: 100%; background: var(--green); transition: width 0.3s; }
+  .step { display: grid; grid-template-columns: 1.6rem 1fr; gap: 0.2rem 0.6rem;
+          padding: 0.45rem 0.2rem; border-bottom: 1px solid var(--border); }
+  .step-mark { font-size: 0.9rem; line-height: 1.3; }
+  .step-name { font-weight: 600; }
+  .step-doc { grid-column: 2; font-size: 0.8rem; color: var(--dim); }
+  .step-done .step-name { color: var(--green); }
+  .step-next .step-name { color: var(--accent); }
+  .step-pending .step-name { color: var(--dim); }
 </style>
 </head>
 <body>
@@ -85,6 +98,7 @@
       <button class="tab" id="tab-comments" onclick="showTab('comments')">Comments</button>
       <button class="tab active" id="tab-plots" onclick="showTab('plots')">Standard Plots</button>
       <button class="tab" id="tab-pipeline" onclick="showTab('pipeline')">Pipeline</button>
+      <button class="tab" id="tab-progress" onclick="showTab('progress')">Progress</button>
     </div>
     <!-- Comments tab: general experiment note + per-station notes and status,
          persisted into the experiment toml [comments] section. -->
@@ -120,6 +134,12 @@
       <p id="pipeline-placeholder" style="display:none; text-align:center; color:var(--dim); padding:3rem">
         The pipeline feedback page is not available yet. It is generated after the EVN pipeline runs.</p>
       <iframe id="pipeline-frame" title="Pipeline feedback"></iframe>
+    </div>
+    <!-- Progress tab: the post-processing steps (same list as `postprocess list`) and
+         which ones have already run. Re-read from the stored state, so a run advancing
+         in another terminal shows up here. -->
+    <div class="tab-view" id="view-progress" style="display:none">
+      <div id="progress-content"><p style="color:var(--dim)">Loading...</p></div>
     </div>
     <div class="footer-note">Press Ctrl+C in the terminal to stop the dashboard server.</div>
   </div>
@@ -358,11 +378,51 @@ async function changeRefant(newRef) {
 }
 
 function showTab(name) {
-  for (const tab of ['pipeline', 'plots', 'comments']) {
+  for (const tab of ['pipeline', 'plots', 'comments', 'progress']) {
     document.getElementById('view-' + tab).style.display = (tab === name) ? 'block' : 'none';
     document.getElementById('tab-' + tab).classList.toggle('active', tab === name);
   }
+  if (name === 'progress') loadProgress();
 }
+
+/* Progress tab: the workflow steps and which of them have run. Polled while the tab is
+   visible so a run advancing in another terminal is reflected without a reload. */
+const PROGRESS_POLL_MS = 15000;
+
+async function loadProgress() {
+  try {
+    const resp = await fetch(API + '/api/progress');
+    if (!resp.ok) { throw new Error('Server returned ' + resp.status); }
+    renderProgress(await resp.json());
+  } catch (e) {
+    document.getElementById('progress-content').innerHTML =
+      '<p style="color:var(--red)">Failed to load the progress: ' + e.message + '</p>';
+    console.error('loadProgress error:', e);
+  }
+}
+
+function renderProgress(steps) {
+  const done = steps.filter(s => s.done).length;
+  const pct = steps.length ? Math.round(100 * done / steps.length) : 0;
+  // The next step to run is the first pending one after the last completed step.
+  let lastDone = -1;
+  steps.forEach((s, i) => { if (s.done) lastDone = i; });
+  let h = `<div class="progress-summary">${done} of ${steps.length} steps completed (${pct}%)</div>`;
+  h += `<div class="progress-bar"><div style="width:${pct}%"></div></div>`;
+  steps.forEach((s, i) => {
+    const state = s.done ? 'done' : (i === lastDone + 1 ? 'next' : 'pending');
+    const mark = s.done ? '&#128994;' : (state === 'next' ? '&#128309;' : '&#9899;');
+    h += `<div class="step step-${state}"><div class="step-mark">${mark}</div>` +
+         `<div class="step-name">${s.name}${state === 'next' ? ' <span style="font-weight:400;' +
+         'color:var(--dim)">— next</span>' : ''}</div>` +
+         `<div class="step-doc">${s.doc}</div></div>`;
+  });
+  document.getElementById('progress-content').innerHTML = h;
+}
+
+setInterval(() => {
+  if (document.getElementById('view-progress').style.display !== 'none') loadProgress();
+}, PROGRESS_POLL_MS);
 
 /* Comments tab: statuses map to the dashboard traffic-light colours. */
 const STATUS_COLORS = {success: 'var(--green)', minor: '#f0c040', major: 'var(--red)'};
@@ -453,6 +513,7 @@ loadSummary();
 loadPlots();
 loadPipeline();
 loadComments();
+loadProgress();
 </script>
 </body>
 </html>

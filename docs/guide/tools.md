@@ -19,7 +19,7 @@ For each external binary, `tools.resolve(name)` checks (in order):
 5. A caller-provided default, if any — otherwise `ToolMissingError` is raised,
    naming everywhere that was searched.
 
-## Tools wrapped by `tools.py`
+## Tools resolved through `tools.py`
 
 | Tool | Auto env var | Purpose |
 | --- | --- | --- |
@@ -29,6 +29,8 @@ For each external binary, `tools.resolve(name)` checks (in order):
 | `feedback.pl` | `EVN_FEEDBACK_PL` | Legacy feedback-page script (superseded by the in-tree `feedback` module for the `aips` backend, kept as a resolvable name) |
 | `archive.pl` | `EVN_ARCHIVE_PL` | Archive data to the EVN archive |
 | `antab_editor.py` | `EVN_ANTAB_EDITOR_PY` | ANTAB file editing (manual GUI step) |
+| `check-multipart-fits.py` | `EVN_CHECK_MULTIPART_FITS_PY` | Data lost between the chunks of a multi-part FITS-IDI file (`verification` step) |
+| `compare-ms-idi.py` | `EVN_COMPARE_MS_IDI_PY` | MS vs FITS-IDI content comparison (`verification` step) |
 
 Other tools invoked during the workflow (`getdata.pl`, `uvflgall.sh`,
 `polconvert.py`, `append_antab_idi.py`, `auth_pipe.py`, `ampcal.sh`, `jplotter`)

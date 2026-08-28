@@ -11,6 +11,17 @@ All environment variables recognised by `evn_postprocess`.
 | `EVN_SSH_RETRIES` | `2` | Number of retries with backoff on transient SSH failures. |
 | `EVN_SSH_BACKOFF_S` | `3.0` | Base backoff (seconds) between SSH retries. |
 
+## Concurrency
+
+How many correlator passes are worked on at once. They only matter for
+multi-phase-centre experiments (a normal run has a handful of passes, always below the
+ceiling); see [Workflow Overview](../guide/workflow.md#per-pass-concurrency).
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `EVN_MAX_PASS_WORKERS` | `min(cpu_count, 16)` | Passes handled at once for in-process (casacore) work: `ysfocus`, `polswap`, `flag_weights`, `onebit`, MS metadata. |
+| `EVN_MAX_PASS_IO_WORKERS` | `10` | Passes handled at once for the steps that spawn one subprocess per pass (`j2ms2`, `getdata.pl`), where disk throughput is the ceiling, not cores. |
+
 ## External tool overrides
 
 Derived automatically by `tools.resolve` as `EVN_<NAME>`, where `<NAME>` is the
@@ -25,6 +36,8 @@ tool's canonical name uppercased with `.`/`-` replaced by `_` — see
 | `EVN_FEEDBACK_PL` | `feedback.pl` |
 | `EVN_ARCHIVE_PL` | `archive.pl` |
 | `EVN_ANTAB_EDITOR_PY` | `antab_editor.py` |
+| `EVN_CHECK_MULTIPART_FITS_PY` | `check-multipart-fits.py` |
+| `EVN_COMPARE_MS_IDI_PY` | `compare-ms-idi.py` |
 
 ## Communications
 

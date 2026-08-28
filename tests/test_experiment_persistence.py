@@ -152,3 +152,36 @@ class TestModeRoundTrip:
 
         loaded = experiment.Experiment.load("TEST01")
         assert loaded.mode is None
+
+
+class TestIsNme:
+    """One shared definition of a Network Monitoring Experiment.
+
+    Four separate decisions used to carry their own prefix check (archive credentials,
+    source protection, the feedback-page format and the NME report); they all read
+    ``experiment.is_nme`` now, so they cannot disagree.
+    """
+
+    def test_n_and_f_are_nmes(self):
+        for name in ("N24L1", "n24l1", "F24X1", "f24x1"):
+            assert experiment.is_nme(name) is True, name
+
+    def test_fringe_tests_are_not_nmes(self):
+        # FT* is a fringe test: it needs credentials and protection like any experiment.
+        for name in ("FT24A", "ft24a"):
+            assert experiment.is_nme(name) is False, name
+
+    def test_ordinary_experiments_are_not_nmes(self):
+        for name in ("EB101", "GP052", "RSF01"):
+            assert experiment.is_nme(name) is False, name
+
+    def test_credentials_follow_the_shared_rule(self, tmp_path, monkeypatch):
+        # A real NME gets no credentials; a fringe test does.
+        from evn_postprocess import process
+        monkeypatch.chdir(tmp_path)
+        for name, expects_credentials in (("N24L1", False), ("FT24A", True)):
+            exp = experiment.Experiment(name, dt.date(2026, 4, 10), "tester", _make_dirs(tmp_path))
+            assert process.set_credentials(exp) is True
+            assert (exp.credentials is not None) is expects_credentials, name
+            for auth in tmp_path.glob("*.auth"):
+                auth.unlink()   # so the next case does not recover these credentials
