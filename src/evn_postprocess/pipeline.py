@@ -21,6 +21,34 @@ from . import comment_tasav
 from . import feedback
 
 
+def _link_vix_into_antenna_files(exp) -> None:
+    """Symlinks the experiment .vix file into the antenna_files directory.
+
+    antab_editor.py runs with antenna_files/ as working directory and reads the vex file
+    from there. A link (not a copy) is used so that any later edit of the vex is picked
+    up. The link target is ABSOLUTE (``source.resolve()``): the vex in the experiment
+    root is itself typically a relative symlink ({EXP}.vix -> {exp}.vox), and copying
+    that relative target one directory down makes it point at a non-existent sibling,
+    which is how these links used to dangle. Any pre-existing file or (broken) link with
+    the destination name is removed first.
+
+    Args:
+        exp: The Experiment. Read before any chdir, as ``exp.vixfile`` and
+            ``exp.dirs.pipe_temp`` are relative to the experiment root.
+    """
+    source = Path(exp.vixfile)
+    if not source.exists():
+        logger.warning(f"No vex file {source} found to link into {exp.dirs.pipe_temp}; "
+                       "antab_editor.py may not find the observation setup.")
+        return
+
+    destination = Path(exp.dirs.pipe_temp) / source.name
+    if destination.is_symlink() or destination.exists():
+        destination.unlink()
+    destination.symlink_to(source.resolve())
+    logger.debug(f"Created symlink {destination} -> {source.resolve()} for antab_editor.py.")
+
+
 def run_antab_editor(exp) -> bool:
     """Opens antab_editor.py for the given experiment.
 
@@ -28,6 +56,9 @@ def run_antab_editor(exp) -> bool:
     once from the main experiment, passing the associated experiments via ``-a``
     together with the path to their FITS-IDI files, so a single, consistent set of
     Tsys/gain tables is produced for the whole session.
+
+    The vex file is symlinked into antenna_files/ first, as the editor reads it from
+    its working directory.
 
     Returns:
         bool: True once the editor exits successfully (the editor itself runs
@@ -45,6 +76,9 @@ def run_antab_editor(exp) -> bool:
     other_exps = []
     if exp.eEVNname is not None:
         other_exps = [e for e in exp.eEVN_experiments() if e.upper() != exp.expname.upper()]
+
+    # antab_editor.py reads the vex file from its working directory (antenna_files).
+    _link_vix_into_antenna_files(exp)
 
     original_cwd = os.getcwd()
     os.chdir(exp.dirs.pipe_temp)
