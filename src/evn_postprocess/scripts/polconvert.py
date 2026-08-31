@@ -3,32 +3,31 @@
 polarization instead of circular one. This is a wrapper for the PolConvert-standalone program that
 reads the required parameters from an input file and is meant to be used with EVN data.
 
-Version: 2.1
+Version: 2.2
 Date: March 2023
 Written by Benito Marcote (marcote@jive.eu)
 """
 
 import os
+import re
 import glob
 import shutil
 import argparse
 import pickle as pk
 from pathlib import Path
 from concurrent import futures
+from collections import defaultdict
 import numpy as np
 from astropy.io import fits
-from . import find_idi_with_time as find_idi
-import tomllib
-
-# PolConvert only exists in the CASA/polconvert environment; main() raises a clear
-# error when it is missing.
+from evn_support import find_idi_with_time as find_idi
+# tomli was introduced in the standard library as tomllib in Python 3.11
 try:
-    from PolConvert import polconvert_standalone as pconv
-except ImportError:
-    pconv = None
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 
-__version__ = '2.3'
+__version__ = '2.2'
 
 
 def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exclude_baselines, do_ifs,
@@ -71,9 +70,9 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
         - logdir : str  [default = 'polconvert_logs']
             Specifies the folder that will be created to keep the log files from this run.
     """
-    if pconv is None:
-        raise ModuleNotFoundError("The PolConvert package is required to run polconvert "
-                                  "but is not installed in this environment.")
+    # Doing it here to avoid the slow importing and stdout messages before checking the inputs
+    from PolConvert import polconvert_standalone as pconv
+
     # Log directory to contain all output files from PolConvert. Remove if files exist from previous runs
     path = Path(logdir)
     if path.exists() and to_compute:
@@ -84,9 +83,9 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
     # Files created by PolConvert, always in CWD
     _TEMP_FILES = ('CONVERSION.MATRIX', 'FRINGE.PEAKS', 'FRINGE.PLOTS', 'POLCONVERT.FRINGE', 'PolConvert.log',
                    'PolConvert.XYGains.dat', 'PolGainSolve.log', 'PolConvert_standalone.last',
-                   f"Cross-Gains_{ref_idi.split('.')[0]}.png")
+                   f"Cross-Gains_{args['inputs']['ref_idi'].split('.')[0]}.png")
     # If exists, remove all created output files (but the IDIs) from prior runs
-    if to_compute:
+    if args['options']['to_compute']:
         for a_path in _TEMP_FILES:
             a_file = Path(a_path)
             if a_file.exists():
@@ -134,9 +133,10 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
                 a_file = Path(a_path)
                 if a_file.exists():
                     if a_file.name == 'PolConvert.log':
-                        shutil.move(a_file, Path(logdir) / 'PolConvert-compute.log')
+                        shutil.move(a_file, Path(args['config']['logdir']) / 'PolConvert-compute.log')
+                    # a_file.rename(Path(args['logdir']) / a_path)
                     else:
-                        shutil.move(a_file, Path(logdir) / a_file)
+                        shutil.move(a_file, Path(args['config']['logdir']) / a_file)
 
     if to_apply:
         if not to_compute:
@@ -169,12 +169,117 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
                 a_file = Path(a_path)
                 if a_file.exists():
                     if a_file.name == 'PolConvert.log':
-                        shutil.move(a_file, Path(logdir) / 'PolConvert-apply.log')
+                        shutil.move(a_file, Path(args['config']['logdir']) / 'PolConvert-apply.log')
                     else:
                         if a_file.is_file():
                             a_file.unlink()
                         else:
                             shutil.rmtree(a_file)
+
+    # Once everything has run, summarise the fringe SNR per IF obtained during the conversion.
+    try:
+        print_fringe_snr_table(logdir)
+    except Exception as summary_error:
+        print(f"Warning: could not build the fringe-SNR summary table ({summary_error}).")
+
+
+# Polarizations reported in the FRINGE.PEAKS files, in the order they should appear in the table.
+_FRINGE_POLS = ('RR', 'LL', 'RL', 'LR')
+# Relevant lines look like:   RR: 9.48e-01 ; SNR: 375.3
+_FRINGE_SNR_RE = re.compile(r'^\s*(RR|LL|RL|LR)\s*:.*?SNR\s*:\s*([-+0-9.eE]+)', re.IGNORECASE)
+# File names look like:  FRINGE.PEAKS_IF1_SCAN_0_EF-JB.dat  ->  (IF number, scan/baseline label)
+_FRINGE_FILE_RE = re.compile(r'FRINGE\.PEAKS_IF(\d+)_(.+)\.dat$')
+
+
+def _read_fringe_peaks(datfile):
+    """Returns a dict {pol: snr} with the fringe SNR values read from a single FRINGE.PEAKS_*.dat file."""
+    snr = {}
+    with open(datfile, 'r', encoding='utf-8', errors='replace') as peaks:
+        for line in peaks:
+            match = _FRINGE_SNR_RE.match(line)
+            if match is not None:
+                try:
+                    snr[match.group(1).upper()] = float(match.group(2))
+                except ValueError:
+                    pass
+    return snr
+
+
+def _fringe_snr_color(snr):
+    """Returns the rich colour for a given IF depending on the ratio between the parallel-hand
+    (RR + LL) and cross-hand (RL + LR) fringe SNRs: green if a conversion clearly succeeded,
+    orange if it is marginal, and red if it likely failed."""
+    parallel = snr.get('RR', 0.0) + snr.get('LL', 0.0)
+    cross = snr.get('RL', 0.0) + snr.get('LR', 0.0)
+    if parallel > 2 * cross:
+        return 'green'
+    if parallel > cross:
+        return 'dark_orange'
+    return 'red'
+
+
+def print_fringe_snr_table(logdir='polconvert_logs'):
+    """Reads the FRINGE.PEAKS files written by PolConvert while computing the solutions and prints
+    (using rich) a table summarising the fringe SNR of each polarization (RR, LL, RL, LR) per IF.
+
+    One table is printed per scan/baseline found under {logdir}/FRINGE.PEAKS/, with the different IFs
+    as columns. For each IF the values are shown in green if (RR + LL) > 2*(RL + LR), orange if
+    (RR + LL) > (RL + LR), and red otherwise.
+
+    Inputs:
+        - logdir : str  [default = 'polconvert_logs']
+            The log folder used in the run; the FRINGE.PEAKS files are read from {logdir}/FRINGE.PEAKS/.
+    """
+    try:
+        from rich import box
+        from rich import print as rprint
+        from rich import get_console
+        from rich.table import Table
+    except ImportError:
+        print("Note: install the 'rich' package to get the fringe-SNR summary table.")
+        return
+
+    peaks_dir = Path(logdir) / 'FRINGE.PEAKS'
+    # Group the SNRs by scan/baseline label; within each group index them by IF number.
+    groups = defaultdict(dict)
+    for datfile in sorted(peaks_dir.glob('FRINGE.PEAKS_IF*_SCAN_*.dat')):
+        match = _FRINGE_FILE_RE.search(datfile.name)
+        if match is not None:
+            groups[match.group(2)][int(match.group(1))] = _read_fringe_peaks(datfile)
+
+    if not groups:
+        rprint(f"[yellow]No FRINGE.PEAKS files found under {peaks_dir} to summarise.[/yellow]")
+        return
+
+    available_width = get_console().width
+    for key, per_if in groups.items():
+        ifs = sorted(per_if)
+        colors = {n: _fringe_snr_color(per_if[n]) for n in ifs}
+        # Work out how many IF columns fit in the terminal so that runs with many IFs are split into
+        # several tables instead of being truncated by rich.
+        value_width = max((len(f"{v:.0f}") for snr in per_if.values() for v in snr.values()), default=5)
+        col_width = max(value_width, max(len(f"IF{n}") for n in ifs)) + 2
+        pol_width = max(len(pol) for pol in _FRINGE_POLS) + 2
+        per_table = max(1, (available_width - pol_width - 2) // col_width)
+        for first in range(0, len(ifs), per_table):
+            chunk = ifs[first:first + per_table]
+            table = Table(title=f"PolConvert fringe SNR  ·  {key.replace('_', ' ')}",
+                          title_style='bold', header_style='bold', box=box.SIMPLE_HEAD)
+            table.add_column('Pol', justify='left', no_wrap=True)
+            for n in chunk:
+                table.add_column(f"IF{n}", justify='right', header_style=f"bold {colors[n]}")
+            for pol in _FRINGE_POLS:
+                row = [pol]
+                for n in chunk:
+                    value = per_if[n].get(pol)
+                    cell = '-' if value is None else f"{value:.0f}"
+                    row.append(f"[{colors[n]}]{cell}[/{colors[n]}]")
+                table.add_row(*row)
+            rprint(table)
+
+    rprint("[dim]colour per IF:  [green]green[/green] (RR+LL) > 2×(RL+LR)   "
+           "[dark_orange]orange[/dark_orange] (RR+LL) > (RL+LR)   "
+           "[red]red[/red] otherwise[/dim]")
 
 
 if __name__ == '__main__':
@@ -223,8 +328,10 @@ if __name__ == '__main__':
            'timeavg must be a positive integer.'
     assert isinstance(args['options']['to_compute'], bool), \
            "The parameter 'to_compute' must be either 'true' or 'false'."
-    assert isinstance(args['options']['to_apply'], bool), "The parameter 'to_apply' must be either 'true' or 'false'."
-    assert isinstance(args['options']['solve_amp'], bool), "The parameter 'solve_amp' must be either 'true' or 'false'."
+    assert isinstance(args['options']['to_apply'], bool), \
+            "The parameter 'to_apply' must be either 'true' or 'false'."
+    assert isinstance(args['options']['solve_amp'], bool), \
+            "The parameter 'solve_amp' must be either 'true' or 'false'."
     times = args['options']['time_range']
     assert len(times) % 8 == 0, "'time_range' needs to be an empty list or containing AIPS-format time " \
                                 "[d0, h0, m0, s0, d1, h1, m1, s1]'"
@@ -251,7 +358,8 @@ if __name__ == '__main__':
             args['options']['do_if'] = list(range(1, an_idi['FREQUENCY'].header['NO_BAND']+1))
 
     if ('*' in args['inputs']['ref_idi']) or ('?' in args['inputs']['ref_idi']):
-        args['inputs']['ref_idi'] = find_idi.find_idi_with_time(idi_files= sorted(glob.glob(args['inputs']['ref_idi'])),
+        args['inputs']['ref_idi'] = find_idi.find_idi_with_time(idi_files= \
+                sorted(glob.glob(args['inputs']['ref_idi'])),
                 aipstime=args['options']['time_range'][:4], verbose=False)
         if args['inputs']['ref_idi'] is None:
             raise ValueError("The introduced time range has not been found in the selected FITS-IDI files")

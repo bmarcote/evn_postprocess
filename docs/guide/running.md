@@ -67,7 +67,6 @@ immediately (JSON state), before any step runs.
 | `--mode {supsci,regular,sweeps}` | Operating mode; auto-detected from the OS when omitted (see [Operating Modes](modes.md)). |
 | `--policy FILE` | Batch-mode decisions (see [Batch Mode](batch-mode.md)). |
 | `--comms FILE` | Notification settings (see [Communications](comms.md)). |
-| `--tConvert-in-eee` / `--no-tConvert-in-eee` | Run `tConvert`/PolConvert on `eee` (default; workaround for a broken local install) or locally. |
 | `--debug` | Verbose logging. |
 
 ## Directory resolution

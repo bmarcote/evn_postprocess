@@ -32,7 +32,6 @@ class Mode(str, Enum):
     supsci = 'supsci'
     regular = 'regular'
     sweeps = 'sweeps'
-    default = 'regular'
 
 
 class Backends(NamedTuple):

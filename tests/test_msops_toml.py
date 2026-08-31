@@ -30,6 +30,12 @@ refant = ["Ef"]
 
 
 def make_exp(tmp_path, toml_text=None):
+    """Builds an EB101 experiment whose toml lives in *tmp_path*.
+
+    The toml is only written when *toml_text* is given; callers that want the "no toml"
+    case must therefore pass a directory of their own (see fresh_dir), otherwise a toml
+    written by an earlier call in the same test would be picked up.
+    """
     dirs = experiment.Dirs(logs=Path('logs'), plots=Path('plots'), pipeline=Path('pipeline'),
                            pipe_in=Path('pipeline/in'), pipe_out=Path('pipeline/out'),
                            pipe_temp=Path('antenna_files'))
@@ -46,12 +52,21 @@ def make_exp(tmp_path, toml_text=None):
     return exp
 
 
+def fresh_dir(tmp_path, name: str) -> Path:
+    """Returns a new empty sub-directory of *tmp_path* (one experiment toml per case)."""
+    directory = tmp_path / name
+    directory.mkdir()
+    return directory
+
+
 def test_toml_msops_available_gate(tmp_path):
-    assert workflow._toml_msops_available(make_exp(tmp_path, COMPLETE_POSTPROCESS)) is True
-    assert workflow._toml_msops_available(make_exp(tmp_path)) is False
+    complete = make_exp(fresh_dir(tmp_path, 'complete'), COMPLETE_POSTPROCESS)
+    assert workflow._toml_msops_available(complete) is True
+    # No toml at all -> not available:
+    assert workflow._toml_msops_available(make_exp(fresh_dir(tmp_path, 'empty'))) is False
     # Missing one list -> not available (absent != empty):
     partial = COMPLETE_POSTPROCESS.replace('onebit = []\n', '')
-    assert workflow._toml_msops_available(make_exp(tmp_path, partial)) is False
+    assert workflow._toml_msops_available(make_exp(fresh_dir(tmp_path, 'partial'), partial)) is False
 
 
 def test_apply_toml_msops_matches_toml(tmp_path):

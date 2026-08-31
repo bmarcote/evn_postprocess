@@ -1,0 +1,34 @@
+[ccs]
+# Server where the .vox/.vix and .lis files should be found.
+user = "jops"
+host = "ccs"
+path = "/ccs/expr/{expname}"
+
+[master_projects]
+# Path to the MASTER_PROJECT.LIS file containing the obs date and e-EVN name (if applicable).
+user = "jops"
+host = "ccs"
+path = "/ccs/var/log2vex/MASTER_PROJECT.LIS"
+
+[jexp]
+# Path to the Jexp directory containing the .jex files for each experiment.
+user = "jops"
+host = "archive"
+path = "/home/jops/Expadmin/Jexp"
+
+[piletters]
+# Path to the piletters directory containing the .piletter and .expsum files for each experiment.
+user = "jops"
+host = "archive"
+path = "/home/jops/piletters"
+
+[vlbeer]
+# Server with the observational files that went to the stations
+user = "evn"
+host = "vlbeer.ira.inaf.it"
+path = "vlbi_arch/{obsdate.strftime('%y%b')}"
+
+[eee]
+user = ""
+host = "eee"
+path = "/data/exp/"

@@ -8,6 +8,11 @@ Owns the operator-facing review data (PRD Module Design -> `review`):
   - :func:`announce_antab_summary` renders that summary as a rich terminal panel and
     sends the same text through the configured notifier, immediately before
     antab_editor launches (PRD stories 10-11).
+  - :func:`msops_summary` reports what the MS operations actually did to the data
+    (weight flagging, polswap and its time range, PolConvert, 1-bit scaling).
+  - :func:`final_summary` gathers everything the run spotted — the msops above, the
+    antennas that did not observe, what was found on the ones that did, and which
+    station files arrived — into the message that closes a finished run.
 
 The same StationSummary feeds the dashboard Comments tab auto-notes (Issue 9).
 """
@@ -142,6 +147,76 @@ def summary_text(exp: experiment.Experiment, summary: StationSummary) -> str:
     return '\n'.join(lines)
 
 
+def _station_files(exp: experiment.Experiment) -> list[str]:
+    """Which station files arrived, per antenna: '.log' (fs log) and '.antabfs' (Tsys/gain).
+
+    Only the antennas that observed are listed: one without data has nothing to deliver.
+    A missing file is what the operator has to chase at vlbeer, so the groups that lack
+    something are named explicitly instead of being left out.
+    """
+    observed = [a for a in exp.antennas if a.observed]
+    groups = {"both `.log` and `.antabfs`": [a.name for a in observed
+                                             if a.logfsfile and a.antabfsfile],
+              "only `.log` (**no ANTAB**)": [a.name for a in observed
+                                             if a.logfsfile and not a.antabfsfile],
+              "only `.antabfs` (**no log**)": [a.name for a in observed
+                                               if a.antabfsfile and not a.logfsfile],
+              "**neither**": [a.name for a in observed
+                              if not a.logfsfile and not a.antabfsfile]}
+    lines = [f"{label}: {', '.join(names)}." for label, names in groups.items() if names]
+    if exp.antennas.opacity:
+        lines.append(f"Tsys corrected for opacity: {', '.join(exp.antennas.opacity)}.")
+    return lines
+
+
+def _antenna_issues(exp: experiment.Experiment, summary: StationSummary) -> list[str]:
+    """What was spotted on the antennas that observed but not everything (one line each)."""
+    lines = []
+    for report in summary.with_findings:
+        if not report.observed:  # listed on its own, above
+            continue
+        details = [f"missed {start:%d %H:%M}-{end:%H:%M} UT" for start, end in report.missed_ranges]
+        if report.reduced_bandwidth:
+            details.append(f"reduced bandwidth ({report.n_subbands}/{report.max_subbands} subbands)")
+        lines.append(f"{report.name}: {'; '.join(details)}.")
+    if (low := exp.antennas.low_weights):
+        lines.append(f"Unexpectedly low weights, worth a look at the weight plots: "
+                     f"{', '.join(low)}.")
+    return lines
+
+
+def final_summary(exp: experiment.Experiment) -> str:
+    """Everything the post-processing spotted, for the message closing a finished run.
+
+    What was applied to the data and the antennas that did not observe are global facts
+    about the experiment; the rest is per antenna: what was found on the ones that
+    observed, and which station files arrived for each. Written in Markdown, so the same
+    text reads well in the terminal and in the chat.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        The summary ('' only when the experiment carries no antenna information at all).
+    """
+    summary = station_summary(exp)
+    blocks = [("What was applied to the data", msops_summary(exp).splitlines()),
+              ("Did not observe", [', '.join(r.name for r in summary.stations.values()
+                                             if not r.observed)]),
+              ("Spotted per antenna", _antenna_issues(exp, summary)),
+              ("Station files", _station_files(exp))]
+
+    text = []
+    for title, lines in blocks:
+        if any(line.strip() for line in lines):
+            text.append(f"**{title}:**\n" + '\n'.join(f"- {line}" for line in lines if line.strip()))
+    if not text:
+        return ''
+    if summary.stations and not summary.with_findings:
+        text.insert(0, "Every scheduled station observed the whole experiment.")
+    return '\n\n'.join(text)
+
+
 FEEDBACKDB_CONFIG = Path.home() / '.config' / 'evn_postprocess' / 'feedbackdb.toml'
 
 
@@ -239,5 +314,47 @@ def announce_antab_summary(exp: experiment.Experiment, notifier=None) -> Station
                               border_style="yellow", padding=(1, 2)))
     except Exception as e:  # rendering must never stop the workflow
         logger.warning(f"Could not render the antab station summary ({e}); plain text:\n{text}")
-    comms.notify_operator(exp, "antab_editor about to start", text, notifier)
+    comms.notify_operator(exp, "the ANTAB files are about to be edited",
+                          f"`antab_editor.py` is starting. These are the stations to check "
+                          f"in the ANTAB:\n\n{text}", "", notifier)
     return summary
+
+
+def msops_summary(exp: experiment.Experiment) -> str:
+    """Describes what the MS operations did to the data, for the end-of-run summary.
+
+    Reports the weight-flagging threshold and how much was flagged, and every antenna
+    that was polarization-swapped (with the time range :func:`process.polswap_check`
+    determined), pol-converted, or 1-bit scaled.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        A multi-line, human-readable text ('' when nothing was applied).
+    """
+    from . import process  # cycle: process imports this module; used at call time only
+
+    lines = []
+    flag = next((p.flagged_weights for p in exp.correlator_passes if p.flagged_weights), None)
+    if flag is not None:
+        lines.append(f"Weights below {flag.threshold} flagged" +
+                     (f" ({flag.percentage:.2f}% of the non-zero visibilities)."
+                      if flag.percentage >= 0 else " (not applied yet)."))
+
+    for antenna in exp.antennas.polswap:
+        start, end = process.polswap_range(exp, antenna)
+        when = "the whole observation"
+        if start is not None:
+            when = f"from {start:%d/%m/%Y %H:%M:%S} UTC to the end"
+        elif end is not None:
+            when = f"from the start until {end:%d/%m/%Y %H:%M:%S} UTC"
+        lines.append(f"{antenna}: polarizations swapped over {when}.")
+
+    for antenna in exp.antennas.polconvert:
+        lines.append(f"{antenna}: linear polarizations converted to circular (PolConvert).")
+
+    for antenna in exp.antennas.onebit:
+        lines.append(f"{antenna}: 1-bit data scaled to correct the quantization losses.")
+
+    return '\n'.join(lines)

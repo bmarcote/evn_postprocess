@@ -282,3 +282,118 @@ def test_vlbeer_rerun_nothing_new_fetches_nothing(tmp_path, monkeypatch):
     assert _antabfs_scp(calls) == []                                     # nothing re-fetched
     assert (tmp_path / 'eb101_ef.antabfs').read_text() == 'EDITED-EF'
     assert (tmp_path / 'eb101_wb.antabfs').read_text() == 'EDITED-WB'
+
+
+class TestVlbaCalibrationFiles:
+    """Global (EVN+VLBA) experiments need the VLBA calibration files for antab_editor.
+
+    `get_vlba_antab` must place `{exp}cal.vlba` and `gbt_gains.key` in antenna_files/,
+    and must never turn a missing file into a step failure (the operator can copy them
+    by hand and re-run the antab step).
+    """
+
+    def _exp(self, tmp_path):
+        import datetime as dt
+        from evn_postprocess import experiment
+        dirs = experiment.Dirs(logs=tmp_path / 'logs', plots=tmp_path / 'plots',
+                               pipeline=tmp_path / 'p', pipe_in=tmp_path / 'p/in',
+                               pipe_out=tmp_path / 'p/out', pipe_temp=tmp_path / 'antenna_files')
+        exp = experiment.Experiment('GP052', dt.date(2026, 4, 10), 'tester', dirs)
+        exp.antennas = experiment.Antennas([experiment.Antenna(name='Ef'),
+                                            experiment.Antenna(name='Br')])
+        return exp
+
+    def test_detects_a_global_experiment(self, tmp_path):
+        from evn_postprocess import experiment
+        from evn_postprocess.retrieval import jive
+        exp = self._exp(tmp_path)
+        assert jive.has_vlba_stations(exp) is True
+        exp.antennas = experiment.Antennas([experiment.Antenna(name='Ef'),
+                                            experiment.Antenna(name='Wb')])
+        assert jive.has_vlba_stations(exp) is False
+
+    def test_fetches_both_files(self, tmp_path, monkeypatch):
+        from evn_postprocess.retrieval import jive
+        exp = self._exp(tmp_path)
+        gains = tmp_path / 'gbt_gains.key'
+        gains.write_text('GAIN EF\n')
+        monkeypatch.setattr(jive, 'GAINS_KEY', gains)
+
+        copied = []
+
+        def fake_scp(origin, destination, **kwargs):
+            copied.append(origin)
+            Path(destination).write_text('cal\n')
+            return True
+
+        monkeypatch.setattr(jive.utils, 'scp', fake_scp)
+        assert jive.get_vlba_antab(exp) is True
+        assert (exp.dirs.pipe_temp / 'gp052cal.vlba').exists()
+        assert (exp.dirs.pipe_temp / 'gbt_gains.key').exists()
+        # The cal file is looked for in the correlator's log2vex directory for this date.
+        assert copied and 'GP052_20260410/gp052cal.vlba' in copied[0]
+
+    def test_a_missing_file_is_reported_not_raised(self, tmp_path, monkeypatch):
+        from evn_postprocess.retrieval import jive
+        exp = self._exp(tmp_path)
+        monkeypatch.setattr(jive, 'GAINS_KEY', tmp_path / 'absent_gains.key')
+
+        def failing_scp(*a, **k):
+            raise ValueError("no such file on the remote host")
+
+        monkeypatch.setattr(jive.utils, 'scp', failing_scp)
+        assert jive.get_vlba_antab(exp) is False   # reported, never raised
+
+    def test_no_server_configuration_is_reported_not_raised(self, tmp_path, monkeypatch):
+        from evn_postprocess.retrieval import jive
+        exp = self._exp(tmp_path)
+
+        def no_config():
+            raise FileNotFoundError("computers.toml not found")
+
+        monkeypatch.setattr(jive.servers, 'retrieve_servers', no_config)
+        assert jive.get_vlba_antab(exp) is False
+
+
+class TestMakeLisPhaseCentres:
+    """`make_lis -m SRC` keeps the calibrator data in one pass when a scan carries many
+    phase centres; without it they would be duplicated in every resulting pass.
+    """
+
+    def _exp(self, tmp_path, n_centres):
+        import datetime as dt
+        from evn_postprocess import experiment
+        dirs = experiment.Dirs(logs=tmp_path / 'logs', plots=tmp_path / 'plots',
+                               pipeline=tmp_path / 'p', pipe_in=tmp_path / 'p/in',
+                               pipe_out=tmp_path / 'p/out', pipe_temp=tmp_path / 'p/tmp')
+        exp = experiment.Experiment('EM123', dt.date(2026, 4, 10), 'tester', dirs)
+        centres = tuple(f"TARGET{i}" for i in range(n_centres))
+        exp.scans = experiment.Scans([
+            experiment.Scan(scanno='No0001', starttime=dt.datetime(2026, 4, 10, 10, 0),
+                            duration_s=300, source='3C286', stations_scheduled=('Ef',)),
+            experiment.Scan(scanno='No0002', starttime=dt.datetime(2026, 4, 10, 10, 10),
+                            duration_s=300, source=centres[0] if centres else '3C286',
+                            stations_scheduled=('Ef',), phase_centers=centres)])
+        return exp
+
+    def test_no_filter_for_a_few_phase_centres(self, tmp_path):
+        from evn_postprocess.retrieval import jive
+        assert jive._make_lis_filter(self._exp(tmp_path, 0)) == ''
+        assert jive._make_lis_filter(self._exp(tmp_path, jive.MAX_PHASE_CENTERS)) == ''
+
+    def test_filters_on_the_first_source_of_the_scan(self, tmp_path):
+        from evn_postprocess.retrieval import jive
+        exp = self._exp(tmp_path, jive.MAX_PHASE_CENTERS + 1)
+        assert jive._make_lis_filter(exp) == ' -m TARGET0'
+
+    def test_the_option_reaches_make_lis(self, tmp_path, monkeypatch):
+        from evn_postprocess.retrieval import jive
+        from evn_postprocess.servers import Server, Servers
+        exp = self._exp(tmp_path, jive.MAX_PHASE_CENTERS + 1)
+        monkeypatch.setattr(jive.servers, 'retrieve_servers',
+                            lambda: Servers([Server('ccs', 'jops', 'ccs', Path('/ccs/expr/{expname}'))]))
+        monkeypatch.setattr(jive, 'lis_files_in_ccs', lambda exp, server: False)
+        commands: list[str] = []
+        monkeypatch.setattr(jive.utils, 'ssh', lambda host, cmd, **kw: commands.append(cmd))
+        assert jive.create_lis_files(exp) is True
+        assert commands and commands[0].endswith('/ccs/bin/make_lis -e EM123 -m TARGET0')

@@ -1,6 +1,6 @@
 # Workflow Overview
 
-The post-processing pipeline is structured as a sequential list of 16 **steps**
+The post-processing pipeline is structured as a sequential list of 17 **steps**
 (internally `Task` objects). Each step wraps a Python function and can be
 individually re-run (`postprocess run STEP`) or executed in isolation
 (`postprocess exec NAME`). Three groups of steps delegate to a selectable
@@ -27,6 +27,7 @@ fully offline for an external user.
 | `pipeline` | The pipeline backend's `run()`: runs the calibration pipeline over all correlator passes. |
 | `postpipe` | The pipeline backend's `collect()`: diagnostics, TASAV/comment files, feedback page; PI letter auto-fill. **Review pause.** |
 | `prearchive` | Appends Tsys/gain-curve info to the FITS-IDI files; records the finalisation parameters into the toml. |
+| `verification` | Verifies the final FITS-IDI files: ANTAB tables attached, no data lost between the multi-part files, content matching the MS. **Stops the run before anything is archived.** |
 | `distribute` | The distribution backend's `deliver()`: credentials, protection, archive upload, PI letter. |
 
 See [Workflow Steps & Local Tools](../reference/steps.md) for what each step calls
@@ -37,7 +38,8 @@ under the hood — useful if you ever need to reproduce a step by hand.
 ```text
 initialize → lisfiles → checklis → j2ms2 → standardplots → msops
     → tconvert → polconvert → post_polconvert → standardplots2 → antab
-    → pipeinputs → pipeline → postpipe → ⏸ (review) → prearchive → archive
+    → pipeinputs → pipeline → postpipe → ⏸ (review) → prearchive
+    → verification → distribute
 ```
 
 Steps that require a decision (`msops`) or a review pause (`postpipe`, plus the
@@ -50,13 +52,33 @@ e-EVN barriers inside `antab`) either:
   `msops` over Mattermost) accept a structured reply to continue without logging
   in.
 
+## Per-pass concurrency
+
+Steps that act on every correlator pass do so concurrently, bounded by
+`utils.pass_workers()`: all the passes at once, up to a ceiling. Two ceilings are used —
+`MAX_PASS_WORKERS` (`min(cpu_count, 16)`) for in-process casacore work, and
+`MAX_PASS_IO_WORKERS` (10) for the steps that spawn one subprocess per pass (`j2ms2`,
+`getdata.pl`), where disk throughput runs out before cores do. Both are overridable
+through the environment (see [Environment Variables](../reference/env-vars.md#concurrency)).
+
+A normal experiment has two to five passes, so the ceiling never binds; it exists for
+multi-phase-centre runs, which can reach several hundred passes.
+
+`tconvert` uses the subprocess ceiling too. Because tConvert is verbose about its progress
+and several of those streams interleaved are unreadable, it keeps the live terminal output
+only while a single pass is converting; from two upwards each pass writes to its own
+`logs/tconvert.log` sibling instead, and past five passes a progress bar shows how many
+are done and how long the rest should take. A pass that fails does not stop the others —
+all the failures are named together once the run finishes.
+
 ## The review pause (`postpipe`)
 
 After `postpipe`, the terminal and the configured notifier both point to the
 dashboard (`postprocess info --serve`, including the new **Comments** tab — see
 [Dashboard](dashboard.md)) and the PI letter. Answering:
 
-- **Enter** — finalises: runs `prearchive` and `distribute` in the same invocation.
+- **Enter** — finalises: runs `prearchive`, `verification` and `distribute` in the
+  same invocation.
 - **a step name** — re-runs the workflow from that step, returning to this same
   review point afterwards.
 - **quit** — stops here; resume any time with `postprocess run`.

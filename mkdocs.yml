@@ -71,6 +71,7 @@ nav:
     - Analysis:
       - source_classify: api/source_classify.md
       - review: api/review.md
+      - verification: api/verification.md
       - eevn: api/eevn.md
     - Support:
       - reporting: api/reporting.md

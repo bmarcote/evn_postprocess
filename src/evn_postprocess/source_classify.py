@@ -179,8 +179,8 @@ def classify_sources(exp: experiment.Experiment) -> dict[str, str]:
     if not untyped:
         return {}
 
-    if exp.expname[0].upper() in ('N', 'F'):
-        logger.warning(f"{exp.expname} is an NME/fringe-test experiment: all "
+    if experiment.is_nme(exp.expname):
+        logger.warning(f"{exp.expname} is an NME: all "
                        f"{len(untyped)} unclassified sources are set as targets.")
         return {s.name: 'target' for s in untyped}
 

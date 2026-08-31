@@ -16,6 +16,11 @@ Configuration is loaded from the first file found in the following order:
 
 Environment variables ``POSTPROCESS_SMTP_PASSWORD`` and ``POSTPROCESS_MM_TOKEN``
 can supply secrets so they do not need to live in the TOML file.
+
+Who gets notified is resolved by :func:`recipient_for`: an explicit ``username`` in the
+file wins, otherwise the experiment's support scientist is looked up in the ``[[people]]``
+directory of the same file, which maps each of them to an email address and a Mattermost
+username.
 """
 import abc
 import io
@@ -28,7 +33,7 @@ import tomllib
 import urllib.error
 import urllib.request
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -43,10 +48,25 @@ from . import experiment
 # ---------------------------------------------------------------------------
 
 @dataclass
+class Person:
+    """One ``[[people]]`` entry: how to reach a support scientist.
+
+    ``username`` is the name the rest of the program uses for them (the login, the
+    ``-jss`` argument, and the ``support`` field of the .jex file); the other two are the
+    addresses of the email and Mattermost modes.
+    """
+    username: str = ""
+    email: str = ""
+    mattermost: str = ""
+
+
+@dataclass
 class CommsConfig:
     """Communication configuration loaded from ``comms.toml``."""
     mode: str = "none"
     username: str = ""
+    # The [[people]] directory, keyed by lower-case username (see recipient_for).
+    people: dict[str, Person] = field(default_factory=dict)
     # Email
     smtp_host: str = ""
     smtp_port: int = 587
@@ -103,15 +123,23 @@ class CommsConfig:
         cfg.mode = data.get("mode", "none").lower()
         cfg.username = data.get("username", "")
 
+        for entry in data.get("people", []):
+            person = Person(username=entry.get("username", ""), email=entry.get("email", ""),
+                            mattermost=entry.get("mattermost", ""))
+            if person.username:
+                cfg.people[person.username.lower()] = person
+            else:
+                logger.warning(f"Ignoring a [[people]] entry with no username: {entry}.")
+
         email = data.get("email", {})
         cfg.smtp_host = email.get("smtp_host", "")
         cfg.smtp_port = email.get("smtp_port", 587)
-        cfg.smtp_from = email.get("from_address", cfg.username)
-        cfg.smtp_password = email.get("password", os.getenv("POSTPROCESS_SMTP_PASSWORD", ""))
+        cfg.smtp_from = email.get("from_address") or cfg.username
+        cfg.smtp_password = email.get("password") or os.getenv("POSTPROCESS_SMTP_PASSWORD", "")
 
         mm = data.get("mattermost", {})
         cfg.mm_server_url = mm.get("server_url", "").rstrip("/")
-        cfg.mm_token = mm.get("token", os.getenv("POSTPROCESS_MM_TOKEN", ""))
+        cfg.mm_token = mm.get("token") or os.getenv("POSTPROCESS_MM_TOKEN", "")
         cfg.mm_channel_id = mm.get("channel_id", "")
 
         return cfg
@@ -296,8 +324,9 @@ class MattermostNotifier(Notifier):
         """Post a Mattermost message (Markdown) with optional file uploads.
 
         Args:
-            subject: Used as a Markdown heading in the message.
-            body: Markdown body.
+            subject: Only labels the message in the log; the body carries its own header
+                     (see :func:`operator_message`). It is the email subject line.
+            body: Markdown body, posted as it is.
             attachments: Optional PNG files to upload alongside the post.
 
         Returns:
@@ -305,7 +334,7 @@ class MattermostNotifier(Notifier):
         """
         try:
             self._ensure_channel()
-            message = f"### {subject}\n\n{body}"
+            message = body
 
             file_ids: list[str] = []
             for path in (attachments or []):
@@ -367,6 +396,38 @@ class MattermostNotifier(Notifier):
 
         logger.info("Mattermost reply timeout reached.")
         return None
+
+
+def recipient_for(config: CommsConfig, supsci: str) -> str:
+    """The address to notify: an email address, or a Mattermost username.
+
+    An explicit ``username`` in comms.toml always wins (a personal configuration). With
+    none — the usual case on the shared account — the support scientist assigned to the
+    experiment is looked up in the ``[[people]]`` directory and their address for the
+    configured mode is returned.
+
+    Args:
+        config: The loaded comms configuration.
+        supsci: The support scientist assigned to the experiment.
+
+    Returns:
+        The address, or '' when nobody can be resolved (the caller then leaves the
+        notifications off for the run, after saying so).
+    """
+    if config.username:
+        return config.username
+
+    person = config.people.get(supsci.strip().lower()) if supsci else None
+    if person is None:
+        logger.warning(f"No [[people]] entry for '{supsci}' in the comms configuration. Add "
+                       "one (username / email / mattermost), or set 'username' in comms.toml.")
+        return ""
+
+    address = person.email if config.mode == "email" else person.mattermost
+    if not address:
+        logger.warning(f"The [[people]] entry for '{supsci}' has no "
+                       f"{'email address' if config.mode == 'email' else 'Mattermost username'}.")
+    return address
 
 
 def make_notifier(config: CommsConfig) -> Notifier:
@@ -596,20 +657,17 @@ def notify_dashboard_review(exp, notifier: Notifier) -> dict | None:
     if isinstance(notifier, NoneNotifier):
         return None
 
-    summary = build_summary_text(exp)
-    plots = collect_plot_files(exp)
-
-    subject = f"EVN Post-Processing: {exp.expname} — Dashboard Review"
-
-    body = summary
+    situation = ("The standard plots are ready and the MS operations have to be decided "
+                 "before the pipeline can run.\n\n" + build_summary_text(exp))
     if notifier.supports_interactive():
-        body += _MSOPS_REPLY_TEMPLATE.format(antennas=", ".join(exp.antennas.names))
+        needed = _MSOPS_REPLY_TEMPLATE.format(antennas=", ".join(exp.antennas.names)).strip()
     else:
-        body += ("\n\n---\n"
-                 "Please log in to the server to review the standard plots "
-                 "and continue the post-processing.")
+        needed = (f"Log in to the server and open the dashboard "
+                  f"(`postprocess -e {exp.expname} info --serve` in {Path.cwd()}) to review "
+                  f"the standard plots and continue the post-processing.")
 
-    if not notifier.send_message(subject, body, plots):
+    if not notify_operator(exp, "the standard plots are ready", situation, needed, notifier,
+                           collect_plot_files(exp)):
         return None
 
     if notifier.supports_interactive():
@@ -625,55 +683,82 @@ def notify_dashboard_review(exp, notifier: Notifier) -> dict | None:
                     f"- **polconvert:** {', '.join(feedback['polconvert']) or 'none'}\n\n"
                     f"Applying and continuing post-processing…"
                 )
-                notifier.send_message(f"{exp.expname} — Feedback Applied", confirm_body)
+                notify_operator(exp, "your feedback was applied", confirm_body,
+                                notifier=notifier)
                 return feedback
 
-            notifier.send_message(
-                f"{exp.expname} — Parse Error",
-                "Could not parse your reply. Please log in to the server to continue manually.",
-            )
+            notify_operator(exp, "your reply could not be read",
+                            "I could not parse the reply to the MS operations question.",
+                            f"Log in to the server and answer there "
+                            f"(`postprocess -e {exp.expname} run`) to continue manually.",
+                            notifier)
 
     return None
 
 
-def notify_operator(exp, subject: str, body: str, notifier: Notifier | None) -> None:
-    """Sends an informational message to the operator through *notifier* (never blocks).
+def operator_message(exp, situation: str, needed: str = "") -> str:
+    """The text of every message the operator receives: which experiment, what, what now.
 
-    The single idiom for operator notifications outside the step-pause flow (which
-    keeps its dedicated :func:`notify_step_pause`): a None notifier or a send failure
-    only logs, so notifications can never stop the workflow.
-    """
-    if notifier is None:
-        return
-    try:
-        notifier.send_message(f"{exp.expname}: {subject}", body)
-    except Exception as e:
-        logger.warning(f"Could not send the '{subject}' notification: {e}")
-
-
-def notify_step_pause(exp, step: str, reason: str, notifier: Notifier) -> None:
-    """Send an informational notification that the workflow has paused.
-
-    No interactive reply is expected — the user must log in anyway for
-    further verification.
+    All of them share one shape, so a chat holding several experiments at once stays
+    readable: the header names the experiment, the situation says what happened, and
+    'What is needed' lists the actions expected from them — the same words the terminal
+    prints, so there is a single wording to keep right.
 
     Args:
         exp: ``experiment.Experiment`` object.
-        step: Name of the workflow step that just completed.
-        reason: Human-readable explanation of the pause.
+        situation: What happened, in one or two lines of Markdown.
+        needed: What the operator has to do, when anything is (empty for the purely
+                informational messages).
+
+    Returns:
+        The message body, starting with ``**Processing of EXPNAME**``.
+    """
+    text = f"**Processing of {exp.expname.upper()}**\n\n{situation.strip()}"
+    return f"{text}\n\n**What is needed:**\n{needed.strip()}" if needed.strip() else text
+
+
+def notify_operator(exp, headline: str, situation: str, needed: str = "",
+                    notifier: Notifier | None = None,
+                    attachments: list[Path] | None = None) -> bool:
+    """Tells the operator about *situation* through *notifier* (never blocks, never raises).
+
+    The single idiom for operator notifications: a missing notifier, a "none" mode or a
+    send failure only logs, so a notification can never stop the post-processing.
+
+    Args:
+        exp: ``experiment.Experiment`` object.
+        headline: A few words naming the situation; the email subject line (Mattermost
+                  shows the body only, which already carries its own header).
+        situation: What happened.
+        needed: What the operator has to do, if anything.
+        notifier: Concrete Notifier instance, or None when comms are not configured.
+        attachments: Optional PNG files to send along.
+
+    Returns:
+        True when the message was sent.
+    """
+    if notifier is None or isinstance(notifier, NoneNotifier):
+        return False
+    try:
+        return notifier.send_message(f"Processing of {exp.expname.upper()} — {headline}",
+                                     operator_message(exp, situation, needed), attachments)
+    except Exception as e:
+        logger.warning(f"Could not send the '{headline}' notification: {e}")
+        return False
+
+
+def notify_step_pause(exp, step: str, reason: str, notifier: Notifier | None) -> None:
+    """Tells the operator that the workflow stopped at *step* and waits for them.
+
+    No interactive reply is expected here: the pause ends when they act on *reason* and
+    run `postprocess run` again.
+
+    Args:
+        exp: ``experiment.Experiment`` object.
+        step: Name of the workflow step the run stopped at.
+        reason: What the operator has to do for the run to continue.
         notifier: Concrete Notifier instance.
     """
-    if isinstance(notifier, NoneNotifier):
-        return
-
-    summary = build_summary_text(exp)
-    subject = f"EVN Post-Processing: {exp.expname} — Paused after '{step}'"
-    body = (
-        f"{summary}\n\n---\n\n"
-        f"The post-processing has paused after step **{step}**.\n\n"
-        f"**Reason:** {reason}\n\n"
-        f"Please review the pipeline output and PI letter, then run:\n"
-        f"  `postprocess run` to continue\n"
-        f"  `postprocess run {step}` to re-run this step"
-    )
-    notifier.send_message(subject, body)
+    notify_operator(exp, f"paused at '{step}'",
+                    f"The post-processing stopped at the `{step}` step and needs you.",
+                    reason, notifier)

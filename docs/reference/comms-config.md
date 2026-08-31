@@ -15,8 +15,16 @@ The `comms.toml` file configures how the pipeline sends notifications.
 # Communication mode: "none", "email", or "mattermost"
 mode = "none"
 
-# Target: email address (email mode) or Mattermost username (mattermost mode)
+# Target: email address (email mode) or Mattermost username (mattermost mode).
+# Leave empty on a shared account: the support scientist of each experiment is then
+# looked up in [[people]] below.
 username = ""
+
+# The people directory: one entry per support scientist.
+[[people]]
+username = "marcote"        # login / -jss / the .jex `support` field (case-insensitive)
+email = "marcote@jive.eu"   # used in mode = "email"
+mattermost = "marcote"      # used in mode = "mattermost"
 
 [email]
 smtp_host = "smtp.example.com"
@@ -37,7 +45,15 @@ channel_id = ""     # Optional: if empty, a DM channel is created
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `mode` | str | `"none"` | Communication back-end: `none`, `email`, or `mattermost`. |
-| `username` | str | `""` | Recipient identifier. |
+| `username` | str | `""` | Recipient identifier. When empty, the recipient is resolved per experiment from `[[people]]` (see below). |
+
+### `[[people]]` entries
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `username` | str | — | The name the program knows the support scientist by: their login on `eee`, the `-jss` argument, and the `support` field of the experiment `.jex` file. Matched case-insensitively. Entries without it are ignored. |
+| `email` | str | `""` | Address used in `mode = "email"`. |
+| `mattermost` | str | `""` | Mattermost username (no `@`) used in `mode = "mattermost"`. |
 
 ### `[email]` section
 

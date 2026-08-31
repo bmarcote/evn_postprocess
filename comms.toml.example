@@ -11,8 +11,32 @@
 # Communication mode: "none", "email", or "mattermost"
 mode = "none"
 
-# Target username: email address (for email mode) or Mattermost username (for mattermost mode)
+# Who to notify, as an email address (email mode) or a Mattermost username (mattermost
+# mode). Leave it EMPTY on a shared account (jops): postprocess then notifies the support
+# scientist assigned to each experiment, looked up in the [[people]] table below. Setting
+# it here overrides that and always notifies the same person.
 username = ""
+
+# ---------- Support scientists (the people directory) ----------
+# One entry per support scientist, mapping the name postprocess knows them by to the
+# addresses used by each mode. Add everybody here, once, in the shared configuration
+# (~jops/.config/evn/comms.toml).
+#
+#   username    the name the rest of the program uses: the login on eee, the `-jss`
+#               argument, and the `support` field of the experiment .jex file.
+#               Matched case-insensitively.
+#   email       address used in mode = "email".
+#   mattermost  username (without the '@') used in mode = "mattermost".
+#
+# [[people]]
+# username = "marcote"
+# email = "marcote@jive.eu"
+# mattermost = "marcote"
+#
+# [[people]]
+# username = "nair"
+# email = "nair@jive.eu"
+# mattermost = "dnair"
 
 # ---------- Email settings (mode = "email") ----------
 [email]
