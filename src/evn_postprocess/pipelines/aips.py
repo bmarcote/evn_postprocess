@@ -22,5 +22,9 @@ class AipsPipeline(PipelineBackend):
         return pipeline.run_pipeline(exp)
 
     def collect(self, exp) -> bool:
-        """Creates the .comment/.tasav files and the pipeline feedback pages."""
-        return pipeline.comment_tasav_files(exp) & pipeline.pipeline_feedback(exp)
+        """Creates the .comment/.tasav files and the pipeline feedback pages.
+
+        Short-circuits: the feedback pages are not generated when the .comment/.tasav
+        files could not be produced.
+        """
+        return pipeline.comment_tasav_files(exp) and pipeline.pipeline_feedback(exp)

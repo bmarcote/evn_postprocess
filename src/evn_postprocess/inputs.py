@@ -44,8 +44,8 @@ class InputsError(ValueError):
 def create_folder_structure(base: Path | None = None) -> experiment.Dirs:
     """Creates (idempotently) the standard experiment folder structure and returns it.
 
-    This is the canonical implementation; ``workflow.create_folder_structure`` is a
-    thin alias kept for existing callers.
+    Called at initialization and again on every later invocation, so folders removed by
+    hand are silently re-created.
     """
     base = base if base is not None else Path('.')
     folders = {'logs': base / 'logs', 'plots': base / 'plots', 'pipeline': base / 'pipeline',

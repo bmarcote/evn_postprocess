@@ -10,7 +10,7 @@ from evn_postprocess import experiment
 from evn_postprocess import experiment_state as es
 from evn_postprocess import workflow
 from evn_postprocess.distribution import DistributionError
-from evn_postprocess.distribution.jive import JiveDistributor, COMMENTS_SENTINEL, NME_PREFIXES
+from evn_postprocess.distribution.jive import JiveDistributor, COMMENTS_SENTINEL
 from evn_postprocess.retrieval import RetrievalError
 
 
@@ -161,17 +161,26 @@ def _raise_retrieval(*_a, **_k):
 
 
 def test_source_protection_skips_nme(tmp_path, monkeypatch):
-    # NME runs (name starts with N/F) need no PI/protection: the .jex is never fetched.
+    # NME runs need no PI/protection: the .jex is never fetched.
     monkeypatch.chdir(tmp_path)
 
     def boom(_expname):
         raise AssertionError("fetch_jexp_info must not be called for an NME")
 
     monkeypatch.setattr(_FETCH, boom)
-    for prefix in NME_PREFIXES:
+    for expname in ("N24L1", "F24X1"):
         exp = make_exp(tmp_path)
-        exp.expname = f"{prefix}24L1"
+        exp.expname = expname
         assert JiveDistributor()._apply_source_protection(exp) is True
+
+
+def test_source_protection_runs_for_a_fringe_test(tmp_path, monkeypatch):
+    # FT* is NOT an NME: the .jex must still be consulted (experiment.is_nme).
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_FETCH, _raise_retrieval)
+    exp = make_exp(tmp_path)
+    exp.expname = "FT24A"
+    assert JiveDistributor()._apply_source_protection(exp) is False
 
 
 def test_source_protection_returns_false_when_jex_missing(tmp_path, monkeypatch):

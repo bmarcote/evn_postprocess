@@ -10,6 +10,7 @@ never import this file. Imported only when the 'jive' backend is selected.
 from __future__ import annotations
 import os
 import glob
+import shutil
 import tempfile
 import subprocess
 from pathlib import Path
@@ -182,14 +183,37 @@ def lis_files_in_ccs(exp, server) -> bool:
                                     str(Path(str(server.path).format(expname=eEVNname)) / f"{eEVNname.lower()}*.lis"))
 
 
+# Above this many phase centres in a scan, make_lis is told to keep the calibrator data in
+# a single pass ('-m SRC') instead of duplicating them in every one of them.
+MAX_PHASE_CENTERS = 5
+
+
+def _make_lis_filter(exp) -> str:
+    """The ``make_lis -m SRC`` option for a many-phase-centre experiment ('' when not needed).
+
+    With more than MAX_PHASE_CENTERS phase centres correlated in a scan, the calibrator
+    data would be repeated in every resulting pass. ``-m`` restricts them to the pass of
+    one source: the first one listed in the first multi-phase-centre scan (the source the
+    antennas were pointing at).
+    """
+    scan = next((s for s in exp.scans if len(s.phase_centers) > MAX_PHASE_CENTERS), None)
+    if scan is None:
+        return ''
+    logger.info(f"{exp.expname} has {len(scan.phase_centers)} phase centres in scan "
+                f"{scan.scanno}: keeping the calibrator data only in the "
+                f"{scan.phase_centers[0]} pass (make_lis -m).")
+    return f" -m {scan.phase_centers[0]}"
+
+
 def create_lis_files(exp) -> bool:
     """Creates the .lis files remotely on ccs (make_lis)."""
     eEVNname = exp.expname if exp.eEVNname is None else exp.eEVNname
     server = servers.retrieve_servers()['ccs']
     if not lis_files_in_ccs(exp, server):
-        logger.info("Creating lis file...")
+        logger.info(f"Creating the .lis file(s) for {eEVNname} on {server.host}...")
         utils.ssh(f"{server.user}@{server.host}",
-                  f"cd {Path(str(server.path).format(expname=eEVNname))};/ccs/bin/make_lis -e {eEVNname}")
+                  f"cd {Path(str(server.path).format(expname=eEVNname))};"
+                  f"/ccs/bin/make_lis -e {eEVNname}{_make_lis_filter(exp)}")
     return True
 
 
@@ -213,18 +237,88 @@ def get_lis_files(exp) -> bool:
     return True
 
 
-def get_vlba_antab(exp):
-    """Retrieves the VLBA cal (antab) files and gains into the archive temp folder."""
-    rprint("[bold yellow]get_vlba_antab not implemented yet. You need to get the VLBA "
-           "antab files manually.[/bold yellow]")
-    raise NotImplementedError
-    if exp.expname.lower()[0] != 'g':
-        return True
-    cd = f"cd /data/pipe/{exp.expname.lower()}/temp/"
-    utils.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@eee:/data0/tsys/vlba_gains.key ."]))
-    utils.ssh('jops@archive.jive.eu', ';'.join([cd, "scp jops@ccs:/ccs/var/log2vex/logexp_date/"
-                                                f"{exp.expname.upper()}_{exp.obsdate.strftime('%Y%m%d')}"
-                                                f"/{exp.expname.lower()}cal.vlba ."]))
+# Two-letter codes of the VLBA (and GBT) antennas. Their presence makes an experiment
+# "global" and requires the VLBA calibration files (see get_vlba_antab).
+VLBA_STATIONS: frozenset[str] = frozenset(('br', 'fd', 'hn', 'kp', 'la', 'mk', 'nl',
+                                           'ov', 'pt', 'sc', 'yy', 'gb'))
+# Directory on ccs where the correlator leaves the {exp}cal.vlba calibration file.
+CCS_LOG2VEX = '/ccs/var/log2vex/logexp_date'
+# Per-antenna, per-frequency GAIN curves for the VLBA/GBT antennas, kept locally on eee.
+GAINS_KEY = Path('/data/tsys/gbt_gains.key')
+
+
+def has_vlba_stations(exp) -> bool:
+    """Whether the experiment includes VLBA/GBT antennas (i.e. it is a global observation)."""
+    return any(name.lower() in VLBA_STATIONS for name in exp.antennas.names)
+
+
+def get_vlba_antab(exp) -> bool:
+    """Retrieves the VLBA calibration files into ``antenna_files/`` for antab_editor.
+
+    A global (EVN+VLBA) experiment needs two extra files, because the VLBA antab
+    information lacks the GAIN and INDEX headers antab_editor.py expects:
+
+      * ``{exp}cal.vlba`` -- flag table, antab and weather information, produced by the
+        correlator under ``{CCS_LOG2VEX}/{EXP}_{YYYYMMDD}/`` on ccs;
+      * ``gbt_gains.key`` -- the per-antenna, per-frequency gain curves, a local file on
+        eee (copied from the configured 'eee' server when it is not local).
+
+    With both files in ``antenna_files/``, antab_editor.py parses them into the individual
+    .antabfs files. A file that cannot be obtained is a warning, never a step failure: the
+    operator can still place it by hand and re-run the antab step.
+
+    Args:
+        exp: Experiment object (provides the name, observing date and pipe_temp directory).
+
+    Returns:
+        True when both files are in place, False when at least one is missing.
+    """
+    destination = exp.dirs.pipe_temp
+    destination.mkdir(parents=True, exist_ok=True)
+    cal_file = destination / f"{exp.expname.lower()}cal.vlba"
+    gains_file = destination / GAINS_KEY.name
+    try:
+        config = servers.retrieve_servers()
+    except (FileNotFoundError, KeyError) as e:
+        logger.warning(f"No server configuration to retrieve the VLBA calibration files ({e}). "
+                       f"Copy {cal_file.name} and {GAINS_KEY.name} into {destination}/ by hand.")
+        return False
+
+    if not cal_file.exists():
+        ccs = config['ccs']
+        remote = (f"{CCS_LOG2VEX}/{exp.expname.upper()}_{exp.obsdate.strftime('%Y%m%d')}/"
+                  f"{cal_file.name}")
+        try:
+            utils.scp(f"{ccs.user}@{ccs.host}:{remote}", str(cal_file))
+        except (subprocess.TimeoutExpired, ValueError) as e:
+            logger.warning(f"Could not retrieve {cal_file.name} from {ccs.host}:{remote} "
+                           f"({e}). Copy it into {destination}/ by hand before running "
+                           "antab_editor.py.")
+    else:
+        logger.debug(f"{cal_file.name} already present in {destination}.")
+
+    if not gains_file.exists():
+        if GAINS_KEY.exists():
+            shutil.copy(GAINS_KEY, gains_file)
+            logger.debug(f"Copied the local {GAINS_KEY} into {destination}.")
+        else:
+            eee = config['eee']
+            host = f"{eee.user}@{eee.host}" if eee.user else eee.host
+            try:
+                utils.scp(f"{host}:{GAINS_KEY}", str(gains_file))
+            except (subprocess.TimeoutExpired, ValueError) as e:
+                logger.warning(f"Could not retrieve {GAINS_KEY} ({e}). The VLBA antab entries "
+                               f"will lack their GAIN headers; copy it into {destination}/ "
+                               "by hand before running antab_editor.py.")
+
+    missing = [f.name for f in (cal_file, gains_file) if not f.exists()]
+    if missing:
+        rprint(f"[bold yellow]Missing VLBA calibration file(s) in {destination}: "
+               f"{', '.join(missing)}.[/bold yellow]")
+        return False
+
+    logger.info(f"VLBA calibration files ready in {destination}: "
+                f"{cal_file.name}, {gains_file.name}.")
     return True
 
 
@@ -430,6 +524,9 @@ class JiveRetriever(Retriever):
     def fetch_station_files(self, exp) -> bool:
         """Fetches the .log/.antabfs files from vlbeer into ``exp.dirs.pipe_temp``.
 
+        For a global (EVN+VLBA) experiment it also retrieves the VLBA calibration files
+        (see :func:`get_vlba_antab`).
+
         Raises:
             RetrievalError: When the vlbeer server is not configured.
         """
@@ -437,7 +534,29 @@ class JiveRetriever(Retriever):
             vlbeer = self._servers()['vlbeer']
         except KeyError as e:
             raise RetrievalError(f"Server 'vlbeer' missing from computers.toml: {e}") from e
-        return fetch_from_vlbeer(exp, vlbeer)
+        ok = fetch_from_vlbeer(exp, vlbeer)
+        # A global experiment additionally needs the VLBA calibration files; a failure
+        # there is reported but never blocks the antab step.
+        if has_vlba_stations(exp):
+            logger.info(f"{exp.expname} includes VLBA/GBT antennas: retrieving the VLBA "
+                        "calibration files.")
+            get_vlba_antab(exp)
+        return ok
+
+    def fetch_support_scientist(self, exp) -> str:
+        """The support scientist of *exp*, from the ``support`` field of its .jex file.
+
+        The field occasionally lists two scientists separated by '/', in which case the
+        later one is the current assignee (see the post-processing guide). Any failure
+        returns '' so the caller falls back to whatever it already had.
+        """
+        try:
+            support = fetch_jexp_info(exp.expname).get('support') or ''
+        except RetrievalError as e:
+            logger.warning(f"Could not read the support scientist of {exp.expname} from its "
+                           f".jex file ({e}).")
+            return ''
+        return support.split('/')[-1].strip()
 
     def fetch_schedule_files(self, exp) -> None:
         """Best-effort fetch of the .key/.sum schedule files from vlbeer (JIVE nicety).

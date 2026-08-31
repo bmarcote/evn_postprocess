@@ -71,6 +71,36 @@ DEFAULT_SCP_TIMEOUT_S = int(os.environ.get("EVN_SCP_TIMEOUT_S", "600"))
 DEFAULT_SSH_RETRIES = int(os.environ.get("EVN_SSH_RETRIES", "2"))
 DEFAULT_SSH_BACKOFF_S = float(os.environ.get("EVN_SSH_BACKOFF_S", "3.0"))
 
+# How many correlator passes are worked on at once. Most experiments have a handful of
+# passes, so these only bite on multi-phase-centre runs (which reach several hundred), and
+# they are deliberately two different ceilings:
+#   * MAX_PASS_WORKERS   — in-process work on one MS per pass (the casacore operations in
+#     `mstools`). Bounded by the cores available, with a ceiling so a 64-core machine does
+#     not open a hundred MSs at once.
+#   * MAX_PASS_IO_WORKERS — one subprocess per pass (`j2ms2`, `getdata.pl`). These saturate
+#     disk throughput long before they saturate the cores, so more of them stops helping;
+#     this stays a flat number, independent of the core count.
+# Both can be overridden per run through the environment.
+MAX_PASS_WORKERS = int(os.environ.get("EVN_MAX_PASS_WORKERS", min(os.cpu_count() or 4, 16)))
+MAX_PASS_IO_WORKERS = int(os.environ.get("EVN_MAX_PASS_IO_WORKERS", "10"))
+
+
+def pass_workers(n_passes: int, cap: Optional[int] = None) -> int:
+    """How many correlator passes to work on at once: all of them, up to *cap*.
+
+    Args:
+        n_passes: Number of passes the caller has to get through.
+        cap: The ceiling to apply; :data:`MAX_PASS_IO_WORKERS` for the steps that spawn a
+            subprocess per pass. None (the default) reads :data:`MAX_PASS_WORKERS` at call
+            time, so both ceilings can equally be overridden while the process is running.
+
+    Returns:
+        At least 1 — ``ThreadPoolExecutor`` rejects ``max_workers=0``, and a step can be
+        reached with no passes set up (it then simply has nothing to submit).
+    """
+    return max(1, min(n_passes, MAX_PASS_WORKERS if cap is None else cap))
+
+
 # OpenSSH connect-time options to avoid host-key prompts in non-interactive runs
 # and to fail fast instead of hanging on a dead host.
 _SSH_BASE_OPTS = [
@@ -327,10 +357,12 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
             An existing file is never overwritten: a numbered sibling is used instead (see
             :func:`open_unique_log`), so each run gets its own file. Failure to open the log
             is non-fatal — a warning is emitted and the command still runs.
-        echo (bool): When True (default) the output is streamed live to the terminal. Set
-            False to run quietly: output is still captured and teed to ``logfile``, but not
+        echo (bool): When True (default) the output is streamed live to the terminal, and
+            the command banner is logged at INFO. Set False to run quietly: output is still
+            captured and teed to ``logfile``, and the banner drops to DEBUG, but nothing is
             echoed to stdout/stderr. Use for background/parallel runs (e.g. the auxiliary
-            lag-space MS) so they do not garble the foreground command's real-time output.
+            lag-space MS, or the correlator passes behind a progress bar) so they do not
+            garble the foreground output.
 
     Returns:
         str: Concatenated stdout from the command (UTF-8).
@@ -346,7 +378,11 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
         full_shell_command = [command] if parameters is None else [command, parameters]
 
     cmd_str = ' '.join(full_shell_command)
-    logger.info(f"[bold]> {cmd_str}[/bold]")
+    # "Quietly" (echo=False) covers the banner too, not just the command's own output: the
+    # callers that ask for it are running several commands at once behind a progress bar,
+    # and a banner per command would scroll it away. The command is still recorded in
+    # logs/commands.sh and heads the log file, so nothing is lost.
+    logger.log('INFO' if echo else 'DEBUG', f"[bold]> {cmd_str}[/bold]")
     # Record the exact command into logs/commands.sh so a step can be replayed by hand
     # (see evn_postprocess.reporting).
     reporting.record_command(cmd_str)
@@ -363,7 +399,8 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
             log_fh.write(f"# command: {cmd_str}\n")
             log_fh.write(f"# started: {_dt.datetime.now():%Y-%m-%d %H:%M:%S}\n\n")
             log_fh.flush()
-            logger.info(f"Logging output of '{command}' to {log_path}")
+            logger.log('INFO' if echo else 'DEBUG',
+                       f"Logging output of '{command}' to {log_path}")
         except OSError as e:
             logger.warning(f"Could not open log file {logfile}: {e}; continuing without it.")
             log_fh = None

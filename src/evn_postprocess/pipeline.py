@@ -15,38 +15,38 @@ from loguru import logger
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from rich import print as rprint
+from . import experiment
 from . import utils
 from . import lisfiles
 from . import comment_tasav
 from . import feedback
 
 
-def _link_vix_into_antenna_files(exp) -> None:
-    """Symlinks the experiment .vix file into the antenna_files directory.
+def _link_vixfile(exp) -> None:
+    """Symlinks the experiment .vix into ``antenna_files/``, beside the station files.
 
-    antab_editor.py runs with antenna_files/ as working directory and reads the vex file
-    from there. A link (not a copy) is used so that any later edit of the vex is picked
-    up. The link target is ABSOLUTE (``source.resolve()``): the vex in the experiment
-    root is itself typically a relative symlink ({EXP}.vix -> {exp}.vox), and copying
-    that relative target one directory down makes it point at a non-existent sibling,
-    which is how these links used to dangle. Any pre-existing file or (broken) link with
-    the destination name is removed first.
+    antab_editor.py runs from that directory, so having the vex schedule there means it —
+    and anyone working in there by hand — can reach it without stepping back out of the
+    directory. The link is relative, so it survives the experiment directory being moved.
 
-    Args:
-        exp: The Experiment. Read before any chdir, as ``exp.vixfile`` and
-            ``exp.dirs.pipe_temp`` are relative to the experiment root.
+    Never fails the step: a missing vex, or the name already taken in ``antenna_files/``,
+    is a warning and nothing more.
     """
-    source = Path(exp.vixfile)
-    if not source.exists():
-        logger.warning(f"No vex file {source} found to link into {exp.dirs.pipe_temp}; "
-                       "antab_editor.py may not find the observation setup.")
+    link = exp.dirs.pipe_temp / exp.vixfile.name
+    if link.is_symlink() and not link.exists():
+        logger.warning(f"Replacing dangling symlink {link} (pointed to a missing file).")
+        link.unlink()
+    elif link.exists():
         return
 
-    destination = Path(exp.dirs.pipe_temp) / source.name
-    if destination.is_symlink() or destination.exists():
-        destination.unlink()
-    destination.symlink_to(source.resolve())
-    logger.debug(f"Created symlink {destination} -> {source.resolve()} for antab_editor.py.")
+    if not exp.vixfile.exists():
+        logger.warning(f"No {exp.vixfile} found to link into {exp.dirs.pipe_temp}.")
+        return
+    try:
+        link.symlink_to(os.path.relpath(exp.vixfile.resolve(), link.parent.resolve()))
+        logger.debug(f"Linked {exp.vixfile} into {exp.dirs.pipe_temp}.")
+    except OSError as e:
+        logger.warning(f"Could not link {exp.vixfile} into {exp.dirs.pipe_temp}: {e}")
 
 
 def run_antab_editor(exp) -> bool:
@@ -57,8 +57,8 @@ def run_antab_editor(exp) -> bool:
     together with the path to their FITS-IDI files, so a single, consistent set of
     Tsys/gain tables is produced for the whole session.
 
-    The vex file is symlinked into antenna_files/ first, as the editor reads it from
-    its working directory.
+    The experiment .vix is linked into ``antenna_files/`` first, so the vex schedule sits
+    beside the station files the editor works on (see :func:`_link_vixfile`).
 
     Returns:
         bool: True once the editor exits successfully (the editor itself runs
@@ -77,9 +77,7 @@ def run_antab_editor(exp) -> bool:
     if exp.eEVNname is not None:
         other_exps = [e for e in exp.eEVN_experiments() if e.upper() != exp.expname.upper()]
 
-    # antab_editor.py reads the vex file from its working directory (antenna_files).
-    _link_vix_into_antenna_files(exp)
-
+    _link_vixfile(exp)
     original_cwd = os.getcwd()
     os.chdir(exp.dirs.pipe_temp)
     try:
@@ -351,9 +349,9 @@ def pipeline_feedback(exp) -> bool:
     """
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
     sources = [s.name for s in exp.sources]
-    # Network Monitoring Experiments (and the e-EVN test experiments) use the NME-formatted
-    # feedback page. These are identified by the experiment name starting with 'N' or 'F'.
-    is_nme = exp.expname[:1].upper() in ('N', 'F')
+    # Network Monitoring Experiments use the NME-formatted feedback page
+    # (see experiment.is_nme for the single definition of what an NME is).
+    is_nme = experiment.is_nme(exp.expname)
 
     # Always regenerate the feedback page(s): remove any pre-existing feedback HTML for this
     # experiment first. This guarantees the page reflects the latest products/comments on

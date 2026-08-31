@@ -22,10 +22,6 @@ from ..retrieval import RetrievalError, jive as jive_retrieval
 from ..utils import PILETTER_REMARKS_ANCHOR
 
 
-# Experiment-name prefixes for Network Monitoring Experiments (and fringe tests). These
-# carry no PI and no protected sources, so the JIVE .jex protection lookup is skipped.
-NME_PREFIXES = ('N', 'F')
-
 COMMENTS_SENTINEL = "- Notes from the post-processing review:"
 STATUS_LABELS = {'minor': ' (minor issues)', 'major': ' (could not observe)', 'success': ''}
 # The reduced-bandwidth sentence is dropped from the per-station notes: it is already
@@ -123,8 +119,8 @@ class JiveDistributor(Distributor):
         as protected. The .jex file is read remotely and discarded; only the extracted
         contacts and protection flags are stored on the Experiment and the toml.
 
-        NME runs (experiment name starting with N/F, see NME_PREFIXES) need neither PI
-        contact nor protection and are skipped. When the .jex cannot be recovered the
+        NME runs (see :func:`experiment.is_nme`) need neither PI contact nor protection
+        and are skipped. When the .jex cannot be recovered the
         protected sources are unknown, so this returns False; deliver() then prints an
         explicit manual-action error at the end and itself returns False (the stages have
         already run, but the operator must set the protection by hand).
@@ -133,9 +129,9 @@ class JiveDistributor(Distributor):
             bool: True when protection was resolved (or is not needed for an NME); False
                 when the .jex could not be recovered and manual protection is required.
         """
-        if exp.expname[0].upper() in NME_PREFIXES:
-            logger.info(f"{exp.expname} is an NME (name starts with N/F): no PI contact or "
-                        "source protection needed; skipping the .jex lookup.")
+        if experiment.is_nme(exp.expname):
+            logger.info(f"{exp.expname} is an NME: no PI contact or source protection "
+                        "needed; skipping the .jex lookup.")
             return True
 
         try:

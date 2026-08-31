@@ -44,8 +44,9 @@ The pipeline will:
    `antab_editor.py`.
 8. **pipeinputs** / **pipeline** / **postpipe** — Run the calibration pipeline and
    its diagnostics. **Pauses here for review** (dashboard + PI letter).
-9. **prearchive** / **archive** — Attach Tsys/GC, then deliver (credentials,
-   PI letter, archive upload).
+9. **prearchive** / **verification** / **distribute** — Attach Tsys/GC, verify the
+   FITS-IDI files are complete and match the MS, then deliver (credentials, PI
+   letter, archive upload).
 
 See [Workflow Overview](../guide/workflow.md) for the full step list and
 [Operating Modes](../guide/modes.md) for how `retrieval`/`pipeline`/

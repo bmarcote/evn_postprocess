@@ -11,7 +11,6 @@ import re
 import glob
 import string
 import random
-import traceback
 from typing import Optional, Union
 from pathlib import Path
 from itertools import product
@@ -26,11 +25,10 @@ from astropy.io import fits
 from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
-from concurrent.futures import ThreadPoolExecutor
-import casatasks
+from rich import progress
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from . import experiment, utils, mstools
 from . import lisfiles
-from . import servers as _servers
 from . import plotting
 # polconvert_main kept for future use once version compatibility is resolved.
 # from .scripts.polconvert import main as polconvert_main
@@ -54,8 +52,19 @@ _LINEAR_RATIO_LOW: float = 0.5
 _PARALLEL_POLS: frozenset[str] = frozenset({'RR', 'LL', 'XX', 'YY'})
 _CROSS_POLS: frozenset[str] = frozenset({'RL', 'LR', 'XY', 'YX'})
 
-_TCONVERT_BIN = "tConvert"  # This will be the one to use once we certify the following one works
-# _TCONVERT_BIN = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert"
+# The stderr lines of getdata.pl that are notes rather than failures, shown yellow instead
+# of red. Everything getdata.pl reports through perl's warn(): the "**** Warning: ..." it
+# labels itself (and ssh's "Warning: Permanently added ..."), plus the "Ignoring"/"Skipping"
+# notes for job-list lines and subdirectories it does not recognise.
+_GETDATA_WARN_RE = re.compile(r"warning|^(?:Ignoring|Skipping) ", re.IGNORECASE)
+
+# From more than this many correlator passes, tConvert shows a progress bar instead of
+# leaving the terminal silent: with the passes converting concurrently their own output is
+# muted, and a long multi-phase-centre run would otherwise give no sign of how far it is.
+_TCONVERT_PROGRESS_MIN_PASSES: int = 5
+
+# _TCONVERT_BIN = "tConvert"  # This will be the one to use once we certify the following one works
+_TCONVERT_BIN = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert"
 
 # It occasionally crashes with a segmentation fault; because it runs in a subprocess,
 # a crash returns a negative exit code instead of killing post-processing, so the same
@@ -66,11 +75,6 @@ _POLCONVERT_SEGFAULT_RETRIES: int = 3
 # amplitude ratio (RR+LL)/(RL+LR) on the reference baseline exceeds this value. A failed/linear
 # solution leaves the four products comparable (ratio ~1); a real conversion lifts it well above.
 _POLCONVERT_MIN_RATIO: float = 2
-
-# Default bandpass-solution parameters written into the PolConvert input file.
-_POLCONVERT_CHANAVG: int = 32
-_POLCONVERT_TIMEAVG_S: int = 60
-_POLCONVERT_SOLVE_WEIGHT: float = 0.1
 
 # --- PolConvert solution search --------------------------------------------------------
 # An antenna only joins the solve if its fringe on the solve scan reaches this lag SNR. It is
@@ -136,23 +140,28 @@ def getdata(exp: experiment.Experiment) -> bool:
                 # getdata.pl (and the scp calls it makes) write warnings to stderr that are not
                 # errors, most notably ssh's "Warning: Permanently added '<host>' ... known hosts"
                 # and getdata's own "**** Warning: ...". Those are explicitly labelled "warning",
-                # so colour them yellow; genuine errors (perl die messages, scp failures) are not
-                # labelled that way and stay red.
+                # so colour them yellow. So are the "Ignoring <job line>" and "Skipping <subdir>"
+                # notes it emits through perl's warn() for every job-list line it does not
+                # recognise — harmless, but there can be hundreds of thousands of them on a
+                # multi-phase-centre run, and a screen of red reads like a failed step. Genuine
+                # errors (perl die messages, "Could not open ...", scp failures) match none of
+                # these and stay red.
                 utils.shell_command("getdata.pl", cmd_args, shell=True,
                                     stdout=None, stderr=subprocess.STDOUT, bufsize=0,
-                                    stderr_warn_re=re.compile(r"warning", re.IGNORECASE),
+                                    stderr_warn_re=_GETDATA_WARN_RE,
                                     logfile=exp.dirs.logs / "getdata.log")
                 return True
             except Exception as e:
-                logger.error(f"Error fetching data for {a_pass.lisfile.name}: {e}")
-                traceback.print_exc()
+                logger.opt(exception=True).error(f"Error fetching the data for "
+                                                 f"{a_pass.lisfile.name}: {e}")
                 return False
 
         if len(exp.correlator_passes) == 0:
             rprint("[bold yellow]No correlator passes found to fetch[/bold yellow]")
             return True
 
-        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as pool:
+        with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes),
+                                                   utils.MAX_PASS_IO_WORKERS)) as pool:
             results = list(pool.map(_fetch_pass, exp.correlator_passes))
 
         if not all(results):
@@ -161,8 +170,7 @@ def getdata(exp: experiment.Experiment) -> bool:
 
         return True
     except Exception as e:
-        logger.error(f"Unexpected error in getdata: {e}")
-        traceback.print_exc()
+        logger.opt(exception=True).error(f"Unexpected error in getdata: {e}")
         return False
 
 
@@ -215,11 +223,12 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                                     logfile=exp.dirs.logs / "j2ms2.log")
                 return True
             except Exception as e:
-                logger.error(f"Error running j2ms2 for {a_pass.lisfile.name}: {e}")
-                traceback.print_exc()
+                logger.opt(exception=True).error(f"Error running j2ms2 for "
+                                                 f"{a_pass.lisfile.name}: {e}")
                 return False
 
-        with ThreadPoolExecutor(max_workers=10) as pool:
+        with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes),
+                                                   utils.MAX_PASS_IO_WORKERS)) as pool:
             ms_futures = [pool.submit(_j2ms2_correlator_pass, (exp, p)) for p in exp.correlator_passes]
 
             # Create lag-space MS from first pass in parallel (for signal detection).
@@ -261,8 +270,7 @@ def j2ms2(exp: experiment.Experiment) -> bool:
 
         return all(ms_results)
     except Exception as e:
-        logger.error(f"Unexpected error in j2ms2: {e}")
-        traceback.print_exc()
+        logger.opt(exception=True).error(f"Unexpected error in j2ms2: {e}")
         return False
 
 
@@ -277,7 +285,7 @@ def update_ms_expname(exp: experiment.Experiment) -> bool:
         bool: True if experiment names were updated successfully.
     """
     if (exp.eEVNname is not None) and (exp.eEVNname != exp.expname):
-        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 10)) as executor:
+        with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
             futures = [executor.submit(mstools.change_project_name, a_pass.msfile, exp.expname)
                        for a_pass in exp.correlator_passes]
             for fut in futures:
@@ -360,7 +368,7 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
         # through all MSs.
         logger.debug("Using MPC path - extracting metadata from first pass only")
         _get_ms_metadata(exp, exp.correlator_passes[0])
-        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes)-1, 10)) as executor:
+        with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes) - 1)) as executor:
             for fut in [executor.submit(_update_mpc_pass, a_pass) for a_pass in exp.correlator_passes[1:]]:
                 fut.result()
     else:
@@ -705,9 +713,8 @@ def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
             # Retrieve the summary into a log file
             logger.info(utils.shell_command("echo", [f'"ms {a_pass.msfile.name};r"', "|", "jplotter"],
                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT))
-        except Exception:
-            logger.error("Standardplots reported an error!")
-            traceback.print_exc()
+        except Exception as e:
+            logger.opt(exception=True).error(f"Standardplots reported an error: {e}")
             return False
 
     return True
@@ -778,7 +785,7 @@ def onebit(exp: experiment.Experiment) -> bool:
     """
     # Sanity check
     if len(exp.antennas.onebit) > 0:
-        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
+        with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
             futures = [executor.submit(mstools.scale1bit, a_pass.msfile, exp.antennas.onebit)
                       for a_pass in exp.correlator_passes]
             for fut in futures:
@@ -812,32 +819,131 @@ def ysfocus(exp: experiment.Experiment) -> bool:
             logger.info(f"Fixing hobart mount for {a_pass.msfile}")
             mstools.fix_hobart_mount(a_pass.msfile)
 
-    with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
+    with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
         for fut in [executor.submit(_fix_mounts, a_pass) for a_pass in exp.correlator_passes]:
             fut.result()  # Propagate any exceptions
 
     return True
 
 
+def _swapped_scans(exp: experiment.Experiment, antenna: str) -> list[tuple[experiment.Scan, bool]]:
+    """The scans where *antenna* has enough signal, each flagged as swapped or not.
+
+    Reads the per-polarization lag SNRs already in ``exp.lag_snr``: a swapped antenna
+    shows its signal in the cross-hand products (RL, LR) instead of the parallel-hand
+    ones (RR, LL). Scans too weak to decide (or without full polarization) are left out.
+
+    Args:
+        exp: Experiment object.
+        antenna: Antenna name.
+
+    Returns:
+        [(scan, swapped)] in observing order; empty when the lag analysis has no usable
+        data for this antenna (e.g. --no-lag).
+    """
+    scans = []
+    for scan in exp.scans:
+        snr = exp.lag_snr.get(str(_scan_number(scan)), {}).get(antenna, {})
+        parallel = [v for pol, v in snr.items() if pol in _PARALLEL_POLS]
+        cross = [v for pol, v in snr.items() if pol in _CROSS_POLS]
+        if parallel and cross and max(snr.values()) >= _POL_MIN_SNR:
+            scans.append((scan, np.mean(cross) >= _POLSWAP_RATIO * np.mean(parallel)))
+    return scans
+
+
+def polswap_check(exp: experiment.Experiment) -> bool:
+    """Works out, per antenna, over which time range the polarization swap applies.
+
+    A station that swapped its polarizations often fixes it partway through the run, so
+    swapping the whole observation would corrupt the part that was already correct. For
+    every antenna marked for polswap this compares the first and last scans with enough
+    signal (see :func:`_swapped_scans`):
+
+      * both swapped -> the swap covers the whole observation;
+      * exactly one change of state -> the swap covers everything before (or after) the
+        scan where it changed, which becomes the end (or start) time;
+      * no scan swapped, or several changes of state -> a warning, and the whole
+        observation is swapped (the operator decides from the log).
+
+    The resulting range is stored in ``exp.pol_diagnostics`` (as ISO strings, so it stays
+    JSON-serializable) and applied by :func:`polswap`.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True (informational: it never fails the step).
+    """
+    for antenna in exp.antennas.polswap:
+        scans = _swapped_scans(exp, antenna)
+        changes = [i for i in range(1, len(scans)) if scans[i][1] != scans[i - 1][1]]
+        start = end = None
+        if not scans:
+            logger.warning(f"polswap {antenna}: no scan has enough signal to tell when the swap "
+                           "applies; swapping the whole observation.")
+        elif len(changes) > 1:
+            logger.warning(f"polswap {antenna}: the polarizations change back and forth "
+                           f"({len(changes)} times); swapping the whole observation. Check the "
+                           f"scans {', '.join(scans[i][0].scanno for i in changes)}.")
+        elif not any(swapped for _, swapped in scans):
+            logger.warning(f"polswap {antenna}: no scan actually looks swapped, but the antenna "
+                           "is marked for polswap; swapping the whole observation.")
+        elif changes:
+            # One change of state: the swap covers everything on the side that is swapped.
+            if scans[0][1]:
+                end = scans[changes[0]][0].starttime
+            else:
+                start = scans[changes[0]][0].starttime
+            logger.info(f"polswap {antenna}: the polarizations change at scan "
+                        f"{scans[changes[0]][0].scanno}; swapping "
+                        f"{'until' if end else 'from'} "
+                        f"{(end or start).strftime('%d/%m/%Y %H:%M:%S')} UTC.")
+        else:
+            logger.info(f"polswap {antenna}: swapped in all {len(scans)} checked scans; "
+                        "swapping the whole observation.")
+
+        exp.pol_diagnostics.setdefault('antennas', {}).setdefault(antenna, {})['polswap_range'] = \
+            [t.isoformat() if t else None for t in (start, end)]
+    return True
+
+
+def polswap_range(exp: experiment.Experiment, antenna: str) -> tuple[Optional[datetime], Optional[datetime]]:
+    """The (start, end) time range over which *antenna* must be swapped.
+
+    ``None`` on either side means unbounded, i.e. from the beginning / until the end of
+    the observation. Set by :func:`polswap_check`; unset means the whole observation.
+    """
+    times = exp.pol_diagnostics.get('antennas', {}).get(antenna, {}).get('polswap_range')
+    return tuple(datetime.fromisoformat(t) if t else None for t in (times or [None, None]))
+
+
 def polswap(exp: experiment.Experiment) -> bool:
-    """Swaps the polarization of the given antennas for all associated MS files
-    to the given experiment.
+    """Swaps the polarizations of the flagged antennas in every MS of the experiment.
+
+    Each antenna is swapped only over the time range :func:`polswap_check` found it to be
+    swapped in (the whole observation unless the station fixed it partway through).
 
     Args:
         exp (experiment.Experiment): Experiment object with polswap antenna information.
 
     Returns:
-        bool: True if polarization swap was applied successfully.
+        bool: True if the polarization swap was applied successfully.
     """
-    if len(exp.antennas.polswap) > 0:
-        def _polswap_pass(a_pass):
-            for antenna in exp.antennas.polswap:
-                mstools.polswap(a_pass.msfile, antenna)
+    if not exp.antennas.polswap:
+        return True
 
-        with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
-            for fut in [executor.submit(_polswap_pass, a_pass) for a_pass in exp.correlator_passes]:
-                fut.result()  # Propagate any exceptions
-        logger.info(f"polswap {','.join(exp.antennas.polswap)}")
+    polswap_check(exp)
+
+    def _polswap_pass(a_pass):
+        for antenna in exp.antennas.polswap:
+            mstools.polswap(a_pass.msfile, antenna, *polswap_range(exp, antenna))
+
+    with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
+        for fut in [executor.submit(_polswap_pass, a_pass) for a_pass in exp.correlator_passes]:
+            fut.result()  # Propagate any exceptions
+
+    logger.info(f"polswap {', '.join(exp.antennas.polswap)}")
+    exp.store()
     return True
 
 
@@ -866,7 +972,7 @@ def flag_weights(exp: experiment.Experiment) -> bool:
                 f"# {pct_total:.2f}% total flagged, {pct_nonzero:.2f}% non-zero weights flagged\n")
 
     # TODO: check if this is IO or CPU bound
-    with ThreadPoolExecutor(max_workers=min(len(exp.correlator_passes), 4)) as executor:
+    with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
         for fut in [executor.submit(_flag_weights_pass, a_pass) for a_pass in exp.correlator_passes]:
             fut.result()  # Propagate any exceptions
     return True
@@ -1058,85 +1164,87 @@ def _tconvert_chunk_arg(a_pass: experiment.CorrelatorPass) -> str:
 def tconvert(exp: experiment.Experiment) -> bool:
     """Runs tConvert on all correlator passes to create FITS-IDI files from the MS.
 
-    Selects chunk_size based on estimated IDI file size. Skips passes where
-    FITS-IDI files already exist.
+    Selects chunk_size based on the estimated FITS-IDI size. Passes whose FITS-IDI files
+    already exist are skipped, so the step is idempotent and can be re-run on its own.
 
-    When ``exp.tconvert_in_eee`` is set (the default; toggled by
-    ``postprocess --no-tConvert-in-eee``) each pass is converted on eee instead, as a
-    temporary workaround for a broken local tConvert (see :func:`_tconvert_pass_in_eee`).
-    Passes are independent, so they run in parallel.
+    The passes run concurrently under the same ceiling as :func:`j2ms2`
+    (``utils.MAX_PASS_IO_WORKERS``): one tConvert subprocess per pass, bounded by the disk
+    throughput they share rather than by the cores. tConvert is verbose about its progress,
+    and several of those streams interleaved on one terminal are unreadable, so the live
+    output is kept only while a single pass is converting; from two upwards each pass writes
+    to its own ``logs/tconvert.log`` sibling instead (the log names the .lis file it ran).
+    Past ``_TCONVERT_PROGRESS_MIN_PASSES`` passes a Rich progress bar replaces that silence,
+    showing how many are done and how long the rest should take.
+
+    A pass that fails does not abandon the others: every failure is collected and they are
+    all named together at the end, and the step then reports the failure.
 
     Args:
         exp: Experiment object.
 
     Returns:
         True if all passes converted successfully.
+
+    Raises:
+        IOError: If a pass would not fit in the current directory (see
+            :func:`_tconvert_chunk_arg`).
     """
     passes = [a_pass for a_pass in exp.correlator_passes
               if len(glob.glob(f"{a_pass.fitsidifile}*")) == 0]
     if not passes:
+        logger.info("FITS-IDI files already exist for every correlator pass. Skipping tConvert.")
         return True
 
-    if not exp.tconvert_in_eee:
-        for a_pass in passes:
-            utils.shell_command(_TCONVERT_BIN, ["-v", a_pass.lisfile.name, "-o",
-                                                _tconvert_chunk_arg(a_pass)],
-                                stdout=None, stderr=subprocess.STDOUT,
-                                logfile=exp.dirs.logs / "tconvert.log")
-        return True
+    # Resolved before any conversion starts: the chunk size is where the "does this still
+    # fit on disk" check lives, and a pass that cannot fit has to stop the step outright
+    # rather than raise out of a worker with the other conversions already running.
+    chunk_args = [_tconvert_chunk_arg(a_pass) for a_pass in passes]
+    echo = len(passes) == 1
+    show_bar = len(passes) > _TCONVERT_PROGRESS_MIN_PASSES
 
-    server = _servers.retrieve_servers()['eee']
-    with ThreadPoolExecutor(max_workers=min(len(passes), 4)) as pool:
-        futures = [pool.submit(_tconvert_pass_in_eee, exp, f"{server.user}@{server.host}", a_pass) for a_pass in passes]
-        return all(future.result() for future in futures)
+    def _tconvert_pass(a_pass: experiment.CorrelatorPass, chunk_arg: str) -> None:
+        # With the bar up this line is the one thing that would scroll it away, and the bar
+        # already says how many passes are done; it stays in the debug log either way.
+        logger.log('DEBUG' if show_bar else 'INFO',
+                   f"tConvert: {a_pass.lisfile.name} -> {a_pass.fitsidifile}*")
+        utils.shell_command(_TCONVERT_BIN, ["-v", a_pass.lisfile.name, "-o", chunk_arg],
+                            stdout=None, stderr=subprocess.STDOUT,
+                            logfile=exp.dirs.logs / "tconvert.log", echo=echo)
 
+    if not echo:
+        logger.info(f"Converting {len(passes)} correlator passes at once; their output goes "
+                    f"to {exp.dirs.logs / 'tconvert.log'} (one file per pass) instead of the "
+                    "terminal, where the streams would be interleaved.")
 
-#def _tconvert_pass_in_eee(exp: experiment.Experiment, remote: str,
-#                          a_pass: experiment.CorrelatorPass) -> bool:
-#    """Converts one correlator pass to FITS-IDI by running tConvert on eee.
-#
-#    Temporary workaround for the broken local tConvert: copies the pass MS (and its
-#    small .lis) to ``<remote>:/data0/temp/<lisname>/``, runs the very same tConvert
-#    command there, copies the produced FITS-IDI files back into the current directory,
-#    and finally removes the remote temp directory (even if a step failed). Each pass
-#    uses its own remote sub-directory so several passes can run concurrently.
-#
-#    Args:
-#        exp: Experiment object (used for the log directory).
-#        remote: ``user@host`` of eee.
-#        a_pass: Correlator pass to convert.
-#
-#    Returns:
-#        True on success.
-#    """
-#    chunk_arg = _tconvert_chunk_arg(a_pass)
-#    remote_dir = _EEE_TCONVERT_TEMP / a_pass.lisfile.stem
-#    try:
-#        utils.ssh(remote, f"rm -rf {remote_dir} && mkdir -p {remote_dir}")
-#        # rsync (not scp): the MS is a directory tree of many files, and rsync both moves
-#        # such trees faster and can resume a partial transfer (--partial) of these very
-#        # large files. The .lis is tiny and goes in the same call as the MS.
-#        utils.rsync([str(a_pass.msfile), str(a_pass.lisfile)], f"{remote}:{remote_dir}/",
-#                    timeout=_EEE_RSYNC_TIMEOUT_S)
-#
-#        # Run from inside the temp dir so the relative MS / FITS-IDI names in the .lis resolve.
-#        cmd = f"cd {remote_dir} && /eee/bin/tConvert -v {a_pass.lisfile.name} -o {chunk_arg}"
-#        output = utils.ssh(remote, cmd, stderr=subprocess.STDOUT, timeout=_EEE_TCONVERT_TIMEOUT_S)
-#        log_fh, log_path = utils.open_unique_log(exp.dirs.logs / "tconvert.log")
-#        try:
-#            log_fh.write(output or "")
-#        finally:
-#            log_fh.close()
-#        logger.debug(f"tConvert (eee) output for {a_pass.lisfile.name} written to {log_path}")
-#
-#        # Bring the (several) FITS-IDI files this pass produced back to the current directory.
-#        utils.rsync(f"{remote}:{remote_dir}/{a_pass.fitsidifile}*", ".",
-#                    timeout=_EEE_RSYNC_TIMEOUT_S)
-#    finally:
-#        utils.ssh(remote, f"rm -rf {remote_dir}")
-#
-#    return True
-#
+    # One pass failing must not hide the others: every failure is collected and they are all
+    # reported together once the conversions that did work have finished.
+    errors: list[str] = []
+    with ThreadPoolExecutor(utils.pass_workers(len(passes), utils.MAX_PASS_IO_WORKERS)) as pool:
+        futures = {pool.submit(_tconvert_pass, a_pass, chunk): a_pass
+                   for a_pass, chunk in zip(passes, chunk_args)}
+        with progress.Progress(progress.SpinnerColumn(),
+                               progress.TextColumn("[progress.description]{task.description}"),
+                               progress.BarColumn(), progress.MofNCompleteColumn(),
+                               progress.TextColumn("passes"), progress.TimeElapsedColumn(),
+                               progress.TimeRemainingColumn(),
+                               disable=not show_bar) as bar:
+            task = bar.add_task("[green]tConvert", total=len(passes))
+            for future in as_completed(futures):
+                a_pass = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    errors.append(f"{a_pass.lisfile.name} -> {a_pass.fitsidifile}*: {e}")
+                bar.advance(task)
+
+    if errors:
+        logger.error(f"tConvert failed on {len(errors)} of the {len(passes)} correlator "
+                     f"pass(es) (the rest converted; see {exp.dirs.logs / 'tconvert.log'}):")
+        for error in errors:
+            logger.error(f"    {error}")
+        return False
+    return True
+
 
 def _get_all_fringefinder_scans(exp: experiment.Experiment) -> list[experiment.Scan]:
     """Get all fringe-finder scans sorted by number of observing antennas (descending).
@@ -1211,6 +1319,32 @@ def _polconvert_time_ranges(scan: experiment.Scan, obsdate) -> list[list[int]]:
             _aips_timerange(start + trim, end, obsdate)]
 
 
+def _pc_ants(names) -> list[str]:
+    """Antenna names as PolConvert needs them: upper case, the way FITS-IDI spells them.
+
+    ``exp.antennas`` carries the mixed-case vex spelling ('Ef', 'Jb'), while the ANTENNA and
+    ARRAY_GEOMETRY tables of a FITS-IDI hold 'EF', 'JB'. PolConvert matches the names it is
+    given against those tables literally, so every antenna handed to it goes through here —
+    and so does every antenna *reported* about a run, so what is logged cannot drift from
+    what was actually passed.
+    """
+    return [name.upper() for name in names]
+
+
+def _aips_timerange_str(time_range: list[int]) -> str:
+    """The AIPS 8-element time range as a readable ``d/hh:mm:ss - d/hh:mm:ss``.
+
+    The raw ``[0, 17, 0, 0, 0, 17, 5, 0]`` that PolConvert wants says very little to whoever
+    is reading the log to work out which part of which scan was tried.
+    """
+    if len(time_range) != 8:
+        return str(time_range)
+    day0, day1 = time_range[0], time_range[4]
+    stamps = [f"{d}/{h:02d}:{m:02d}:{sec:02d}" if (day0 or day1) else f"{h:02d}:{m:02d}:{sec:02d}"
+              for d, h, m, sec in (time_range[:4], time_range[4:])]
+    return " - ".join(stamps)
+
+
 def _write_polconvert_template(exp: experiment.Experiment, ref_idi: str, lin_ants: list, refant: str,
                                exclude_ants: list, do_ifs: list, time_range: list, chan_avg: int,
                                time_avg: int, solve_weight: float, logdir: str,
@@ -1242,9 +1376,9 @@ def _write_polconvert_template(exp: experiment.Experiment, ref_idi: str, lin_ant
     content = template.format(
         expname=exp.expname.lower(),
         ref_idi=ref_idi,
-        linants=str([a.upper() for a in lin_ants]),
+        linants=str(_pc_ants(lin_ants)),
         refant=repr(refant.upper()),
-        exclude_ants=str([a.upper() for a in exclude_ants]),
+        exclude_ants=str(_pc_ants(exclude_ants)),
         do_if=str(do_ifs),
         time_range=str(time_range),
         chanavg=chan_avg,
@@ -1470,19 +1604,36 @@ def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
     return worst >= _POLCONVERT_MIN_RATIO
 
 
-def _run_polconvert_cli(template_file: Path, mode: str) -> int:
-    """Run ``polconvert.py <template> <mode>`` locally, retrying transient segfaults.
+# PolConvert plots through matplotlib, whose default backend on this machine is 'qtagg'.
+# Loading it pulls in a PyQt5 Qt5 plugin that dies with "symbol lookup error: ...
+# libqsvgicon.so: undefined symbol: _ZdlPvm" and takes the interpreter down with it (rc=127)
+# before any solving happens — so the run looks like a failed solution when in fact nothing
+# was ever computed. The post-processing is headless anyway, so the child runs on the
+# non-interactive Agg backend, which still writes the PNGs PolConvert produces.
+_POLCONVERT_ENV: dict[str, str] = {'MPLBACKEND': 'Agg'}
 
-    PolConvert occasionally dies with SIGSEGV (a known upstream bug) for reasons unrelated to
-    the inputs. Because it runs in a subprocess a crash returns a negative exit code instead of
-    killing post-processing, so the identical command is simply retried up to
-    ``_POLCONVERT_SEGFAULT_RETRIES`` extra times. Returns the final exit code (0 on success).
+
+def _run_polconvert_cli(template_file: Path, mode: str) -> int:
+    """Run ``polconvert.py <template> <mode>`` in a child process, retrying transient segfaults.
+
+    Deliberately a child process rather than an in-process import. PolConvert segfaults often
+    (which is why the retries exist), and a SIGSEGV cannot be held by ``try``/``except``: it
+    terminates the interpreter, so in-process it would take the whole post-processing down
+    with it. Isolated in a child, the very same crash is only a negative return code to retry.
+
+    The child's stdout/stderr are inherited rather than captured, so its progress — and the
+    fringe-SNR table it prints when it finishes — is visible as it runs instead of surfacing
+    (or not) at the end. polconvert.py keeps its own detailed ``PolConvert-{mode}.log`` in the
+    log directory regardless.
+
+    Returns:
+        The final exit code (0 on success).
     """
     attempts = _POLCONVERT_SEGFAULT_RETRIES + 1
     rc = 1
     for attempt in range(1, attempts + 1):
         result = subprocess.run(['polconvert.py', str(template_file), mode],
-                                capture_output=True, text=True)
+                                env={**os.environ, **_POLCONVERT_ENV})
         rc = result.returncode
         if rc == 0:
             return 0
@@ -1490,9 +1641,29 @@ def _run_polconvert_cli(template_file: Path, mode: str) -> int:
             logger.warning(f"polconvert.py {mode} crashed (signal {-rc}) "
                            f"[attempt {attempt}/{attempts}]; retrying.")
             continue
-        logger.warning(f"polconvert.py {mode} failed (rc={rc}): {result.stderr.strip()[-500:]}")
+        logger.warning(f"polconvert.py {mode} failed (rc={rc}); its output is above, and in "
+                       f"the PolConvert log of this attempt.")
         break
     return rc
+
+
+def _log_fringe_snr_table(logdir: str) -> None:
+    """Prints the per-IF fringe-SNR table for the attempt that just ran.
+
+    ``polconvert.py`` prints this table itself when it finishes, so this is only for the runs
+    that died before getting there: it renders the same table, in-process, from whatever
+    ``FRINGE.PEAKS`` files PolConvert had already written. Importing that module is cheap and
+    safe — it imports PolConvert (and matplotlib, and Qt) only inside its own ``main()``, so
+    nothing of that chain is pulled in here.
+
+    Never raises: a summary that cannot be built must not be what ends an attempt.
+    """
+    try:
+        from evn_support.polconvert import print_fringe_snr_table
+        print_fringe_snr_table(logdir)
+    except Exception as e:  # ImportError, or anything the summary itself trips over
+        logger.debug(f"No fringe-SNR summary for this attempt ({e}); the raw values, if any, "
+                     f"are in {Path(logdir) / 'FRINGE.PEAKS'}.")
 
 
 def polconvert(exp: experiment.Experiment) -> bool:
@@ -1561,9 +1732,9 @@ def polconvert(exp: experiment.Experiment) -> bool:
         scatter = _refant_bandpass_scatter(exp, refant, scan_key, sorted(subbands))
         n_det, snr_sum = _scan_lag_score(exp, scan)
         logger.info(f"PolConvert: scan {scan.scanno} on {scan.source} ({n_det} antennas detected, "
-                    f"SNR sum {snr_sum}); linants={lin_ants}, refant={refant} "
+                    f"SNR sum {snr_sum}); linants={_pc_ants(lin_ants)}, refant={refant.upper()} "
                     f"(SNR {_ant_scan_snr(exp, refant, scan_key):.1f}, bandpass scatter {scatter:.3f}), "
-                    f"exclude={exclude_ants}, IFs={do_ifs}.")
+                    f"exclude={_pc_ants(exclude_ants)}, IFs={do_ifs}.")
 
         for time_range in _polconvert_time_ranges(scan, exp.obsdate):
             ref_idi = find_idi_mod.find_idi_with_time(idi_files=idi_files, aipstime=time_range[:4],
@@ -1579,20 +1750,33 @@ def polconvert(exp: experiment.Experiment) -> bool:
                                                            chan_avg=chan_avg, solve_weight=solve_weight,
                                                            logdir=logdir)
                 tried += 1
+                # Every attempt says what it is trying before it runs: a search that ends
+                # without converging is otherwise a single failure line with no record of the
+                # combinations it went through, or of which one came closest.
+                logger.info(f"PolConvert --compute [attempt {tried}]: scan {scan.scanno} "
+                            f"({scan.source}), {_aips_timerange_str(time_range)}, "
+                            f"refant={refant.upper()}, linants={_pc_ants(lin_ants)}, "
+                            f"exclude={_pc_ants(exclude_ants)}, IFs={do_ifs}, ref_idi={ref_idi}, "
+                            f"doweight={solve_weight}, timeavg={time_avg}s, chanavg={chan_avg}.")
 
                 if _run_polconvert_cli(template_file, '--compute') != 0:
                     # Trying second time as Ivan's code failes every other time due to mem issues...
                     if _run_polconvert_cli(template_file, '--compute') != 0:
+                        # It never reached the summary it prints on its own; render whatever
+                        # fringe SNRs it did manage to write, so a crash still says something.
+                        _log_fringe_snr_table(logdir)
                         continue
 
                 if not _check_fringe_peaks(logdir):
-                    logger.debug(f"Scan {scan.scanno} {time_range}: no good solution with "
-                                 f"doweight={solve_weight}, timeavg={time_avg}s, chanavg={chan_avg}.")
+                    logger.info(f"Scan {scan.scanno} {_aips_timerange_str(time_range)}: no good "
+                                f"solution with doweight={solve_weight}, timeavg={time_avg}s, "
+                                f"chanavg={chan_avg}; trying the next combination.")
                     continue
 
-                logger.info(f"Good PolConvert solution: scan {scan.scanno}, refant {refant}, "
-                            f"time range {time_range}, doweight={solve_weight}, timeavg={time_avg}s, "
-                            f"chanavg={chan_avg}. Applying it to all FITS-IDI files.")
+                logger.info(f"Good PolConvert solution: scan {scan.scanno}, refant "
+                            f"{refant.upper()}, time range {_aips_timerange_str(time_range)}, "
+                            f"doweight={solve_weight}, timeavg={time_avg}s, chanavg={chan_avg}. "
+                            "Applying it to all FITS-IDI files.")
                 if _run_polconvert_cli(template_file, '--apply') != 0:
                     if _run_polconvert_cli(template_file, '--apply') != 0:
                         logger.error("PolConvert --apply failed after a good --compute. Stopping.")
@@ -1637,10 +1821,12 @@ def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
         if pconv_ms_path.exists():
             shutil.rmtree(pconv_ms_path)
 
-        if casatasks is None:
-            raise ModuleNotFoundError("casatasks is required to convert the PCONVERTed "
-                                      "FITS-IDI files to MS but is not installed.")
-        casatasks.importfitsidi(vis=pconv_ms, fitsidifile=idi_files, constobsid=True, scanreindexgap_s=8.0, specframe='GEO')
+        # Imported here, not at module level: casatasks only loads once casacore has, and
+        # this is the single place that needs it, so a broken CASA cannot make the whole
+        # package unimportable.
+        import casatasks
+        casatasks.importfitsidi(vis=pconv_ms, fitsidifile=idi_files, constobsid=True,
+                                scanreindexgap_s=8.0, specframe='GEO')
         logger.info(f"Created {pconv_ms} from {len(idi_files)} PCONVERT IDI files.")
 
         if not exp.refant:
@@ -1709,8 +1895,8 @@ def post_post_polconvert(exp: experiment.Experiment) -> bool:
 def set_credentials(exp: experiment.Experiment) -> bool:
     """Sets the credentials for the given experiment.
 
-    For NME or test experiments (name starts with 'N' or 'F'), no credentials are set.
-    Otherwise recovers from an existing .auth file, or generates a new random password.
+    NMEs (see :func:`experiment.is_nme`) carry no proprietary data, so no credentials are
+    set. Otherwise recovers from an existing .auth file, or generates a new random password.
 
     Args:
         exp: Experiment object.
@@ -1718,8 +1904,8 @@ def set_credentials(exp: experiment.Experiment) -> bool:
     Returns:
         True if credentials were set or not needed, False on error.
     """
-    if exp.expname.upper()[0] in ('N', 'F'):
-        logger.info(f"{exp.expname} is an NME or test experiment. No authentication set.")
+    if experiment.is_nme(exp.expname):
+        logger.info(f"{exp.expname} is an NME. No authentication set.")
         return True
 
     auth_files = glob.glob("*_*.auth")
@@ -1754,9 +1940,8 @@ def protect_experiment_files(exp: experiment.Experiment) -> bool:
         logger.info("No protection required for this experiment.")
         return True
 
-    # Protect both the archived source data and the pipeline results/plots
-    # for the protected sources (typically the targets). Missing the "pipe"
-    # protection would leave the pipeline data for the target publicly accessible.
+    # Only the archived source data is protected here ('-p source'); the pipeline
+    # products are protected by the archive itself.
     try:
         utils.shell_command("auth_pipe.py", ["-e", f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}",
                             "-s", ' '.join(protected_sources), "-p", "source"])
@@ -1764,7 +1949,7 @@ def protect_experiment_files(exp: experiment.Experiment) -> bool:
         logger.error(f"Could not protect experiment files in archive for {exp.expname.upper()}.")
         return False
 
-    logger.info(f"Protected sources (target sources and pipeline data): {', '.join(protected_sources)}")
+    logger.info(f"Protected sources in the archive: {', '.join(protected_sources)}")
     return True
 
 
@@ -2004,8 +2189,10 @@ def nme_report(exp: experiment.Experiment) -> bool:
     Returns:
         True always.
     """
-    if exp.expname[0].upper() == 'N':
-        logger.info("This is an NME — time to write the NME Report.")
+    if experiment.is_nme(exp.expname):
+        logger.info(f"{exp.expname} is an NME — time to write the NME Report "
+                    "(create_nme_report_template.py, then upload it to the EVN wiki and "
+                    "inform evntech@jive.eu).")
     else:
         logger.info(f"Experiment {exp.expname} done.")
 

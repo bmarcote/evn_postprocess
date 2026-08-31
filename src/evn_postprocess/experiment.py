@@ -46,6 +46,30 @@ def retrieve_expname() -> str:
     return potential_experiment
 
 
+# Experiment-name prefixes of a Network Monitoring Experiment. 'FT' is excluded on
+# purpose: a fringe test is a regular experiment for the post-processing (it gets archive
+# credentials, source protection, and no NME report).
+NME_PREFIXES: tuple[str, ...] = ('N', 'F')
+NME_EXCLUDED_PREFIXES: tuple[str, ...] = ('FT',)
+
+
+def is_nme(expname: str) -> bool:
+    """Whether *expname* is a Network Monitoring Experiment.
+
+    An NME needs no PI contact, no archive credentials and no source protection, uses the
+    NME-formatted pipeline feedback page, and requires an NME report. The single definition
+    used everywhere so those four decisions can never drift apart.
+
+    Args:
+        expname: The experiment code (case-insensitive).
+
+    Returns:
+        True for a name starting with N or F, except the FT fringe tests.
+    """
+    name = expname.upper()
+    return name.startswith(NME_PREFIXES) and not name.startswith(NME_EXCLUDED_PREFIXES)
+
+
 def retrieve_username() -> str:
     """Returns the username of the current user.
 
@@ -608,8 +632,10 @@ class Experiment:
         # Operating mode (supsci | regular | sweeps), resolved once at initialization
         # and persisted so a resume never silently switches mode (see evn_postprocess.mode).
         # None means "not resolved yet" (a pre-Phase-2 state file, or a fresh object before
-        # the CLI resolves it); callers re-detect in that case.
-        self.mode: Mode = Mode(mode) if mode is not None else Mode.default
+        # the CLI resolves it); callers re-detect in that case. It must NOT default to a
+        # concrete mode here: that would silently pin an old checkpoint to 'regular' and
+        # disable the JIVE retrieval/distribution backends for a support scientist.
+        self.mode: Mode | None = Mode(mode) if mode is not None else None
         # The attached experiment toml (see evn_postprocess.experiment_state), set by
         # inputs.load_experiment / experiment_state.attached_toml. Runtime-only: never
         # serialized into the JSON checkpoint (to_dict/from_dict), so a resume re-attaches
@@ -660,55 +686,26 @@ class Experiment:
     def timerange(self, new_time: list[dt.datetime]):
         self._timerange = new_time.copy()
 
-    def write_log_file(self, filename: str | Path):
-        """Creates the post_processing.log header with experiment info, version, and jplotter reference.
+    def log_header(self) -> str:
+        """Returns the one-block run header written at the top of every workflow run.
 
-        Writes: experiment name, observation date, support scientist, evn_postprocess version,
-        and convenient jplotter command snippets for manual re-runs.
+        Identifies the experiment, when and by whom it is being processed, and with which
+        version of the program, so a log file is self-describing when read back later.
         """
         try:
             ver = pkg_version('evn_postprocess')
         except Exception:
             ver = 'unknown'
 
-        with open(filename, 'w') as logfile:
-            logfile.write(f"{'#' * 60}\n")
-            logfile.write("# Post-Processing log for the EVN "
-                          f"experiment {self.expname}\n")
-            logfile.write(f"# Observed on "
-                          f"{self.obsdate.strftime('%d %b %Y') if self.obsdate else 'unknown'}.\n")
-            logfile.write(f"# Support scientist: {self.supsci.capitalize()}.\n")
-            logfile.write(f"# evn_postprocess version: {ver}\n")
-            logfile.write(f"# Created: {dt.datetime.today().strftime('%d-%m-%Y %H:%M')}\n")
-            logfile.write(f"{'#' * 60}\n\n")
-            logfile.write("# Some shortcuts to run manually the standardplots in JPlotter:\n")
-            logfile.write(f"ms {self.expname.lower()}.ms\nindexr\nlistr\nr\n\n")
-            logfile.write("# Weight plot:\n")
-            logfile.write("bl auto;fq */p;sort bl sb;pt wt;ckey sb sb[none]=1;ptsz 4;pl\n")
-            logfile.write(f"save {self.expname.lower()}-weight.ps\n\n")
-            logfile.write("# Amp & phase VS time plots:\n")
-            logfile.write("bl Ef* -auto;fq 5/p;ch 0.1*last:0.9*last;avc vector;nxy 1 4; "
-                          "pt anptime;ckey src src[none]=1;y local;ptsz 2;time none;pl\n")
-            logfile.write(f"save {self.expname.lower()}-ampphase-0.ps\n")
-            logfile.write("time $start to +50m;pl\n")
-            logfile.write(f"save {self.expname.lower()}-ampphase-1.ps\n\n")
-            logfile.write("# Auto-correlation plots:\n")
-            logfile.write("scan 1;bl auto;fq */p;ch none;avt vector;avc none;pt ampfreq;ckey"
-                          " p p[none]=1;sort bl;new sb false;multi true;y 0 1.6;nxy 2 4;pl\n")
-            logfile.write(f"save {self.expname.lower()}-auto-0.ps\n")
-            logfile.write("scan 91;pl\n")
-            logfile.write(f"save {self.expname.lower()}-auto-1.ps\n\n")
-            logfile.write("# Cross-correlation plots:\n")
-            logfile.write("scan 1;pt anpfreq;bl Ef* -auto;fq *;ckey p['RR']=2 p['LL']=3 "
-                          "p['RL']=4 p['LR']=5;nxy 2 3;y local;draw lines points;multi "
-                          "true;new sb false;ptsz 4;sort bl sb;pl\n")
-            logfile.write(f"save {self.expname.lower()}-cross-0.ps\n")
-            logfile.write("scan 91;pl\n")
-            logfile.write(f"save {self.expname.lower()}-cross-1.ps\n\n")
-            logfile.write("exit\n\n")
-            logfile.write(f"{'=' * 60}\n")
-            logfile.write("# Commands executed during post-processing:\n")
-            logfile.write(f"{'=' * 60}\n\n")
+        return (f"{'=' * 70}\n"
+                f"Post-processing of the EVN experiment {self.expname}"
+                f"{f' (e-EVN run {self.eEVNname})' if self.eEVNname else ''}\n"
+                f"Observed on {self.obsdate.strftime('%d %b %Y') if self.obsdate else 'unknown'}"
+                f" | support scientist: {self.supsci}"
+                f" | mode: {self.mode.value if self.mode else 'unresolved'}\n"
+                f"evn_postprocess {ver} | run started {dt.datetime.now():%d-%m-%Y %H:%M:%S}"
+                f" | {Path.cwd()}\n"
+                f"{'=' * 70}")
 
     def get_info_from_vex(self):
         """Extracts information from the VEX file."""
@@ -905,7 +902,7 @@ class Experiment:
                 'lag_snr': self.lag_snr,
                 'lag_bandpass': self.lag_bandpass,
                 'pol_diagnostics': self.pol_diagnostics,
-                'mode': self.mode.value}
+                'mode': self.mode.value if self.mode is not None else None}
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Experiment':
@@ -930,7 +927,7 @@ class Experiment:
 
         exp.lag_snr = data.get('lag_snr', {})
         exp.lag_bandpass = data.get('lag_bandpass', {})
-        exp.mode = Mode(data['mode']) if data.get('mode') is not None else Mode.default
+        exp.mode = Mode(data['mode']) if data.get('mode') is not None else None
         if data.get('policy') is not None:
             exp.policy = Policy.from_dict(data['policy'])
 
@@ -1052,10 +1049,10 @@ class Experiment:
                     s += term.bold(f"Correlator pass #{i+1}\n")
                     s_file += [f"Correlator pass #{i+1}"]
 
-                # If MSs are now created, it will get the info. The canonical metadata
-                # loader is process.get_metadata_from_ms() (get_setup_from_ms was removed);
-                # it populates every pass, so one call is enough.
-                if a_pass.freqsetup is None:
+                # Once the MS exists, read the setup from it. The canonical metadata loader
+                # is process.get_metadata_from_ms(); it populates every pass, so one call is
+                # enough. Before the MS is created there is nothing to read.
+                if a_pass.freqsetup is None and a_pass.msfile.exists():
                     process.get_metadata_from_ms(self)
                     self.store()
 
@@ -1143,38 +1140,28 @@ class Experiment:
                  f"{', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"
             s_file += [f"Missing ANTAB files: {', '.join(missing_antabs) if len(missing_antabs) > 0 else 'None'}\n"]
 
-            # In case of antennas not observing the full bandwidth (this may be per correlator pass)
-            ss, ss_file = "", []
-            try:
-                first_freqsetup = self.correlator_passes[0].freqsetup
-                if first_freqsetup is not None and len({cp.freqsetup.subbands for cp
-                        in self.correlator_passes if cp.freqsetup is not None}) == 1:
-                    for antenna in self.correlator_passes[0].antennas:
-                        if 0 < len(antenna.subbands) < first_freqsetup.subbands:
-                            ss += f"    {antenna.name}: {' '*(3*(antenna.subbands[0]))}{antenna.subbands}\n"
-                            ss_file += [f"    {antenna.name}: {' '*(3*(antenna.subbands[0]))}{antenna.subbands}"]
-                else:
-                    for antenna in self.correlator_passes[0].antennas:
-                        for i,a_pass in enumerate(self.correlator_passes):
-                            if a_pass.freqsetup is None:
-                                continue
-                            if 0 < len(antenna.subbands) < a_pass.freqsetup.subbands:
-                                ss += f"    {antenna.name}: " \
-                                      f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands} " \
-                                      f"(in correlator pass {a_pass.lisfile})\n"
-                                ss_file += [f"    {antenna.name}: " \
-                                            f"{' '*(3*(antenna.subbands[0]))}{antenna.subbands} " \
-                                            f"(in correlator pass {a_pass.lisfile})"]
+            # Antennas that did not observe the full bandwidth (which may differ per pass).
+            # Nothing to report before the frequency setup is read from the MS.
+            freqsetup = self.correlator_passes[0].freqsetup if self.correlator_passes else None
+            ss = ""
+            if freqsetup is not None:
+                same_bandwidth = len({cp.freqsetup.subbands for cp in self.correlator_passes
+                                      if cp.freqsetup is not None}) == 1
+                for antenna in self.correlator_passes[0].antennas:
+                    for a_pass in self.correlator_passes:
+                        if a_pass.freqsetup is None or \
+                                not 0 < len(antenna.subbands) < a_pass.freqsetup.subbands:
+                            continue
+                        ss += (f"    {antenna.name}: {' ' * (3 * antenna.subbands[0])}"
+                               f"{antenna.subbands}"
+                               f"{'' if same_bandwidth else f' (in correlator pass {a_pass.lisfile})'}\n")
+                        if same_bandwidth:
+                            break
 
-                if ss != "" and first_freqsetup is not None:
-                    s += term.bright_black('Antennas with smaller bandwidth:\n')
-                    s += f" Total: {list(range(first_freqsetup.subbands))}\n"
-                    s += ss
-                    s_file += ['Antennas with smaller bandwidth:']
-                    s_file += ss_file
-            except AttributeError:
-                ss += "    No freq. setup information to detect which antennas have a reduced bandwidth."
-                ss_file += ["    No freq. setup information to detect which antennas have a reduced bandwidth."]
+            if ss:
+                s += term.bright_black('Antennas with smaller bandwidth:\n')
+                s += f" Total: {list(range(freqsetup.subbands))}\n{ss}"
+                s_file += ['Antennas with smaller bandwidth:'] + ss.rstrip('\n').split('\n')
 
             s_final = term.wrap(s, width=term.width)
             s_file += ["\n\n## COMMENTS FROM SUP.SCI\n\n\n\n\n"]

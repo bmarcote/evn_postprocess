@@ -130,3 +130,53 @@ def test_default_station_comments_merge(monkeypatch):
     assert defaults['Ef']['status'] == 'success'         # DB comment alone: no auto-finding
     assert defaults['Tr'] == {'status': 'major', 'note': 'Did not observe.'}
     assert defaults['Ir']['status'] == 'minor' and 'reduced bandwidth' in defaults['Ir']['note']
+
+
+# ------------------------------------------------- the summary closing a finished run
+
+def _finished_exp():
+    """An experiment with something to report in every block of the final summary."""
+    exp = make_exp()
+    exp.antennas.append(experiment.Antenna(name='Ef', subbands=(0, 1, 2, 3),
+                                           logfsfile=True, antabfsfile=True))
+    exp.antennas.append(experiment.Antenna(name='Jb', subbands=(0, 1, 2, 3), logfsfile=True))
+    exp.antennas.append(experiment.Antenna(name='Wb', subbands=(0, 1), antabfsfile=True,
+                                           polswap=True))
+    exp.antennas.append(experiment.Antenna(name='Ys', subbands=(0, 1, 2, 3), opacity=True))
+    exp.antennas.append(experiment.Antenna(name='Tr', observed=False))
+    scheduled = ('Ef', 'Jb', 'Wb', 'Ys')
+    for i in range(3):
+        add_scan(exp, i, scheduled=scheduled,
+                 observed=tuple(a for a in scheduled if not (i == 0 and a == 'Jb')))
+    return exp
+
+
+def test_final_summary_reports_globals_and_per_antenna_findings():
+    text = review.final_summary(_finished_exp())
+    assert '**Did not observe:**\n- Tr' in text                  # global: no data at all
+    assert 'Jb: missed' in text                                  # per antenna: partial data
+    assert 'Wb: reduced bandwidth (2/4 subbands)' in text
+    assert 'Wb: polarizations swapped' in text                   # what was applied to the data
+
+
+def test_final_summary_names_the_antennas_missing_a_log_or_an_antab():
+    text = review.final_summary(_finished_exp())
+    assert 'both `.log` and `.antabfs`: Ef.' in text
+    assert 'only `.log` (**no ANTAB**): Jb.' in text
+    assert 'only `.antabfs` (**no log**): Wb.' in text
+    assert '**neither**: Ys.' in text
+    assert 'Tsys corrected for opacity: Ys.' in text
+    assert 'Tr' not in text.split('**Station files:**')[1]  # no data, nothing to deliver
+
+
+def test_final_summary_says_so_when_everything_went_well():
+    exp = make_exp()
+    exp.antennas.append(experiment.Antenna(name='Ef', logfsfile=True, antabfsfile=True))
+    text = review.final_summary(exp)
+    assert text.startswith('Every scheduled station observed the whole experiment.')
+    assert 'Did not observe' not in text and 'Spotted per antenna' not in text
+
+
+def test_final_summary_is_empty_without_any_antenna_information():
+    """Nothing known, nothing claimed: no all-clear on an experiment with no antennas."""
+    assert review.final_summary(make_exp()) == ''
