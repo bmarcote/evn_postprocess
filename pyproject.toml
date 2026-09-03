@@ -57,6 +57,9 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Always test the working tree, never a copy of the package installed in the environment
+# (this conda env carries a non-editable evn_postprocess installed from another checkout).
+pythonpath = ["src"]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]

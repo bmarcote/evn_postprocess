@@ -18,6 +18,7 @@ from rich import print as rprint
 from rich.panel import Panel
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.table import Table
 from rich.traceback import Traceback
 from . import experiment
 from . import experiment_state
@@ -63,6 +64,13 @@ REVIEW_FLAG_FILENAME = "REVIEW_REQUIRED"
 # with its own pause_after list (see _pause_steps).
 DEFAULT_PAUSE_AFTER = "postpipe"
 
+# Set by a step that has just held the operator at the terminal — the pipeline dashboard,
+# which only returns once they close it themselves. A review pause *immediately* after such
+# a step then skips the chat notification: pinging someone who is demonstrably sitting in
+# front of the run, about a prompt already on their screen, is pure noise. Cleared at the
+# start of every step and when the pause consumes it, so it never outlives the step that set it.
+_OPERATOR_JUST_INTERACTED = False
+
 # Module-level notifier for sending messages at key interaction points.
 # Set via :func:`set_notifier` from the CLI entry point.
 _NOTIFIER: _comms.Notifier | None = None
@@ -77,6 +85,15 @@ def set_batch_mode(enabled: bool) -> None:
     """
     global _BATCH_MODE
     _BATCH_MODE = bool(enabled)
+
+
+def notifier() -> _comms.Notifier | None:
+    """The notifier configured for this run, or None when comms are not set up.
+
+    Lets the modules that do not own the comms plumbing (e.g. the jive backend posting the
+    PI letter) reach the same notifier the workflow uses.
+    """
+    return _NOTIFIER
 
 
 def is_batch_mode() -> bool:
@@ -524,17 +541,82 @@ def tconvert(exp: experiment.Experiment) -> bool:
     return process.tconvert(exp)
 
 
-def _ask_review_confirmation() -> str | None:
+# Why an operator would re-run one particular step out of the review pause. Only the steps
+# worth naming explicitly are here; any other step name is still accepted, it just does not
+# get a line of its own in the options list.
+_RERUN_HINTS = {
+    'pipeline': "re-run the EVN Pipeline, e.g. after editing its input file by hand",
+    'postpipe': "re-run only the diagnostics on the pipeline outputs, e.g. after running "
+                "the pipeline yourself",
+    'antab': "re-run antab_editor.py and rebuild the .antab/.uvflg files",
+    'pipeinputs': "rebuild the pipeline input file and gather the antab/uvflg files again",
+    'standardplots': "re-make the standard plots",
+    'msops': "re-apply the MS operations (weight flagging, polswap, 1-bit scaling)",
+}
+
+
+def _review_options(step: str) -> list[tuple[str, str]]:
+    """The answers offered at the review pause, as (what to type, what it does) rows.
+
+    Always: Enter to finalize and quit to stop. In between, the step that just paused the
+    run and the one before it — after 'postpipe' those are `postpipe` (redo the diagnostics)
+    and `pipeline` (redo the pipeline itself), which is the pair an operator actually wants
+    when the pipeline results are not right.
+
+    Args:
+        step: The step the run paused after.
+
+    Returns:
+        The rows, in the order they should be shown.
+    """
+    names = [s.name for s in _WORKFLOW_STEPS]
+    remaining = names[names.index(step) + 1:] if step in names else []
+    rows = [("Enter", "finalize: run the remaining steps"
+                      + (f" ({', '.join(remaining)})" if remaining else "") + " and deliver")]
+    # The paused step and its predecessor, nearest first, without repeating either.
+    offered = [name for name in (step, names[names.index(step) - 1] if step in names[1:] else None)
+               if name is not None]
+    for name in offered:
+        rows.append((name, _RERUN_HINTS.get(name, f"re-run from `{name}`")))
+    rows.append(("<step>", "re-run from any other step: " + ', '.join(
+        name for name in names if name not in offered)))
+    rows.append(("quit", "stop here; resume later with `postprocess run`"))
+    return rows
+
+
+def _print_review_options(step: str) -> None:
+    """Prints the answer options of the review pause, right above the prompt.
+
+    A two-column grid, so the description of a long option wraps under itself instead of
+    back to the left margin.
+    """
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold cyan", no_wrap=True)
+    grid.add_column(overflow="fold")
+    for key, help_text in _review_options(step):
+        grid.add_row(key, help_text)
+    Console().print(Panel(grid, title="[bold]How to answer[/bold]",
+                          border_style="cyan", padding=(1, 2)))
+
+
+def _ask_review_confirmation(step: str = DEFAULT_PAUSE_AFTER) -> str | None:
     """Asks the operator to approve the review, re-run from a step, or quit.
+
+    The options are printed in full above the prompt (and again whenever the answer is not
+    one of them), so the operator never has to remember the step names.
+
+    Args:
+        step: The step the run paused after, which decides the options offered.
 
     Returns:
         None to approve (continue with the final steps), a validated step name to
         re-run from it, or 'quit' to stop the run here.
     """
     step_names = [s.name for s in _WORKFLOW_STEPS]
+    _print_review_options(step)
     while True:
         try:
-            answer = input("Review answer [Enter=finalize / STEP=re-run from STEP / quit]: ").strip()
+            answer = input("Your answer [Enter to finalize / a step name / quit]: ").strip()
         except EOFError:  # no interactive stdin after all: behave like quit
             logger.warning("No interactive stdin available for the review confirmation; "
                            "stopping here (resume with `postprocess run`).")
@@ -545,8 +627,54 @@ def _ask_review_confirmation() -> str | None:
             return 'quit'
         if answer in step_names:
             return answer
-        rprint(f"[yellow]'{answer}' is not a step name. Available steps: "
-               f"{', '.join(step_names)}[/yellow]")
+        if _resolve_step_alias(answer) in step_names:
+            return _resolve_step_alias(answer)
+        rprint(f"[yellow]'{answer}' is not one of the answers below.[/yellow]")
+        _print_review_options(step)
+
+
+def _ask_continue_after_antab(exp: experiment.Experiment) -> bool:
+    """Asks, once antab_editor.py has been closed, whether to go on to the pipeline.
+
+    Only reached when the editor was actually opened: an experiment whose .antab files were
+    already there never gets here (antfiles returns before running the editor), so a re-run
+    walks straight through to the next step.
+
+    In batch mode nothing is asked — there is nobody to answer — and the run continues.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True to continue with the remaining steps, False to stop the run here.
+    """
+    if _BATCH_MODE:
+        return True
+    console = Console()
+    console.print()
+    console.rule("[bold yellow]ANTAB EDITOR CLOSED[/bold yellow]", style="yellow")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold cyan", no_wrap=True)
+    grid.add_column(overflow="fold")
+    grid.add_row("Enter", "continue: create the pipeline input and run the EVN Pipeline")
+    grid.add_row("stop", f"stop here. The .antab and .uvflg files are in "
+                         f"`{exp.dirs.pipe_in}`; resume with `postprocess run`")
+    console.print(Panel(grid, title="[bold]antab_editor.py has finished — how to go on[/bold]",
+                        border_style="yellow", padding=(1, 2), expand=True))
+    console.rule(style="yellow")
+    console.print()
+    while True:
+        try:
+            answer = input("Continue to the pipeline? [Enter to continue / stop]: ").strip().lower()
+        except EOFError:   # no interactive stdin: continuing is the unattended behaviour
+            logger.warning("No interactive stdin to ask whether to continue after "
+                           "antab_editor.py; continuing with the pipeline.")
+            return True
+        if answer == '':
+            return True
+        if answer in ('s', 'stop', 'q', 'quit', 'exit', 'n', 'no'):
+            return False
+        rprint("[yellow]Answer with Enter (continue) or 'stop'.[/yellow]")
 
 
 def _pipeline_backend(exp: experiment.Experiment):
@@ -881,6 +1009,16 @@ def antfiles(exp: experiment.Experiment) -> bool:
 
         for afile in exp.dirs.pipe_temp.glob("*.uvflg"):
             shutil.copy(afile, exp.dirs.pipe_in / afile.name)
+
+        # The editor was opened for real (an experiment whose .antab already existed returned
+        # at the top of this function), so the operator has just been looking at the Tsys
+        # tables. Give them the choice of going on to the pipeline or stopping to fix
+        # something first, instead of launching the pipeline behind their back.
+        if not _ask_continue_after_antab(exp):
+            reason = ("Stopped after antab_editor.py at your request. The .antab and .uvflg "
+                      "files are ready in the pipeline input directory; resume with "
+                      "`postprocess run`.")
+            raise StepPaused(reason)
     else:
         # e-EVN barrier (b): EXPn (n>1) takes the final antab/uvflg files from the run
         # leader in ../EXP1 (sibling-directory convention). When they are not there
@@ -932,21 +1070,51 @@ def run_pipeline(exp: experiment.Experiment) -> bool:
     return _run_pipeline_stage(exp, 'run')
 
 
-def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
-    """Creates diagnostic files after pipeline completion and updates the PI letter.
+def _distributor(exp: experiment.Experiment) -> distribution.Distributor:
+    """The distribution backend of this experiment's mode (jive / none / sweeps)."""
+    return distribution.get_distributor(_backends(exp).distribution)
 
-    Runs comment_tasav, feedback, and then auto-fills the PI letter with:
-    - "Could not observe" for non-participating antennas
-    - PolConvert remarks (if applicable)
-    - Bandwidth limitation notes
-    - Opacity correction notes
+
+def _sends_pi_letter(exp: experiment.Experiment) -> bool:
+    """Whether this experiment's distribution backend writes a letter to the PI at all.
+
+    Only decides whether the review pause mentions the letter, so an unresolvable mode or
+    backend answers "no letter" instead of interrupting the pause.
+    """
+    try:
+        return _distributor(exp).sends_letter
+    except Exception as e:
+        logger.debug(f"Could not tell whether the distribution backend writes a PI letter "
+                     f"({e}); not mentioning it in the review pause.")
+        return False
+
+
+def _prepare_pi_letter(exp: experiment.Experiment) -> bool:
+    """Writes the PI letter through the mode's distribution backend (the `piletter` step).
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True when the letter was written, or when this backend writes none.
+    """
+    return _distributor(exp).prepare_letter(exp)
+
+
+def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
+    """Creates the diagnostic files after the pipeline, then writes the PI letter.
+
+    Runs comment_tasav and feedback, and asks the distribution backend to prepare the letter
+    to the PI, so the operator can review it during the review pause that follows. Only the
+    backends that deliver to a PI write one (the JIVE delivery does; `none` and `sweeps` do
+    nothing), which is why it goes through the backend and not through a step of its own.
 
     Args:
         exp: Experiment object.
     """
     result = _run_pipeline_stage(exp, 'collect')
     if result:
-        result &= process.update_piletter(exp)
+        result &= _prepare_pi_letter(exp)
 
     # After feedback, re-open the web dashboard so the user can review the pipeline
     # feedback page (shown as a new "Pipeline" tab, on top of the standard plots) in
@@ -954,6 +1122,9 @@ def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
     # would block forever, so we skip it (the page is on disk for async review).
     if result and not _BATCH_MODE:
         process.open_pipeline_dashboard(exp)
+        # It only returns once the operator stops the server themselves (Ctrl-C), so they are
+        # at the terminal and the review pause below must not ping them in the chat.
+        _note_operator_interaction()
 
     return result
 
@@ -1025,7 +1196,7 @@ def archive(exp: experiment.Experiment) -> bool:
     ``sweeps`` (not implemented yet).
     """
     try:
-        return distribution.get_distributor(_backends(exp).distribution).deliver(exp)
+        return _distributor(exp).deliver(exp)
     except distribution.DistributionError as e:
         logger.error(f"Distribution failed: {e}")
         rprint(f"[red]{e}[/red]")
@@ -1087,14 +1258,13 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
                                      "Protect experiment files."),
         'archive-fits':  ExecCommand(process.archive,
                                      "Archive standard plots and FITS-IDI files."),
-        'archive-pilet': ExecCommand(process.send_letters, "Archive the PI letter."),
+        'archive-pilet': ExecCommand(lambda exp: _distributor(exp).send_letter(exp),
+                                     "Archive the PI letter and hand it to the operator."),
         'append':        ExecCommand(process.append_antab,
                                      "Append the Tsys and GC to the FITS-IDI files."),
         'verify':        ExecCommand(verification.verify,
                                      "Verify the final FITS-IDI files (ANTAB tables, no data lost "
                                      "between files, content matching the MS)."),
-        'issues':        ExecCommand(process.antenna_feedback,
-                                     "Report observed problems (station feedback / Grafana / RedMine)."),
         'nme':           ExecCommand(process.nme_report,
                                      "Check if an NME Report is needed."),
         # -- pipeline --
@@ -1113,8 +1283,8 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
                                      "Create the .comment and .tasav files."),
         'feedback':      ExecCommand(pipeline.pipeline_feedback,
                                      "Run the Pipeline Feedback script."),
-        'piletter':      ExecCommand(process.update_piletter,
-                                     "Auto-fill the PI letter (non-observing antennas, PolConvert, etc.)."),
+        'piletter':      ExecCommand(_prepare_pi_letter,
+                                     "Write the PI letter (text, HTML and .eml) from its template."),
     }
 
 
@@ -1504,6 +1674,19 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
         rprint(f"[yellow]Warning: Could not create debug log file: {e}[/yellow]")
 
 
+def _note_operator_interaction() -> None:
+    """Records that the operator has just been at the terminal (see _OPERATOR_JUST_INTERACTED)."""
+    global _OPERATOR_JUST_INTERACTED
+    _OPERATOR_JUST_INTERACTED = True
+
+
+def _consume_operator_interaction() -> bool:
+    """True (once) when the operator has just interacted with the run, clearing the flag."""
+    global _OPERATOR_JUST_INTERACTED
+    was_there, _OPERATOR_JUST_INTERACTED = _OPERATOR_JUST_INTERACTED, False
+    return was_there
+
+
 def _pause_steps(exp: experiment.Experiment) -> tuple[str, ...]:
     """The steps after which the run stops for a human review.
 
@@ -1531,29 +1714,52 @@ def _review_pause(exp: experiment.Experiment, step: str) -> str | None:
         None to continue with the remaining steps, 'quit' to end the run here, or the
         name of the step to re-run from.
     """
-    piletter = f"{exp.expname.lower()}.piletter"
+    letter = f"{exp.expname.lower()}.piletter"
     open_cmd = f"postprocess -e {exp.expname} info --serve"
     logger.info(f"Paused after '{step}': waiting for the operator to review the results.")
     # Written once, in Markdown, and used for both channels: the terminal panel renders it
     # and the notifier sends it verbatim, so the operator reads the same instructions in
-    # the chat as on the screen.
-    needed = (f"1. Open the dashboard: `{open_cmd}` (from `{Path.cwd()}`) and check the "
-              f"plots, the Pipeline tab, and fill in the **Comments** tab per station.\n"
-              f"2. Review the PI letter (`{piletter}`). Non-observing antennas and "
-              f"PolConvert remarks have been filled in automatically — verify and edit "
-              f"if needed.\n"
-              f"3. Answer in the terminal where the run is waiting: Enter to finalize and "
-              f"archive, a step name (e.g. `pipeline`) to re-run from it, or `quit` to "
-              f"stop here. With the terminal already gone, `postprocess run` finalizes.")
-    Console().print(Panel(Markdown(f"**Please review before continuing:**\n\n{needed}"),
-                          title=f"[bold yellow]Paused after '{step}' — results ready "
-                                "for review[/bold yellow]",
-                          border_style="yellow", padding=(1, 2)))
-    utils.notify(f"{exp.expname} post-processing", f"Paused after '{step}' — review the results")
-    _comms.notify_operator(exp, f"paused after '{step}'",
-                           f"The `{step}` step finished and the results are ready for your "
-                           f"review; the post-processing waits until you answer.",
-                           needed, _NOTIFIER)
+    # the chat as on the screen. The PI letter is only there to review in the modes whose
+    # distribution backend writes one.
+    letter_step = (f"2. Review the PI letter (`{letter}`, or `{letter}.html` in a browser): it "
+                   f"is generated from the template with the automatic remarks (non-observing "
+                   f"antennas, PolConvert, bandwidth, opacity) and whatever you write in the "
+                   f"**Comments** tab. Correct it there, not in the file: the letter is "
+                   f"generated again before it is sent.\n"
+                   if _sends_pi_letter(exp) else "")
+    options = '\n'.join(f"    - `{key}` — {help_text}" for key, help_text in _review_options(step))
+    review_items = (f"1. Open the dashboard: `{open_cmd}` (from `{Path.cwd()}`) and check the "
+                    f"plots, the Pipeline tab, and fill in the **Comments** tab per station.\n"
+                    f"{letter_step}")
+    answer_item = f"{3 if letter_step else 2}. Answer in the terminal where the run is waiting"
+    tail = "With the terminal already gone, `postprocess run` finalizes."
+    # The chat reader has no terminal in front of them, so the message spells the options out;
+    # on the terminal they would be said twice, so the panel only points at the box below it.
+    needed = f"{review_items}{answer_item}:\n\n{options}\n\n{tail}"
+    on_screen = f"{review_items}{answer_item} — the options are in the box below.\n\n{tail}"
+    console = Console()
+    # The run stops here and waits for a person: it has to be impossible to scroll past.
+    console.print()
+    console.rule(f"[bold yellow]THE RUN IS WAITING FOR YOU[/bold yellow]", style="yellow")
+    console.print(Panel(Markdown(f"**Please review before continuing:**\n\n{on_screen}"),
+                        title=f"[bold yellow]Paused after '{step}' — results ready "
+                              "for review[/bold yellow]",
+                        border_style="yellow", padding=(1, 2), expand=True))
+    console.rule(style="yellow")
+    console.print()
+    # Announced outside the terminal (desktop notification + chat) only when the operator is
+    # not already looking at it. In batch mode nobody is at the terminal, whatever the flag
+    # says: there those notifications are the only signal, so they always go out.
+    if _consume_operator_interaction() and not _BATCH_MODE:
+        logger.debug(f"Not announcing the pause after '{step}' outside the terminal: the "
+                     "operator just closed the dashboard, so they are in front of it.")
+    else:
+        utils.notify(f"{exp.expname} post-processing",
+                     f"Paused after '{step}' — review the results")
+        _comms.notify_operator(exp, f"paused after '{step}'",
+                               f"The `{step}` step finished and the results are ready for your "
+                               f"review; the post-processing waits until you answer.",
+                               needed, _NOTIFIER)
     if _BATCH_MODE:
         _write_review_flag(exp, step,
                            f"Review the dashboard ({open_cmd}) and the PI letter, then resume "
@@ -1561,7 +1767,7 @@ def _review_pause(exp: experiment.Experiment, step: str) -> str | None:
                            f"STEP).")
         return 'quit'
 
-    answer = _ask_review_confirmation()
+    answer = _ask_review_confirmation(step)
     if answer is None:
         _clear_review_flag(exp)
         logger.info(f"Review after '{step}' approved; continuing with the remaining steps.")
@@ -1677,6 +1883,9 @@ def _run_step(exp: experiment.Experiment, step: Task) -> bool:
     """
     reporting.set_current_step(step.name)
     logger.info(f"[bold]Step '{step.name}' started[/bold] ({step.command}).")
+    # Cleared per step, so it only ever describes the step that just ran: a pause one or
+    # more steps after the dashboard still notifies the chat (the operator has left by then).
+    _consume_operator_interaction()
     started = time.monotonic()
 
     command = globals().get(step.command)

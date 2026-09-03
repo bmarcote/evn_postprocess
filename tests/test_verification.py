@@ -55,6 +55,13 @@ def make_exp(tmp_path: Path, passes: int = 1) -> experiment.Experiment:
     return exp
 
 
+def write_chunks(passes: int = 1, chunks: int = 2) -> None:
+    """Lays down *chunks* numbered FITS-IDI files per pass, as tConvert writes when it splits."""
+    for i in range(1, passes + 1):
+        for n in range(1, chunks + 1):
+            Path(f'es124_{i}_1.IDI{n}').touch()
+
+
 def write_idi(name: str, tables: tuple[str, ...] = ('SYSTEM_TEMPERATURE', 'GAIN_CURVE')) -> None:
     """Writes a minimal FITS file carrying (only) the named extensions."""
     fits.HDUList([fits.PrimaryHDU()]
@@ -119,36 +126,69 @@ class TestCheckMultipart:
     """check-multipart-fits.py only prints the FITS-IDI sets where something is off."""
 
     def test_silent_output_means_every_set_is_contiguous(self, tmp_path, monkeypatch):
+        write_chunks(passes=2)
         seen = stub_tool(monkeypatch, stdout='')
         assert verification.check_multipart(make_exp(tmp_path, passes=2)).ok
         assert seen == [['check-multipart-fits.py', 'es124_1_1.IDI*', 'es124_2_1.IDI*']]
 
     def test_small_loss_passes(self, tmp_path, monkeypatch):
+        write_chunks()
         stub_tool(monkeypatch, stdout='es124_1_1 loss=1.9999891519546509s gain=0.0s nZero=0\n')
         assert verification.check_multipart(make_exp(tmp_path)).ok
 
     def test_large_loss_fails(self, tmp_path, monkeypatch):
+        write_chunks()
         stub_tool(monkeypatch, stdout='es124_1_1 loss=45.5s gain=0.0s nZero=0\n')
         check = verification.check_multipart(make_exp(tmp_path))
         assert not check.ok
         assert '45.5 s of data lost' in check.details[0]
 
     def test_zero_timestamps_only_warn(self, tmp_path, monkeypatch):
+        write_chunks()
         stub_tool(monkeypatch,
                   stdout='/d/es124_1_1.IDI2 [of 4]: start=1.0 end=2.0 nZero=17\n'
                          'es124_1_1 loss=0.0s gain=0.0s nZero=17\n')
         assert verification.check_multipart(make_exp(tmp_path)).ok
 
     def test_tool_crash_is_a_problem(self, tmp_path, monkeypatch):
+        write_chunks()
         stub_tool(monkeypatch, stdout='', returncode=1, stderr='Traceback\nMemoryError\n')
         check = verification.check_multipart(make_exp(tmp_path))
         assert not check.ok and 'MemoryError' in check.details[0]
 
     def test_missing_tool_is_a_problem(self, tmp_path, monkeypatch):
+        write_chunks()
+
         def missing(*a, **k):
             raise tools.ToolMissingError('nope')
         monkeypatch.setattr(tools, 'run', missing)
         assert not verification.check_multipart(make_exp(tmp_path)).ok
+
+    def test_a_single_unnumbered_file_is_not_checked_at_all(self, tmp_path, monkeypatch):
+        """tConvert writes '{exp}_1_1.IDI', with no sequence number, when the pass fits in
+        one chunk. There is no boundary to lose data across, and the tool cannot even parse
+        the name: it must not be run, and the check must pass (ES123A regression)."""
+        Path('es123a_1_1.IDI').touch()
+        Path('es124_1_1.IDI').touch()
+        seen = stub_tool(monkeypatch, stdout='')
+        check = verification.check_multipart(make_exp(tmp_path))
+        assert check.ok and check.details == []
+        assert seen == []                            # the tool was never invoked
+
+    def test_a_single_numbered_chunk_is_not_checked_either(self, tmp_path, monkeypatch):
+        write_chunks(chunks=1)
+        seen = stub_tool(monkeypatch, stdout='')
+        assert verification.check_multipart(make_exp(tmp_path)).ok
+        assert seen == []
+
+    def test_only_the_split_passes_reach_the_tool(self, tmp_path, monkeypatch):
+        """Pass 1 was split, pass 2 fits in one file: only pass 1 is worth checking."""
+        Path('es124_1_1.IDI1').touch()
+        Path('es124_1_1.IDI2').touch()
+        Path('es124_2_1.IDI').touch()
+        seen = stub_tool(monkeypatch, stdout='')
+        assert verification.check_multipart(make_exp(tmp_path, passes=2)).ok
+        assert seen == [['check-multipart-fits.py', 'es124_1_1.IDI*']]
 
 
 class TestCompareProblems:

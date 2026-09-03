@@ -10,9 +10,6 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-import pytest
-from astropy import units as u
-from astropy import coordinates as coord
 
 from evn_postprocess import experiment
 from evn_postprocess import experiment_state as es
@@ -133,11 +130,39 @@ def test_record_msops_never_blocks(tmp_path, monkeypatch):
 # ------------------------------------------------- review confirmation (Issue 11)
 
 def test_ask_review_confirmation_answers(monkeypatch):
-    answers = iter(['', 'quit', 'nonsense', 'tconvert'])
+    answers = iter(['', 'quit', 'nonsense', 'tconvert', 'archive'])
     monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
     assert workflow._ask_review_confirmation() is None          # Enter -> approve
     assert workflow._ask_review_confirmation() == 'quit'
     assert workflow._ask_review_confirmation() == 'tconvert'    # invalid then valid step
+    assert workflow._ask_review_confirmation() == 'distribute'  # deprecated alias resolved
+
+
+def test_review_options_offer_the_paused_step_and_the_one_before_it(monkeypatch):
+    """After 'postpipe' the useful answers are postpipe (redo the diagnostics) and
+    pipeline (redo the pipeline itself); both must be named, with their reason."""
+    rows = dict(workflow._review_options('postpipe'))
+    assert list(rows)[:3] == ['Enter', 'postpipe', 'pipeline']
+    assert 'diagnostics on the pipeline outputs' in rows['postpipe']
+    assert 'editing its input file by hand' in rows['pipeline']
+    assert 'prearchive, verification, distribute' in rows['Enter']   # what Enter would run
+    assert 'postprocess run' in rows['quit']
+    # The steps already named are not repeated in the catch-all row.
+    assert 'postpipe' not in rows['<step>'] and 'pipeline,' not in rows['<step>']
+
+
+def test_review_options_follow_the_step_the_run_paused_after(monkeypatch):
+    rows = dict(workflow._review_options('antab'))
+    assert list(rows)[:3] == ['Enter', 'antab', 'standardplots2']
+
+
+def test_the_options_are_printed_again_after_a_wrong_answer(monkeypatch, capsys):
+    answers = iter(['nope', ''])
+    monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
+    assert workflow._ask_review_confirmation('postpipe') is None
+    out = capsys.readouterr().out
+    assert out.count('How to answer') == 2      # once up front, once after the bad answer
+    assert 'is not one of the answers below' in out
 
 
 def test_ask_review_confirmation_no_stdin(monkeypatch):

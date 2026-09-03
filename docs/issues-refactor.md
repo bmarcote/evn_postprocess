@@ -351,7 +351,8 @@ input files from **local** files — station-file fetching lives in retrieval, I
 Extend the existing single-page dashboard with a Comments tab: one general experiment note
 textarea; per-station editable note; per-station green/orange/red selector (no problem / issues
 reported / could not observe). Notes and statuses pre-filled from the Issue-7 StationSummary
-(did-not-observe → red + auto-note, missed time/reduced bandwidth → orange + auto-note).
+(did-not-observe → red + auto-note, missed time → orange + auto-note; reduced bandwidth
+gets its auto-note but stays green, being a scheduling choice rather than a problem).
 Saving POSTs to the dashboard API, which persists into the toml `[comments]` section via
 `record_comments`.
 

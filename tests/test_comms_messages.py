@@ -143,6 +143,38 @@ class TestMattermostFormatting:
         assert posted['message'] == body
         assert posted['message'].count('Processing of EB101') == 1
 
+    def test_any_file_can_be_attached_not_only_plots(self, tmp_path, monkeypatch):
+        """The PI letter travels as .eml/.html; only a missing file is skipped."""
+        config = comms.CommsConfig(mode='mattermost', username='jive.marcote',
+                                   mm_server_url='https://mm.example', mm_token='t',
+                                   mm_channel_id='chan')
+        notifier = comms.MattermostNotifier(config)
+        uploaded, posted = [], {}
+        monkeypatch.setattr(notifier, '_ensure_channel', lambda: None)
+        monkeypatch.setattr(notifier, '_upload_file',
+                            lambda path: uploaded.append(path.name) or f"id-{path.name}")
+        monkeypatch.setattr(notifier, '_api',
+                            lambda method, endpoint, data=None: posted.update(data or {}) or
+                            {'create_at': 1})
+        for name in ('eb101.piletter.eml', 'eb101.piletter.html', 'plot.png'):
+            (tmp_path / name).write_text('x')
+        files = [tmp_path / n for n in ('eb101.piletter.eml', 'eb101.piletter.html', 'plot.png',
+                                        'absent.png')]
+        assert notifier.send_message('subject', 'body', files)
+        assert uploaded == ['eb101.piletter.eml', 'eb101.piletter.html', 'plot.png']
+        assert posted['file_ids'] == [f"id-{name}" for name in uploaded]
+
+
+class TestAttachmentTypes:
+    """What each attachment is declared as (the .eml draft of the PI letter included)."""
+
+    def test_types_are_guessed_and_base64_safe(self):
+        assert comms._mime_type(Path('plot.png')) == 'image/png'
+        assert comms._mime_type(Path('eb101.piletter.html')) == 'text/html'
+        # Unknown, and message/* (the .eml): a plain download, which is what base64 allows.
+        assert comms._mime_type(Path('eb101.piletter')) == 'application/octet-stream'
+        assert comms._mime_type(Path('eb101.piletter.eml')) == 'application/octet-stream'
+
 
 class TestTheFinishedRunSaysWhatWasSpotted:
     """The message closing a successful run is the only summary the operator reads."""

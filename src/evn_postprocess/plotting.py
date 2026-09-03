@@ -262,8 +262,8 @@ class Jplot:
     #  Plot generators (each yields jplotter command strings)
     # ------------------------------------------------------------------
 
-    def anp_chan_cross_plot(self, refant: str, scanno: int) -> Generator[str, None, None]:
-        """Generate amplitude/phase vs channel cross-baseline plots for one scan.
+    def anp_freq_cross_plot(self, refant: str, scanno: int) -> Generator[str, None, None]:
+        """Generate amplitude/phase vs frequency cross-baseline plots for one scan.
 
         Args:
             refant: Reference antenna code for this scan.
@@ -272,11 +272,11 @@ class Jplot:
         Returns:
             Generator of jplotter commands.
         """
-        logger.info(f"Generating cross-correlation plots [amp&phase/channel], scan {scanno}.")
+        logger.info(f"Generating cross-correlation plots [amp&phase/frequency], scan {scanno}.")
         yield "bl {0}* -auto".format(refant)
         yield "fq *;ch none"
         yield "avt vector;avc none"
-        yield "pt anpchan"
+        yield "pt anpfreq"
         yield "y local"
         yield "scan mid-30s to mid+30s where scan_number={0}".format(scanno)
         yield "new all false bl true sb false"
@@ -288,8 +288,8 @@ class Jplot:
         yield "pl"
         logger.debug(f"Done cross-correlation plots, scan {scanno}.")
 
-    def amp_chan_auto_plot(self, scanno: int) -> Generator[str, None, None]:
-        """Generate amplitude vs channel auto-correlation plots for one scan.
+    def amp_freq_auto_plot(self, scanno: int) -> Generator[str, None, None]:
+        """Generate amplitude vs frequency auto-correlation plots for one scan.
 
         Args:
             scanno: Scan number to select.
@@ -297,12 +297,12 @@ class Jplot:
         Returns:
             Generator of jplotter commands.
         """
-        logger.info(f"Generating auto-correlation plots [amp/channel], scan {scanno}.")
+        logger.info(f"Generating auto-correlation plots [amp/frequency], scan {scanno}.")
         yield "bl auto"
         yield "fq */p;ch none"
         yield "avt scalar;avc none"
         yield "time none"
-        yield "pt ampchan"
+        yield "pt ampfreq"
         yield "y 0 2"
         yield "scan mid-30s to mid+30s where scan_number={0}".format(scanno)
         yield "new all false bl true sb false time true"
@@ -428,9 +428,9 @@ class Jplot:
             # --- per-scan plots (cross + auto) ---
             for scanno, info in scan_map.items():
                 if 'cross' in plots:
-                    todo.append(self.anp_chan_cross_plot(self.pick_refant_for_scan(info), scanno))
+                    todo.append(self.anp_freq_cross_plot(self.pick_refant_for_scan(info), scanno))
                 if 'auto' in plots:
-                    todo.append(self.amp_chan_auto_plot(scanno))
+                    todo.append(self.amp_freq_auto_plot(scanno))
 
             # --- amplitude/phase vs time (full observation, not per-scan) ---
             if 'time' in plots:
@@ -709,6 +709,14 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         expname: Experiment name (lowercase) for filtering plot files.
         dashboard_html: Pre-built HTML string for the dashboard page.
     """
+
+    # HTTP/1.1, so the browser keeps one connection open for the whole page instead of
+    # opening a new one per request. Over the SSH tunnel the dashboard is normally viewed
+    # through, a new connection costs a TCP handshake plus an SSH channel setup — paid ~9
+    # times for a single page load (the HTML, five /api/ calls, the plot images) with
+    # HTTP/1.0. Safe here because every response below sends an accurate Content-Length.
+    protocol_version = "HTTP/1.1"
+
     experiment_summary: dict = {}
     plots_dir: Path = Path("plots")
     expname: str = ""
@@ -1028,7 +1036,9 @@ def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -
     # Bind localhost only: the dashboard exposes unauthenticated write endpoints
     # (comments, source types, refant), so it must not be reachable from the network.
     # Remote viewing goes through the SSH tunnel whose command is printed below.
-    server = http.server.HTTPServer(("127.0.0.1", port), _DashboardHandler)
+    # Threading: a browser opens several connections for one page, and a single-threaded
+    # server makes them wait for each other — over a tunnel that is the whole page-load time.
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), _DashboardHandler)
     url = f"http://localhost:{port}"
     rprint(f"[green]\n{'=' * 60}[/green]")
     rprint(f"[green]  EVN Dashboard for {exp.expname} running at:[/green]")

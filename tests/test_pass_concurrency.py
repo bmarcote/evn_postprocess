@@ -11,6 +11,7 @@ import datetime as dt
 import re
 import threading
 import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,30 @@ class TestPassWorkers:
 
     def test_defaults_are_sane_on_any_machine(self):
         assert utils.MAX_PASS_WORKERS >= 1 and utils.MAX_PASS_IO_WORKERS >= 1
+
+
+class TestThePipelinePoolRunsRealProcesses:
+    """run_pipeline gives each correlator pass its own process, not a thread.
+
+    An EVN.py run drags a whole AIPS/ParselTongue session behind it, so the passes must not
+    share an interpreter. That makes two things load-bearing, and neither is obvious:
+    the submitted work has to be picklable, and the workers have to start in the directory
+    run_pipeline chdir'd into (every pass input file name is relative to it).
+    """
+
+    def test_the_workers_are_picklable_and_inherit_the_working_directory(self, tmp_path,
+                                                                         monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with ProcessPoolExecutor(utils.pass_workers(2, utils.MAX_PASS_IO_WORKERS)) as pool:
+            futures = [pool.submit(utils.shell_command, "pwd", echo=False) for _ in range(2)]
+            cwds = {future.result().strip() for future in futures}
+        assert cwds == {str(Path(tmp_path).resolve())}
+
+    def test_the_pool_is_bounded_by_the_io_ceiling(self, monkeypatch):
+        """Many passes must not mean many concurrent AIPS sessions."""
+        monkeypatch.setattr(utils, 'MAX_PASS_IO_WORKERS', 4)
+        assert utils.pass_workers(300, utils.MAX_PASS_IO_WORKERS) == 4
+        assert utils.pass_workers(2, utils.MAX_PASS_IO_WORKERS) == 2
 
 
 class TestNoHardCodedWorkerCounts:

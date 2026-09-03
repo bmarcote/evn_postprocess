@@ -98,8 +98,9 @@ class TestRunAntabEditorReturnsTrueOnSuccess:
             mock_shell.return_value = ""
             assert pipeline.run_antab_editor(exp) is True
 
-        assert (pipe_temp / "TESTEXP.vix").is_symlink()
-        assert (pipe_temp / "TESTEXP.vix").read_text() == "VEX_rev = 1.5;\n"
+        # Named after the lowercase experiment, which is what antab_editor.py looks for.
+        assert (pipe_temp / "testexp.vix").is_symlink()
+        assert (pipe_temp / "testexp.vix").read_text() == "VEX_rev = 1.5;\n"
 
 
 class TestRunAntabEditoreEVNAssociatesOtherExperiments:
@@ -157,9 +158,11 @@ class TestRunAntabEditoreEVNAssociatesOtherExperiments:
 
 class TestAntabEditorGetsAWorkingVixLink:
     """antab_editor.py reads the vex file from its working directory (antenna_files).
-    The link placed there must have an ABSOLUTE target: reusing the relative target of
-    the experiment-root link ({EXP}.vix -> {exp}.vox) makes it dangle, which is the bug
-    this replaces.
+
+    The link placed there must resolve from *that* directory. The bug this replaces reused
+    the target of the experiment-root link verbatim ({EXP}.vix -> {exp}.vox), which dangles
+    one directory down. The target is now recomputed relative to antenna_files, so the link
+    both resolves and survives the experiment directory being moved.
     """
 
     def _make_exp(self, tmp_path: Path):
@@ -182,17 +185,33 @@ class TestAntabEditorGetsAWorkingVixLink:
         exp.antennas = []
         return exp, pipe_temp
 
-    def test_link_is_absolute_and_resolves(self, tmp_path: Path, monkeypatch):
+    def test_link_resolves_from_antenna_files(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         exp, pipe_temp = self._make_exp(tmp_path)
 
         with patch("evn_postprocess.pipeline.utils.shell_command", return_value=""):
             assert pipeline.run_antab_editor(exp) is True
 
-        linked = pipe_temp / "TESTEXP.vix"
+        linked = pipe_temp / "testexp.vix"
         assert linked.is_symlink()
-        assert Path(os.readlink(linked)).is_absolute()
+        assert os.readlink(linked) != "testexp.vox"          # the root link's target: dangles here
+        assert linked.resolve() == (tmp_path / "testexp.vox").resolve()
         assert linked.read_text() == "VEX_rev = 1.5;\n"
+
+    def test_link_survives_the_experiment_directory_being_moved(self, tmp_path: Path, monkeypatch):
+        """The target is relative, so the whole directory can be moved with the link intact."""
+        monkeypatch.chdir(tmp_path)
+        exp, pipe_temp = self._make_exp(tmp_path)
+
+        with patch("evn_postprocess.pipeline.utils.shell_command", return_value=""):
+            assert pipeline.run_antab_editor(exp) is True
+
+        moved = tmp_path.parent / f"{tmp_path.name}-moved"
+        tmp_path.rename(moved)
+        try:
+            assert (moved / "antenna_files" / "testexp.vix").read_text() == "VEX_rev = 1.5;\n"
+        finally:
+            moved.rename(tmp_path)
 
     def test_link_follows_later_edits_of_the_vex(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -202,19 +221,19 @@ class TestAntabEditorGetsAWorkingVixLink:
             assert pipeline.run_antab_editor(exp) is True
 
         (tmp_path / "testexp.vox").write_text("VEX_rev = 1.5;\nedited\n")
-        assert (pipe_temp / "TESTEXP.vix").read_text() == "VEX_rev = 1.5;\nedited\n"
+        assert (pipe_temp / "testexp.vix").read_text() == "VEX_rev = 1.5;\nedited\n"
 
     def test_replaces_a_dangling_link_left_by_a_previous_run(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         exp, pipe_temp = self._make_exp(tmp_path)
         # The broken link a previous version left behind (target relative to the root).
-        (pipe_temp / "TESTEXP.vix").symlink_to("testexp.vox")
-        assert not (pipe_temp / "TESTEXP.vix").exists()  # dangling
+        (pipe_temp / "testexp.vix").symlink_to("testexp.vox")
+        assert not (pipe_temp / "testexp.vix").exists()  # dangling
 
         with patch("evn_postprocess.pipeline.utils.shell_command", return_value=""):
             assert pipeline.run_antab_editor(exp) is True
 
-        linked = pipe_temp / "TESTEXP.vix"
+        linked = pipe_temp / "testexp.vix"
         assert linked.is_symlink()
         assert linked.read_text() == "VEX_rev = 1.5;\n"
 
@@ -226,7 +245,7 @@ class TestAntabEditorGetsAWorkingVixLink:
         with patch("evn_postprocess.pipeline.utils.shell_command", return_value=""):
             assert pipeline.run_antab_editor(exp) is True
 
-        assert not (pipe_temp / "ABSENT.vix").exists()
+        assert not (pipe_temp / "testexp.vix").exists()
 
 
 class TestLegacyServerBootstrapRemoved:

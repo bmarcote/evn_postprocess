@@ -68,6 +68,16 @@ def test_distribution_registry():
     assert isinstance(distribution.get_distributor('none'), NoneDistributor)
 
 
+def test_only_a_delivering_backend_writes_a_pi_letter(tmp_path, monkeypatch):
+    """The PI letter belongs to the JIVE delivery: 'none' writes nothing, anywhere."""
+    monkeypatch.chdir(tmp_path)
+    none = distribution.get_distributor('none')
+    assert none.sends_letter is False
+    assert none.prepare_letter(ExpStub()) is True and none.send_letter(ExpStub()) is True
+    assert list(tmp_path.iterdir()) == []
+    assert distribution.get_distributor('jive').sends_letter is True
+
+
 def test_distribution_unknown_backend():
     with pytest.raises(distribution.DistributionError) as excinfo:
         distribution.get_distributor('ftp')

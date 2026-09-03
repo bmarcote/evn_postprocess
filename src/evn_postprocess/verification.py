@@ -163,14 +163,29 @@ def check_multipart(exp: experiment.Experiment) -> Check:
     chunks (``gain``) and zero timestamps (``nZero``) are logged as warnings: the tool flags
     them as worth a look, but neither means data is missing from the archive.
 
+    Only the passes that tConvert actually split are checked. A pass that fits in one chunk
+    gets a single, unnumbered ``{exp}_1_1.IDI``, which has no boundary to lose data across —
+    and which the tool cannot even parse: it identifies a chunk by the sequence number in
+    ``.IDI<n>``, so an unnumbered name makes its filename regex return None and the tool dies
+    with ``AttributeError: 'NoneType' object has no attribute 'group'``. Handing it such a
+    pass used to fail the whole verification step on a perfectly good single-part data set.
+
     Args:
         exp: Experiment object.
 
     Returns:
         A :class:`Check` naming every FITS-IDI set that lost too much time.
     """
+    multipart = [a_pass for a_pass in exp.correlator_passes if len(_idi_files(a_pass)) > 1]
+    for a_pass in exp.correlator_passes:
+        if a_pass not in multipart:
+            logger.info(f"{a_pass.fitsidifile}: a single FITS-IDI file, so there is no "
+                        "multi-part continuity to check.")
+    if not multipart:
+        return Check('multi-part FITS-IDI continuity', True, [])
+
     if (result := _run(exp, 'check-multipart-fits.py',
-                       [f"{a_pass.fitsidifile}*" for a_pass in exp.correlator_passes])) is None:
+                       [f"{a_pass.fitsidifile}*" for a_pass in multipart])) is None:
         return Check('multi-part FITS-IDI continuity', False,
                      ["check-multipart-fits.py could not be run (see the log)."])
 

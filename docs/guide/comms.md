@@ -124,6 +124,7 @@ one at the end, when it finishes and nobody is waiting any more.
 | e-EVN barrier: waiting for sibling experiments | `comms.notify_step_pause()` | Which experiments it waits for, and to re-run once they are done. |
 | Review pause after `postpipe` | `workflow._review_pause()` | Open the dashboard, review the PI letter, then answer. |
 | `antab_editor` about to start | `review.announce_antab_summary()` | The stations to check in the ANTAB (informational). |
+| The PI letter is ready | `piletter.notify_letter_ready()` | The whole letter as Markdown, with the `.eml` draft and the `.html` version attached (see [The PI Letter](pi-letter.md)). |
 | The post-processing finished | `workflow._announce_completion()` | Everything the run spotted (informational). |
 
 A step that fails is *not* marked done, so `postprocess run` resumes from it. Sending can

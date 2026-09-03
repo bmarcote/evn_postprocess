@@ -26,7 +26,8 @@ src/evn_postprocess/
 │   └── aips.py             #   wraps the historical EVN.py flow (pipeline.py)
 ├── distribution/          # Delivery backends
 │   ├── __init__.py       #   Distributor ABC, registry, NoneDistributor (verifies FITS-IDI)
-│   └── jive.py             #   credentials, PI letter (+ review comments), archive, upload_feedback stub
+│   ├── jive.py             #   credentials, source protection, archive, upload_feedback stub
+│   └── piletter.py        #   the PI letter of the jive delivery: template -> text / HTML / .eml + chat
 ├── process.py            # MS operations, standardplots, tConvert, PolConvert
 ├── pipeline.py            # Historical EVN.py / antab / feedback glue (wrapped by pipelines.aips)
 ├── plotting.py            # Jplot wrapper, PS->PNG, web dashboard (Comments + Progress tabs)

@@ -25,10 +25,10 @@ fully offline for an external user.
 | `antab` | Fetches station files, prints the station summary, opens `antab_editor.py` (manual step, unchanged). |
 | `pipeinputs` | The pipeline backend's `prepare()`: builds the calibration-pipeline input file(s). |
 | `pipeline` | The pipeline backend's `run()`: runs the calibration pipeline over all correlator passes. |
-| `postpipe` | The pipeline backend's `collect()`: diagnostics, TASAV/comment files, feedback page; PI letter auto-fill. **Review pause.** |
+| `postpipe` | The pipeline backend's `collect()`: diagnostics, TASAV/comment files, feedback page; PI letter generated. **Review pause.** |
 | `prearchive` | Appends Tsys/gain-curve info to the FITS-IDI files; records the finalisation parameters into the toml. |
 | `verification` | Verifies the final FITS-IDI files: ANTAB tables attached, no data lost between the multi-part files, content matching the MS. **Stops the run before anything is archived.** |
-| `distribute` | The distribution backend's `deliver()`: credentials, protection, archive upload, PI letter. |
+| `distribute` | The distribution backend's `deliver()`: credentials, protection, archive upload, [PI letter](pi-letter.md). |
 
 See [Workflow Steps & Local Tools](../reference/steps.md) for what each step calls
 under the hood — useful if you ever need to reproduce a step by hand.

@@ -2,32 +2,30 @@
 
 Provisional implementation delegating to the existing process/pipeline helpers (same
 commands, same order as the pre-refactor archive step); Issue 14 completes the
-extraction (PI letter from the toml [pi]/[comments], interactive PI-info prompt, and
-the feedback-database upload). Imported only when the 'jive' backend is selected.
+extraction (interactive PI-info prompt and the feedback-database upload). Imported only
+when the 'jive' backend is selected.
+
+The PI letter belongs to this backend and to no other: it is built and delivered by the
+sibling :mod:`evn_postprocess.distribution.piletter` module, through
+:meth:`JiveDistributor.prepare_letter` (also the `piletter` workflow step) and
+:meth:`JiveDistributor.send_letter` (the 'pi-letter' delivery stage).
 """
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from loguru import logger
 from rich import print as rprint
+from rich.console import Console
+from rich.panel import Panel
 from astropy import coordinates as coord
 from astropy import units as u
 
-from . import DistributionError, Distributor
-from .. import experiment, experiment_state, pipeline, process
+from . import DistributionError, Distributor, piletter
+from .. import experiment, experiment_state, pipeline, process, utils
 from .. import workflow  # cycle with workflow importing this sub-package: used at call time only
 from ..retrieval import RetrievalError, jive as jive_retrieval
-from ..utils import PILETTER_REMARKS_ANCHOR
 
-
-COMMENTS_SENTINEL = "- Notes from the post-processing review:"
-STATUS_LABELS = {'minor': ' (minor issues)', 'major': ' (could not observe)', 'success': ''}
-# The reduced-bandwidth sentence is dropped from the per-station notes: it is already
-# written once, for all affected antennas, under 'Further remarks:' by
-# process.update_piletter. Matches the wording produced in review.default_station_comments.
-_BANDWIDTH_NOTE_RE = re.compile(r"\s*Observed with reduced bandwidth\s*\([^)]*\)\.?", re.IGNORECASE)
 
 # One .jex schedsrc entry: 'NAME (TYPE|FLAG)'. TYPE is T (target), R (reference/
 # calibrator) or C/F (fringe-finder). FLAG is 'X' (password-protect in the EVN archive)
@@ -35,27 +33,10 @@ _BANDWIDTH_NOTE_RE = re.compile(r"\s*Observed with reduced bandwidth\s*\([^)]*\)
 _SCHEDSRC_ENTRY_RE = re.compile(r'^(?P<name>\S+)\s*\((?P<type>\w)\|(?P<flag>\w?)(?P<guess>\?)?\)$')
 
 
-def _station_note(entry) -> str:
-    """The per-station note to append to the antenna line in the PI letter.
-
-    Strips the reduced-bandwidth sentence (already covered under 'Further remarks:')
-    and appends the status label. Returns '' when nothing meaningful remains.
-
-    Args:
-        entry: a StationComment (status + free-text note).
-
-    Returns:
-        The note text to append after the antenna name, or '' to skip the station.
-    """
-    note = _BANDWIDTH_NOTE_RE.sub('', entry.note).strip()
-    if not note:
-        return ''
-    return f"{note}{STATUS_LABELS.get(entry.status, '')}"
-
-
 class JiveDistributor(Distributor):
     """The EVN-archive delivery as performed at JIVE (default backend)."""
     name = 'jive'
+    sends_letter = True
 
     def deliver(self, exp) -> bool:
         """Recover source protection, PI-info check, comments into the letter, then deliver.
@@ -83,14 +64,16 @@ class JiveDistributor(Distributor):
         # and deliver() returns False at the very end (see _warn_manual_protection).
         protection_resolved = self._apply_source_protection(exp)
         self._ensure_pi_info(exp)
-        self._apply_comments_to_letter(exp)
+        # Rebuild the letter here, before any stage: it must carry the comments the support
+        # scientist wrote in the dashboard during the review pause, and the contacts just
+        # recovered from the .jex file.
+        self.prepare_letter(exp)
         stages = [('credentials', process.set_credentials),
                   ('protect', process.protect_experiment_files),
                   ('summary', lambda e: process.print_exp(e, display_in_terminal=False)),
                   ('archive-data', process.archive),
                   ('archive-pipeline', pipeline.archive),
-                  ('pi-letter', process.send_letters),
-                  ('station-feedback', process.antenna_feedback),
+                  ('pi-letter', self.send_letter),
                   ('nme-report', process.nme_report),
                   ('feedback-upload', self.upload_feedback)]
         for stage_name, stage in stages:
@@ -279,61 +262,65 @@ class JiveDistributor(Distributor):
         exp_toml.record_pi([{'name': name, 'email': email}])
         exp_toml.save()
 
-    def _apply_comments_to_letter(self, exp) -> bool:
-        """Injects the review [comments] into the PI letter.
+    def prepare_letter(self, exp) -> bool:
+        """Generates the PI letter from the template with everything known so far.
 
-        Per-station notes are appended to the matching antenna line under the
-        'Remarks on individual stations' section (the antenna name, capitalised, is
-        matched the same way as process.update_piletter's "Could not observe." fill),
-        rather than being repeated as a separate list. The reduced-bandwidth sentence
-        is stripped from each note because it is already written once, for all affected
-        antennas, under 'Further remarks:'. The general experiment note is inserted
-        after the 'Further remarks:' anchor, guarded by a sentinel line.
+        Called twice: by the `piletter` workflow step at the end of the pipeline, so the
+        operator can review it during the review pause, and again at the start of the
+        delivery, so the letter that is archived and sent carries the comments written in
+        the dashboard Comments tab meanwhile. The letter is always built from the template
+        (see :mod:`evn_postprocess.distribution.piletter`); nothing is patched into an
+        existing file, and the previous version is kept as a `.bak`.
 
-        Idempotent: the general note is guarded by the sentinel; each per-station note
-        is only appended when it is not already present on the antenna line. A missing
-        letter logs a warning and returns False without blocking the delivery (the
-        operator reviews the letter before sending anyway).
+        Args:
+            exp: Experiment object.
+
+        Returns:
+            True when the letter was written; False (with a warning) when it could not be,
+            which never blocks the delivery on its own.
         """
-        exp_toml = self._exp_toml(exp)
-        comments = exp_toml.comments
-        station_notes = {name: _station_note(entry) for name, entry in comments.stations.items()}
-        station_notes = {name: note for name, note in station_notes.items() if note}
-        if not comments.general and not station_notes:
-            return True  # nothing to add
-        letter = Path(f"{exp.expname.lower()}.piletter")
-        if not letter.exists():
-            logger.warning(f"No PI letter ({letter}) to add the review comments to.")
+        try:
+            piletter.write_letter(exp)
+        except Exception as e:
+            logger.warning(f"Could not write the PI letter of {exp.expname}: {e}")
             return False
+        return True
 
-        lines = letter.read_text(encoding='utf-8').splitlines(keepends=True)
-        unplaced = []
-        for name, note in sorted(station_notes.items()):
-            for i, line in enumerate(lines):
-                if f"{name.capitalize()}:" in line:
-                    if note not in line:
-                        stripped = line.rstrip('\n')
-                        lines[i] = f"{stripped} {note}{line[len(stripped):]}"
-                    break
-            else:
-                unplaced.append(name)
-        if unplaced:
-            logger.warning(f"No individual-station line for {', '.join(sorted(unplaced))} in "
-                           f"{letter}; their review notes were not added.")
+    def send_letter(self, exp) -> bool:
+        """The 'pi-letter' delivery stage: archive the letter and hand it to the operator.
 
-        text = ''.join(lines)
-        if comments.general and COMMENTS_SENTINEL not in text:
-            if PILETTER_REMARKS_ANCHOR not in text:
-                logger.warning(f"No '{PILETTER_REMARKS_ANCHOR}' anchor in {letter}; the general "
-                               "review note was not inserted (add it manually if needed).")
-            else:
-                # find() (not index()): the anchor may be the very last line without a newline.
-                eol = text.find('\n', (text.index(PILETTER_REMARKS_ANCHOR) + len(PILETTER_REMARKS_ANCHOR)))
-                eol = len(text) if eol == -1 else eol + 1
-                text = text[:eol] + f"\n{COMMENTS_SENTINEL}\n    {comments.general}\n" + text[eol:]
+        The letter is written again first (the archive credentials exist by now, so the
+        version sent to the PI carries them), the plain-text copy is archived with the data,
+        and the letter is posted to the operator's chat: the Markdown body to copy into an
+        email, plus the `.eml` draft and the `.html` version attached. Sending the mail
+        itself stays manual on purpose -- this program holds no mail credentials.
 
-        letter.write_text(text, encoding='utf-8')
-        logger.info(f"Review comments inserted into {letter}.")
+        Args:
+            exp: Experiment object.
+
+        Returns:
+            True unless the letter could not be written.
+        """
+        if not self.prepare_letter(exp):
+            return False
+        paths = piletter.letter_paths(exp)
+        to_send = paths['auth'] if paths['auth'].exists() else paths['text']
+
+        utils.shell_command("archive.pl",
+                            ["-stnd", "-e", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
+                             str(paths['text'])])
+        piletter.notify_letter_ready(exp, workflow.notifier())
+
+        body = f"[bold]Send[/bold] [bold green]{to_send}[/bold green] [bold]to [/bold]" \
+               f"[bold cyan]{', '.join(p.name for p in exp.pi)}[/bold cyan]: " \
+               f"[bold]{', '.join(p.email for p in exp.pi)}[/bold]" \
+               f"\nAnd CC [cyan]jops@jive.eu[/cyan]\n\n" \
+               f"[bold]Formatted versions:[/bold] [green]{paths['eml']}[/green] " \
+               f"(open it locally: it becomes a draft with recipients, subject and " \
+               f"formatting) and [green]{paths['html']}[/green] (open in a browser and " \
+               f"copy-paste)."
+        Console().print(Panel(body, title="[bold yellow]Send the PI Letter[/bold yellow]",
+                              border_style="yellow", padding=(1, 2)))
         return True
 
     def upload_feedback(self, exp) -> bool:
