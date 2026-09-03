@@ -65,13 +65,25 @@ def test_no_observed_info_means_no_false_positives():
     assert review.station_summary(exp).stations['Ef'].status == 'success'
 
 
-def test_reduced_bandwidth():
+def test_reduced_bandwidth_is_reported_but_is_not_a_problem():
+    """Fewer subbands is a scheduling choice: reported, but the status stays 'success'."""
     exp = make_exp()
     exp.antennas.append(experiment.Antenna(name='Ef', subbands=(0, 1, 2, 3)))
     exp.antennas.append(experiment.Antenna(name='Ir', subbands=(0, 1)))
-    report = review.station_summary(exp).stations['Ir']
-    assert report.reduced_bandwidth is True and report.status == 'minor'
-    assert '2/4 subbands' in review.summary_text(exp, review.station_summary(exp))
+    summary = review.station_summary(exp)
+    report = summary.stations['Ir']
+    assert report.reduced_bandwidth is True and report.status == 'success'
+    assert report.has_findings is True and report in summary.with_findings
+    assert '2/4 subbands' in review.summary_text(exp, summary)
+
+
+def test_reduced_bandwidth_does_not_hide_a_missed_range():
+    """A station with both findings is still 'minor' because of the missed time."""
+    exp = make_exp()
+    exp.antennas.append(experiment.Antenna(name='Ef', subbands=(0, 1, 2, 3)))
+    exp.antennas.append(experiment.Antenna(name='Ir', subbands=(0, 1)))
+    add_scan(exp, 0, scheduled=('Ef', 'Ir'), observed=('Ef',))
+    assert review.station_summary(exp).stations['Ir'].status == 'minor'
 
 
 def test_unscheduled_station_excluded():
@@ -129,7 +141,8 @@ def test_default_station_comments_merge(monkeypatch):
     assert defaults['Ef']['note'] == 'Maser problems during the first hour.'
     assert defaults['Ef']['status'] == 'success'         # DB comment alone: no auto-finding
     assert defaults['Tr'] == {'status': 'major', 'note': 'Did not observe.'}
-    assert defaults['Ir']['status'] == 'minor' and 'reduced bandwidth' in defaults['Ir']['note']
+    # Reduced bandwidth alone: the note is kept, but it is not an issue ('no problem').
+    assert defaults['Ir']['status'] == 'success' and 'reduced bandwidth' in defaults['Ir']['note']
 
 
 # ------------------------------------------------- the summary closing a finished run

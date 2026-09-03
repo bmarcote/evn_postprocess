@@ -60,11 +60,25 @@ class StationReport:
                 and self.max_subbands is not None and self.n_subbands < self.max_subbands)
 
     @property
+    def has_findings(self) -> bool:
+        """True when there is anything to report about the station.
+
+        Wider than a non-'success' :attr:`status`: reduced bandwidth is reported but
+        does not count as a problem.
+        """
+        return not self.observed or bool(self.missed_ranges) or self.reduced_bandwidth
+
+    @property
     def status(self) -> str:
-        """The traffic-light status: 'major' (did not observe), 'minor', or 'success'."""
+        """The traffic-light status: 'major' (did not observe), 'minor', or 'success'.
+
+        Reduced bandwidth never raises the status: observing fewer subbands than the
+        experiment setup is a scheduling choice, not a fault, so such a station stays
+        'success' ('no problem') and is only reported as an informational note.
+        """
         if not self.observed:
             return 'major'
-        if self.missed_ranges or self.reduced_bandwidth:
+        if self.missed_ranges:
             return 'minor'
         return 'success'
 
@@ -76,8 +90,8 @@ class StationSummary:
 
     @property
     def with_findings(self) -> list[StationReport]:
-        """The stations that need attention (any status but 'success')."""
-        return [r for r in self.stations.values() if r.status != 'success']
+        """The stations with something to report (a reduced bandwidth included)."""
+        return [r for r in self.stations.values() if r.has_findings]
 
 
 def _missed_ranges(exp: experiment.Experiment, station: str) -> list[tuple[dt.datetime, dt.datetime]]:
@@ -278,7 +292,8 @@ def default_station_comments(exp: experiment.Experiment) -> dict[str, dict]:
 
     Combines the feedback-database comment (when available) with the automatic
     findings of :func:`station_summary` (did-not-observe, missed ranges, reduced
-    bandwidth). The status follows the summary ('success'/'minor'/'major').
+    bandwidth). The status follows the summary ('success'/'minor'/'major'): a station
+    that only observed with reduced bandwidth keeps the note but stays 'success'.
 
     Returns:
         Mapping station -> {'status': str, 'note': str} for every scheduled station.

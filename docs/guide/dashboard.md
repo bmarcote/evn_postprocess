@@ -57,8 +57,8 @@ resolution.
 Persists into the experiment toml `[comments]` section (see the
 [Experiment TOML Schema](../reference/experiment-toml.md)):
 
-- **General experiment note** — free text, folded into the PI letter's "Further
-  remarks" section.
+- **General experiment note** — free text, the first bullet of the
+  [PI letter](pi-letter.md)'s "General remarks" section.
 - **Per-station status** — a traffic-light selector: 🟢 no problem / 🟠 issues
   reported / 🔴 could not observe.
 - **Per-station note** — free text, pre-filled automatically from:

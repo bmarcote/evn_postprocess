@@ -483,7 +483,10 @@ class Ms:
             with misc.table(msdata.getkeyword('SPECTRAL_WINDOW')) as spw_table:
                 n_channels = spw_table.getcol('NUM_CHAN')[0]
                 chan_freqs = spw_table.getcol('CHAN_FREQ') * u.Hz
-                total_bw = spw_table.getcol('TOTAL_BANDWIDTH')[0] * u.Hz
+                # TOTAL_BANDWIDTH is the bandwidth of a single spectral window (subband);
+                # FreqSetup.bandwidth is the total one, so it spans all the subbands.
+                subband_bw = spw_table.getcol('TOTAL_BANDWIDTH')[0] * u.Hz
+                total_bw = subband_bw * len(spw_names)
                 self._freqsetup = FreqSetup(meanfreq=np.mean(chan_freqs), bandwidth=total_bw,
                                             nspw=len(spw_names), nchan=n_channels,
                                             polarizations=operations.get_polarizations(self.msfile))
@@ -671,8 +674,8 @@ class Ms:
                  f"{self.freqsetup.meanfreq + self.freqsetup.bandwidth/2:0.04}.\n"
             s += term.bright_black('Bandwidth: ') + \
                  f"{self.freqsetup.nspw} x " \
-                 f"{self.freqsetup.bandwidth*self.freqsetup.nspw:0.04} subbands " \
-                 f"(total bandwidth of {self.freqsetup.bandwidth:0.04}). " \
+                 f"{(self.freqsetup.bandwidth/self.freqsetup.nspw).to(u.MHz):0.04} subbands " \
+                 f"(total bandwidth of {self.freqsetup.bandwidth.to(u.MHz):0.04}). " \
                  f"{self.freqsetup.nchan} channels each.\n"
             s += term.bright_black('Polarizations: ') + \
                  f"{', '.join([pol.name for pol in self.freqsetup.polarizations])}\n\n"

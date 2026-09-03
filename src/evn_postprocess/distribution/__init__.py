@@ -35,6 +35,9 @@ class DistributionError(RuntimeError):
 class Distributor(ABC):
     """Interface every distribution backend implements."""
     name: str = ''
+    # True for the backends that write to the PI, so the workflow knows whether there is a
+    # letter to point the operator at during the review pause.
+    sends_letter: bool = False
 
     @abstractmethod
     def deliver(self, exp) -> bool:
@@ -43,6 +46,38 @@ class Distributor(ABC):
         Returns:
             bool: True when the delivery completed (or was deliberately skipped).
         """
+
+    def prepare_letter(self, exp) -> bool:
+        """Writes the letter to the PI, early enough for the operator to review it.
+
+        Called at the end of the pipeline (the `piletter` step), before the review pause, and
+        again by the delivery itself. The default does nothing and reports success: a backend
+        that delivers nowhere has no PI to write to.
+
+        Args:
+            exp: Experiment object.
+
+        Returns:
+            bool: True when there is nothing to do, or the letter was written.
+        """
+        logger.debug(f"Distribution backend '{self.name}': no PI letter to prepare.")
+        return True
+
+    def send_letter(self, exp) -> bool:
+        """Archives the PI letter and hands it to the operator to send.
+
+        One of the delivery stages, and also reachable on its own
+        (``postprocess exec archive-pilet``). The default does nothing, like
+        :meth:`prepare_letter`.
+
+        Args:
+            exp: Experiment object.
+
+        Returns:
+            bool: True when there is nothing to do, or the letter was handed over.
+        """
+        logger.debug(f"Distribution backend '{self.name}': no PI letter to send.")
+        return True
 
 
 _REGISTRY = BackendRegistry('distribution', DistributionError)

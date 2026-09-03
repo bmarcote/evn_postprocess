@@ -22,6 +22,13 @@ from . import comment_tasav
 from . import feedback
 
 
+# antab_editor.py exits 127 when its window is closed, which is how a normal session ends —
+# not a failure, and not the shell's "command not found" it usually means. It is accepted, but
+# never silently: shell_command logs a warning for it, and the operator is asked afterwards
+# whether the .antab it produced is good enough to go on (see workflow.antfiles).
+ANTAB_EDITOR_OK_RETURNCODES: tuple[int, ...] = (127,)
+
+
 def _link_vixfile(exp) -> None:
     """Symlinks the experiment .vix into ``antenna_files/``, beside the station files.
 
@@ -29,10 +36,14 @@ def _link_vixfile(exp) -> None:
     and anyone working in there by hand — can reach it without stepping back out of the
     directory. The link is relative, so it survives the experiment directory being moved.
 
+    The link is named after the *lowercase* experiment name, which is what antab_editor.py
+    looks for; ``exp.vixfile`` is the uppercase name in the experiment root (itself usually
+    a symlink to the lowercase file), so its name cannot simply be reused here.
+
     Never fails the step: a missing vex, or the name already taken in ``antenna_files/``,
     is a warning and nothing more.
     """
-    link = exp.dirs.pipe_temp / exp.vixfile.name
+    link = exp.dirs.pipe_temp / f"{exp.expname.lower()}{exp.vixfile.suffix}"
     if link.is_symlink() and not link.exists():
         logger.warning(f"Replacing dangling symlink {link} (pointed to a missing file).")
         link.unlink()
@@ -61,8 +72,9 @@ def run_antab_editor(exp) -> bool:
     beside the station files the editor works on (see :func:`_link_vixfile`).
 
     Returns:
-        bool: True once the editor exits successfully (the editor itself runs
-        interactively; this function only manages the working directory).
+        bool: True once the editor has been run (the editor itself runs interactively; this
+        function only manages the working directory). Exit code 127, which is what closing
+        the editor window produces, counts as a normal end of session.
         False if the associated e-EVN experiments do not have their FITS-IDI files yet.
     """
     if (exp.eEVNname is not None) and (exp.expname != exp.eEVNname):
@@ -97,11 +109,11 @@ def run_antab_editor(exp) -> bool:
         if '_line' in ''.join(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")):
             utils.shell_command("antab_editor.py",
                                 ["-e", exp.expname.lower(), *assoc_args, "-f", "..", "-l", *assoc_paths],
-                                shell=True, stdout=None)
+                                shell=True, stdout=None, ok_returncodes=ANTAB_EDITOR_OK_RETURNCODES)
         else:
             utils.shell_command("antab_editor.py",
                                 ["-e", exp.expname.lower(), *assoc_args, "-p", "1", "-f", "..", *assoc_paths],
-                                shell=True, stdout=None)
+                                shell=True, stdout=None, ok_returncodes=ANTAB_EDITOR_OK_RETURNCODES)
 
         if len(missing_antabs := [a.name for a in exp.antennas if not a.antabfsfile]) > 0:
             rprint(f"[red]Note that you are missing ANTAB files from: {', '.join(missing_antabs)}[/red]")
@@ -269,20 +281,30 @@ def run_pipeline(exp) -> bool:
             return False
             
         logger.info(f"Setting the PIPEFITS environment variable to {os.environ.get('PIPEFITS')}")
-        if len(pipepasses) > 1:
-            with ProcessPoolExecutor() as executor:
-                futures = [executor.submit(utils.shell_command, "EVN.py", [f"{exp.expname.lower()}_{i}.inp.txt"], stdout=None) 
-                           for i in range(1, len(pipepasses) + 1)]
-                for i, future in enumerate(futures):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        logger.error(f"Pipeline pass {i+1} failed: {e}")
-                        traceback.print_exc()
-                        return False
-        else:
-            utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=None) #subprocess.PIPE)
+        if len(pipepasses) == 1:
+            utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=None)
+            return True
 
+        # Each pass is pipelined in its own process: an EVN.py run drags a whole AIPS/
+        # ParselTongue session behind it, and a separate interpreter per pass keeps whatever
+        # one of them does to its process state (environment, AIPS user, signal handlers,
+        # working directory) from reaching the others. The workers inherit the working
+        # directory os.chdir just set to pipe_in, which every pass input file name is
+        # relative to. The pool is bounded like every other per-pass pool
+        # (utils.pass_workers), with the I/O ceiling: one heavy subprocess per pass
+        # saturates the disk long before the cores.
+        with ProcessPoolExecutor(utils.pass_workers(len(pipepasses),
+                                                    utils.MAX_PASS_IO_WORKERS)) as executor:
+            futures = [executor.submit(utils.shell_command, "EVN.py",
+                                       [f"{exp.expname.lower()}_{i}.inp.txt"], stdout=None)
+                       for i in range(1, len(pipepasses) + 1)]
+            for i, future in enumerate(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Pipeline pass {i + 1} failed: {e}")
+                    traceback.print_exc()
+                    return False
         return True
     except Exception as e:
         logger.error(f"Unexpected error running pipeline: {e}")

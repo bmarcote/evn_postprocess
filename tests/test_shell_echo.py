@@ -59,3 +59,19 @@ class TestStderrWarningColour:
     def test_without_a_pattern_all_stderr_stays_red(self, tmp_path, monkeypatch, capsys):
         out = self._colours(tmp_path, monkeypatch, capsys, 'Ignoring something', None)
         assert '\033[31m' in out and '\033[33m' not in out
+
+
+class TestOkReturncodes:
+    """A few tools signal something other than failure with a non-zero exit code
+    (antab_editor.py exits 127 when its window is closed)."""
+
+    def test_a_listed_code_is_not_a_failure(self):
+        assert utils.shell_command("(exit 127)", shell=True, ok_returncodes=(127,)) == ''
+
+    def test_the_same_code_still_fails_when_not_listed(self):
+        with pytest.raises(ValueError, match="exited with code 127"):
+            utils.shell_command("(exit 127)", shell=True)
+
+    def test_another_code_still_fails(self):
+        with pytest.raises(ValueError, match="exited with code 1"):
+            utils.shell_command("(exit 1)", shell=True, ok_returncodes=(127,))

@@ -239,8 +239,9 @@ def scale1bit(msfile: str | Path, antenna: str | list[str], undo: bool = False, 
             for ant in antenna:
                 try:
                     antenna_numbers.append(antenna_names.index(ant.upper()))
-                except ValueError:
-                    raise ValueError(f"Antenna '{ant}' not found in MS. Available antennas: {antenna_names}")
+                except ValueError as e:
+                    raise ValueError(f"Antenna '{ant}' not found in MS. "
+                                     f"Available antennas: {antenna_names}") from e
         
         factor_both = 1.0/factor1b1b if undo else factor1b1b
         factor_one = 1.0/factor1b2b if undo else factor1b2b
@@ -298,8 +299,9 @@ def invert_subband(msfile: str | Path, antenna: str | list[str], starttime: dt.d
             for ant in antenna:
                 try:
                     antenna_numbers.append(antenna_names.index(ant.upper()))
-                except ValueError:
-                    raise ValueError(f"Antenna '{ant}' not found in MS. Available antennas: {antenna_names}")
+                except ValueError as e:
+                    raise ValueError(f"Antenna '{ant}' not found in MS. "
+                                     f"Available antennas: {antenna_names}") from e
 
         with misc.table(ms.getkeyword('OBSERVATION')) as ms_obs:
             time_range = (dt.datetime(1858, 11, 17, 0, 0, 2) + 

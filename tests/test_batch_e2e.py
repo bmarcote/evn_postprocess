@@ -113,9 +113,9 @@ def test_no_archive_flag_skips_distribute_step(tmp_path, engine):
     assert all(s.name != 'distribute' for s in exp.steps)
 
 
-def test_archive_alias_still_resolves_to_distribute(tmp_path, engine):
-    exp = make_exp(tmp_path)
-    # The deprecated 'archive' step name maps to 'distribute'.
+def test_archive_alias_still_resolves_to_distribute(engine):
+    # The deprecated 'archive' step name maps to 'distribute'; both are pure name lookups,
+    # so no experiment is needed (the engine fixture resets the shared step list).
     valid, _ = workflow.validate_steps('archive')
     assert valid
     assert workflow._resolve_step_alias('archive') == 'distribute'
