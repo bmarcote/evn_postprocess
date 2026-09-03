@@ -25,6 +25,7 @@ username.
 import abc
 import io
 import json
+import mimetypes
 import os
 import re
 import smtplib
@@ -34,13 +35,30 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
-from email.mime.image import MIMEImage
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from loguru import logger
 from astropy import units as u
 from . import experiment
+
+
+def _mime_type(filepath: Path) -> str:
+    """The MIME type to declare for an attachment, guessed from its name.
+
+    Args:
+        filepath: The file to attach.
+
+    Returns:
+        The guessed type, or 'application/octet-stream' — which every mail client and
+        Mattermost accept as a plain download. Attachments are base64-encoded, which RFC
+        2045 does not allow for a ``message/*`` part (the .eml PI-letter draft), so those
+        are declared as a plain download too.
+    """
+    guessed = mimetypes.guess_type(filepath.name)[0]
+    return guessed if guessed and not guessed.startswith('message/') else 'application/octet-stream'
 
 
 # ---------------------------------------------------------------------------
@@ -197,12 +215,12 @@ class EmailNotifier(Notifier):
         self.config = config
 
     def send_message(self, subject: str, body: str, attachments: list[Path] | None = None) -> bool:
-        """Build and send a MIME multipart email with optional PNG attachments.
+        """Build and send a MIME multipart email with optional file attachments.
 
         Args:
             subject: Email subject line.
             body: Plain-text message body.
-            attachments: Optional list of PNG file paths to embed.
+            attachments: Optional list of files to attach (plots, the PI letter, ...).
 
         Returns:
             True on success, False on failure.
@@ -215,11 +233,14 @@ class EmailNotifier(Notifier):
             msg.attach(MIMEText(body, "plain"))
 
             for filepath in (attachments or []):
-                if filepath.exists() and filepath.suffix == ".png":
-                    with open(filepath, "rb") as fh:
-                        img = MIMEImage(fh.read(), name=filepath.name)
-                    img.add_header("Content-Disposition", "attachment", filename=filepath.name)
-                    msg.attach(img)
+                if not filepath.exists():
+                    continue
+                maintype, _, subtype = _mime_type(filepath).partition('/')
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(filepath.read_bytes())
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", "attachment", filename=filepath.name)
+                msg.attach(part)
 
             with smtplib.SMTP(self.config.smtp_host, self.config.smtp_port) as server:
                 server.starttls()
@@ -303,7 +324,7 @@ class MattermostNotifier(Notifier):
         buf.write(f"{self._channel_id}\r\n".encode())
         buf.write(f"--{boundary}\r\n".encode())
         buf.write(f'Content-Disposition: form-data; name="files"; filename="{filepath.name}"\r\n'.encode())
-        buf.write(b"Content-Type: image/png\r\n\r\n")
+        buf.write(f"Content-Type: {_mime_type(filepath)}\r\n\r\n".encode())
         buf.write(filepath.read_bytes())
         buf.write(f"\r\n--{boundary}--\r\n".encode())
 
@@ -327,7 +348,8 @@ class MattermostNotifier(Notifier):
             subject: Only labels the message in the log; the body carries its own header
                      (see :func:`operator_message`). It is the email subject line.
             body: Markdown body, posted as it is.
-            attachments: Optional PNG files to upload alongside the post.
+            attachments: Optional files to upload alongside the post (plots, the PI letter
+                         as .eml/.html, ...).
 
         Returns:
             True on success, False on failure.
@@ -338,7 +360,7 @@ class MattermostNotifier(Notifier):
 
             file_ids: list[str] = []
             for path in (attachments or []):
-                if path.exists() and path.suffix == ".png":
+                if path.exists():
                     try:
                         file_ids.append(self._upload_file(path))
                     except Exception as exc:

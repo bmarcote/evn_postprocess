@@ -29,10 +29,14 @@ def _link_vixfile(exp) -> None:
     and anyone working in there by hand — can reach it without stepping back out of the
     directory. The link is relative, so it survives the experiment directory being moved.
 
+    The link is named after the *lowercase* experiment name, which is what antab_editor.py
+    looks for; ``exp.vixfile`` is the uppercase name in the experiment root (itself usually
+    a symlink to the lowercase file), so its name cannot simply be reused here.
+
     Never fails the step: a missing vex, or the name already taken in ``antenna_files/``,
     is a warning and nothing more.
     """
-    link = exp.dirs.pipe_temp / exp.vixfile.name
+    link = exp.dirs.pipe_temp / f"{exp.expname.lower()}{exp.vixfile.suffix}"
     if link.is_symlink() and not link.exists():
         logger.warning(f"Replacing dangling symlink {link} (pointed to a missing file).")
         link.unlink()
@@ -269,20 +273,30 @@ def run_pipeline(exp) -> bool:
             return False
             
         logger.info(f"Setting the PIPEFITS environment variable to {os.environ.get('PIPEFITS')}")
-        if len(pipepasses) > 1:
-            with ProcessPoolExecutor() as executor:
-                futures = [executor.submit(utils.shell_command, "EVN.py", [f"{exp.expname.lower()}_{i}.inp.txt"], stdout=None) 
-                           for i in range(1, len(pipepasses) + 1)]
-                for i, future in enumerate(futures):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        logger.error(f"Pipeline pass {i+1} failed: {e}")
-                        traceback.print_exc()
-                        return False
-        else:
-            utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=None) #subprocess.PIPE)
+        if len(pipepasses) == 1:
+            utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=None)
+            return True
 
+        # Each pass is pipelined in its own process: an EVN.py run drags a whole AIPS/
+        # ParselTongue session behind it, and a separate interpreter per pass keeps whatever
+        # one of them does to its process state (environment, AIPS user, signal handlers,
+        # working directory) from reaching the others. The workers inherit the working
+        # directory os.chdir just set to pipe_in, which every pass input file name is
+        # relative to. The pool is bounded like every other per-pass pool
+        # (utils.pass_workers), with the I/O ceiling: one heavy subprocess per pass
+        # saturates the disk long before the cores.
+        with ProcessPoolExecutor(utils.pass_workers(len(pipepasses),
+                                                    utils.MAX_PASS_IO_WORKERS)) as executor:
+            futures = [executor.submit(utils.shell_command, "EVN.py",
+                                       [f"{exp.expname.lower()}_{i}.inp.txt"], stdout=None)
+                       for i in range(1, len(pipepasses) + 1)]
+            for i, future in enumerate(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Pipeline pass {i + 1} failed: {e}")
+                    traceback.print_exc()
+                    return False
         return True
     except Exception as e:
         logger.error(f"Unexpected error running pipeline: {e}")

@@ -1,0 +1,28 @@
+To: {to}
+Cc: {cc}
+Subject: {subject}
+
+Dear {piname},
+
+The data from your EVN project **{expname}** (observed on {obsdate}) are now available to download from the [EVN Data Archive]({archive_url}). The EVN Data Archive gives you access to the FITS-IDI files, the standard diagnostic plots, and the [EVN Pipeline](https://www.evlbi.org/evn-data-processing) plots and products.
+{credentials}
+{passes}
+{remarks}
+{station_remarks}
+## Acknowledgment
+
+Publications that result from your EVN observations should carry the [standard EVN acknowledgment](https://www.evlbi.org/publication)):
+
+> The European VLBI Network is a joint facility of independent European, African, Asian, and North American radio astronomy institutes. Scientific results from data presented in this publication are derived from the following EVN project code: {expcode}.
+{extra_acknowledgments}
+
+## Data reduction and support
+
+To reduce data from the EVN, follow the steps described in the [EVN Data Reduction Guide](https://www.evlbi.org/evn-data-reduction-guide). If you have any feedback or questions, please contact the EVN User Support at <usersupport@jive.eu>, or via [chat in Mattermost](https://www.evlbi.org/article/evn-user-support-now-mattermost).
+
+In general, the original baseband data will become eligible for deletion in two weeks' time, in order to provide room for future EVN observations. If you have a compelling reason for us to retain the baseband data longer (that was not discussed in your proposal), contact JIVE Operations at <jops@jive.eu>.
+
+Best regards,
+
+{supsci}\
+EVN User Support, [JIVE](https://www.jive.eu)

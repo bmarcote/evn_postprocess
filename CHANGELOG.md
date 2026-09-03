@@ -3,6 +3,57 @@
 
 This is the change log for the different production (master) versions of the program.
 
+## Unreleased
+
+Fixed:
+  - `Ms.get_msmetadata()` read the SPECTRAL_WINDOW `TOTAL_BANDWIDTH` column, which is
+    the bandwidth of a *single* subband, and stored it as `FreqSetup.bandwidth`, the
+    *total* one. Everything downstream then divided it by the number of subbands, so
+    EY054 (8 x 32 MHz) was reported as `8 x 4-MHz subbands (32 MHz in total)` instead
+    of `8 x 32-MHz subbands (256 MHz in total)`, and the frequency range was eight
+    times too narrow. The per-subband value is now multiplied by the number of
+    subbands when the setup is read. Note that experiments whose state was stored by
+    an earlier version keep the wrong value until their MS metadata is read again.
+  - `Ms.overview()` printed the bandwidth as `nspw x (bandwidth * nspw) subbands
+    (total bandwidth of bandwidth)`: the two numbers were swapped and the per-subband
+    one was multiplied instead of divided.
+  - The vex symlink placed in `antenna_files/` for `antab_editor.py` carried the name
+    of `exp.vixfile`, which is the *uppercase* `{EXP}.vix` of the experiment root. It is
+    now named after the lowercase experiment (`{exp}.vix`), which is what the editor
+    looks for. The target is unchanged: still relative, still resolved through the root
+    link to the real file.
+  - `piletter._pass_line()` crashed with `KeyError` on every letter: the polarization
+    label was looked up by the *length of the joined string* (`len('RR, LL')` -> 6)
+    rather than by the number of polarizations. An unexpected count now falls back to
+    'mixed' instead of raising.
+
+Changed:
+  - The `-auto-` and `-cross-` standardplots plot against frequency (`pt ampfreq` /
+    `pt anpfreq`) instead of channel number. `Jplot.amp_chan_auto_plot()` and
+    `Jplot.anp_chan_cross_plot()` are renamed to `amp_freq_auto_plot()` and
+    `anp_freq_cross_plot()`.
+  - The PI letter no longer mentions the weight-flagging threshold or the percentage
+    of visibilities it removed: that is post-processing done at JIVE, not a
+    correlation parameter the PI needs to be told about.
+  - The 'Remarks on individual stations' section of the PI letter opens with a bullet
+    listing, comma-separated, the antennas that observed.
+  - A station whose note already says it did not observe no longer also gets the
+    ' (could not observe)' status label ("T6: Did not observe. (could not observe)").
+  - The acknowledgment section of the PI letter is dynamic: an array containing any
+    e-MERLIN out-station (De, Da, Pi, Kn) now carries e-MERLIN's own acknowledgment as a
+    second quote, after the EVN one and introduced by its own sentence. Only the
+    out-stations that observed count, and Jb alone does not trigger it (Jodrell Bank
+    observes with the EVN in its own right). See `piletter.EMERLIN_ANTENNAS`.
+  - The correlation-parameters bullets only name the FITS-IDI files when the
+    experiment has more than one correlator pass: with a single pass there is nothing
+    to tell apart, and the PI sees the file names in the archive anyway.
+  - The plain-text letter (`.piletter`, `.piletter_auth` and the text part of the
+    `.eml`) is no longer hard-wrapped at 78 columns: each paragraph, bullet and quote
+    is one long line, left for the reader's mail client or editor to reflow. The
+    `piletter.TEXT_WIDTH` constant and the `_fill()` helper are gone with it. (The
+    `.eml` still carries quoted-printable soft breaks on the wire, as the mail format
+    requires, but they decode back to the unwrapped paragraph.)
+
 ## Version 3.1 -- robustness pass and the dashboard Progress tab
 
 Fixed:
@@ -57,8 +108,57 @@ Fixed:
     `set_credentials`, `nme_report`, `pipeline_feedback`, `source_classify` and the
     JIVE distributor. FT fringe tests are no longer treated as NMEs, so they get
     archive credentials and source protection like any other experiment.
+  - A station that observed with reduced bandwidth was classified as a `minor` finding
+    ("issues reported" in the dashboard, "(minor issues)" in the PI letter). Observing
+    fewer subbands than the experiment setup is a scheduling choice, not a fault: the
+    status now stays `success` ("no problem") and only the informational note is kept.
+    Reduced bandwidth still shows up in the station summary, the final summary and the
+    dashboard Comments tab, and a station that also missed time is still `minor`.
+  - `pipeline.run_pipeline()` ran the per-pass `EVN.py` in an **unbounded**
+    `ProcessPoolExecutor`: on a multi-phase-centre run with many pipelined passes, that is
+    one AIPS session per pass, all at once. Each pass still gets its own process (an
+    EVN.py run drags a whole AIPS/ParselTongue session behind it, which must not be shared),
+    but the pool is now bounded by `utils.pass_workers()` with the I/O ceiling, like every
+    other per-pass pool. The single-pass case returns early instead of falling through the
+    parallel branch.
+  - `pytest` now runs against the working tree (`pythonpath = ["src"]` in
+    `[tool.pytest.ini_options]`). Without it the suite imported whatever
+    `evn_postprocess` the environment had installed — in the `pyjops` conda env that is a
+    non-editable copy of another checkout — so the tests could silently pass against code
+    that is not the one being edited.
+  - Exceptions re-raised inside an `except` block now chain (`raise ... from e`) in
+    `experiment.py` (VEX parsing, checkpoint loading), `utils.remote_file_exists` and
+    `mstools.operations`, so the original traceback survives in the report. The `ssh`
+    retry loop no longer keeps the timeout in a variable to re-raise it by hand.
+  - The antenna_files vex-link regression test still required the link target to be
+    absolute, while the link has deliberately been relative since it started being
+    recomputed against `antenna_files/` (so the experiment directory can be moved). It now
+    asserts what the regression is actually about — the link resolves from that directory
+    and is not the root link's target — plus the move it was made relative for.
 
 Added:
+  - The **PI letter is generated** from `templates/piletter.md.template` for every
+    experiment, instead of being retrieved and patched in place. It belongs to the JIVE
+    delivery: it lives in `distribution/piletter.py` and is reached through the new
+    `Distributor.prepare_letter()` / `send_letter()` interface, so the modes that archive
+    nowhere (`regular`, `sweeps`) write no letter at all and their review pause does not
+    mention one. `process.update_piletter` / `create_piletter_auth` / `send_letters` are
+    gone from `process.py`. The letter is filled with the experiment metadata (correlation
+    parameters per pass, weight flagging, PolConvert,
+    bandwidth limitations, opacity) and with what the support scientist writes in the
+    dashboard Comments tab, and it is written again before the delivery so the letter
+    that is sent is the reviewed one (the previous version is kept as `.bak`).
+    Four products, all from the same content (`evn_postprocess.distribution.piletter`): the plain-text
+    `{exp}.piletter` (archived, no credentials), `{exp}.piletter_auth` (with them), a
+    styled `{exp}.piletter.html` (hyperlinks everywhere, the EVN acknowledgment in grey
+    italics), and `{exp}.piletter.eml` — a draft that a local mail client opens with the
+    recipients, the subject and the formatting already in place. The archived copy carries
+    no `To:`/`Cc:` header, so the PI's email address is not published with the data.
+  - The finished letter is posted to the operator's chat as Markdown, with the `.eml` and
+    `.html` attached: no mail credentials live in this program, so sending stays a manual
+    step, but nothing has to be retyped. Any file type can now be attached to a comms
+    message (it was limited to `.png` plots).
+
   - **A `verification` step** (new `verification` module), between `prearchive` and
     `distribute`: the last gate before anything leaves the working directory. Three
     read-only checks on the FITS-IDI files that `prearchive` has just written into —
