@@ -11,11 +11,6 @@ from loguru import logger
 import astropy.units as u
 from . import reporting
 
-# The line in the PI letter after which automatic remarks are inserted. Shared
-# single source of truth for process.update_piletter (weight/PolConvert remarks)
-# and distribution.jive._apply_comments_to_letter (review comments).
-PILETTER_REMARKS_ANCHOR = 'Further remarks:'
-
 # Used by format_remote_path to recognise ``{obsdate.strftime('FMT')}`` patterns,
 # with an optional trailing ``.lower()`` / ``.upper()`` method call (used e.g. by the
 # vlbeer path ``{obsdate.strftime('%b%y').lower()}`` to get a lowercase month name).
@@ -274,7 +269,6 @@ def ssh(computer: str, commands: str, shell: bool = False,
     cmd = ["ssh", *_SSH_BASE_OPTS, computer, commands]
     logger.info(f"[bold]> ssh {computer} {commands}[/bold]")
 
-    last_timeout: Optional[subprocess.TimeoutExpired] = None
     for attempt in range(1, DEFAULT_SSH_RETRIES + 2):
         try:
             result = subprocess.run(cmd, shell=shell, stdout=stdout, stderr=stderr,
@@ -287,14 +281,12 @@ def ssh(computer: str, commands: str, shell: bool = False,
             if result.stdout is None:
                 return None
             return result.stdout.decode('utf-8') if isinstance(result.stdout, (bytes, bytearray)) else None
-        except subprocess.TimeoutExpired as exc:
-            last_timeout = exc
+        except subprocess.TimeoutExpired:
             logger.warning(f"ssh timed out after {timeout}s (attempt {attempt}/{DEFAULT_SSH_RETRIES + 1})")
             if attempt <= DEFAULT_SSH_RETRIES:
                 time.sleep(DEFAULT_SSH_BACKOFF_S * attempt)
                 continue
-            assert last_timeout is not None
-            raise last_timeout
+            raise
     return None
 
 
@@ -489,8 +481,9 @@ def remote_file_exists(host: str, path: str | Path,
     try:
         status = subprocess.call(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise ConnectionError(f"SSH to {host} timed out after {timeout}s while checking {path}")
+    except subprocess.TimeoutExpired as e:
+        raise ConnectionError(f"SSH to {host} timed out after {timeout}s "
+                              f"while checking {path}") from e
 
     if status == 0:
         logger.info(f"File {path} in {host} exists.")

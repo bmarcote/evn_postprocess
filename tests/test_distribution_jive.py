@@ -10,26 +10,8 @@ from evn_postprocess import experiment
 from evn_postprocess import experiment_state as es
 from evn_postprocess import workflow
 from evn_postprocess.distribution import DistributionError
-from evn_postprocess.distribution.jive import JiveDistributor, COMMENTS_SENTINEL
+from evn_postprocess.distribution.jive import JiveDistributor
 from evn_postprocess.retrieval import RetrievalError
-
-
-LETTER = '''\
-Dear PI,
-
-your data are ready.
-
-Further remarks:
-
-- Automatic remark already present.
-
-Remarks on individual stations:
-
-Wb:
-Ef:
-
-Best regards,
-'''
 
 
 def make_exp(tmp_path):
@@ -78,68 +60,33 @@ def test_pi_missing_interactive_prompts_and_persists(tmp_path, monkeypatch):
     assert saved.pis[0].name == 'John Smith' and saved.pis[0].email == 'john@inst.edu'
 
 
-# ----------------------------------------------------------- letter injection
+# ------------------------------------------------------------- the PI letter
 
-def test_comments_appended_to_station_lines(tmp_path, monkeypatch):
+def test_comments_land_in_the_generated_letter(tmp_path, monkeypatch):
+    """The letter is regenerated from the template, so the reviewed comments are in it."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / 'eb101.piletter').write_text(LETTER)
     exp = make_exp(tmp_path)
+    exp.antennas.append(experiment.Antenna(name='Wb'))
     exp.exp_toml.record_comments(general='Good observation overall.',
                                  stations={'Wb': es.StationComment('minor', 'Missed one hour.'),
                                            'Ef': es.StationComment('success', '')})
-    assert JiveDistributor()._apply_comments_to_letter(exp) is True
+    exp.exp_toml.save()
+    assert JiveDistributor().prepare_letter(exp) is True
     text = (tmp_path / 'eb101.piletter').read_text()
-    # General note goes after the 'Further remarks:' anchor via the sentinel.
-    assert COMMENTS_SENTINEL in text
-    assert text.index('Further remarks:') < text.index(COMMENTS_SENTINEL)
     assert 'Good observation overall.' in text
-    # Per-station note appended to the matching antenna line, not a separate list.
     assert 'Wb: Missed one hour. (minor issues)' in text
-    assert text.index('Remarks on individual stations:') < text.index('Wb: Missed one hour.')
-    # success + empty note leaves the Ef line untouched.
-    assert 'Ef:\n' in text
+    assert 'Ef' not in text.split('Remarks on individual stations')[1]  # nothing to say
 
 
-def test_reduced_bandwidth_note_not_appended(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / 'eb101.piletter').write_text(LETTER)
-    exp = make_exp(tmp_path)
-    # Wb only has the reduced-bandwidth note (already stated under Further remarks);
-    # Ef has that note plus a real one.
-    exp.exp_toml.record_comments(
-        stations={'Wb': es.StationComment('minor', 'Observed with reduced bandwidth (6/8 subbands).'),
-                  'Ef': es.StationComment('minor',
-                                          'Missed one hour. Observed with reduced bandwidth (6/8 subbands).')})
-    assert JiveDistributor()._apply_comments_to_letter(exp) is True
-    text = (tmp_path / 'eb101.piletter').read_text()
-    assert 'reduced bandwidth' not in text
-    assert 'Wb:\n' in text  # bandwidth-only note dropped, line untouched
-    assert 'Ef: Missed one hour. (minor issues)' in text
-
-
-def test_comments_injection_is_idempotent(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / 'eb101.piletter').write_text(LETTER)
-    exp = make_exp(tmp_path)
-    exp.exp_toml.record_comments(general='Note.')
-    JiveDistributor()._apply_comments_to_letter(exp)
-    JiveDistributor()._apply_comments_to_letter(exp)
-    assert (tmp_path / 'eb101.piletter').read_text().count(COMMENTS_SENTINEL) == 1
-
-
-def test_comments_without_letter_warns_not_raises(tmp_path, monkeypatch):
+def test_letter_failure_is_reported_but_does_not_raise(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     exp = make_exp(tmp_path)
-    exp.exp_toml.record_comments(general='Note.')
-    assert JiveDistributor()._apply_comments_to_letter(exp) is False
 
+    def boom(_exp):
+        raise OSError("disk full")
 
-def test_no_comments_means_untouched_letter(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / 'eb101.piletter').write_text(LETTER)
-    exp = make_exp(tmp_path)
-    assert JiveDistributor()._apply_comments_to_letter(exp) is True
-    assert (tmp_path / 'eb101.piletter').read_text() == LETTER
+    monkeypatch.setattr('evn_postprocess.distribution.piletter.write_letter', boom)
+    assert JiveDistributor().prepare_letter(exp) is False
 
 
 # --------------------------------------------------- .jex source protection & contacts
@@ -236,11 +183,11 @@ def test_deliver_fails_and_warns_when_jex_unrecovered(tmp_path, monkeypatch, cap
     # recovered a manual-protection error is printed at the end AND deliver() returns
     # False so the distribute step is flagged as failed for the operator to resolve.
     monkeypatch.chdir(tmp_path)
-    (tmp_path / 'eb101.piletter').write_text(LETTER)
     monkeypatch.setattr(_FETCH, _raise_retrieval)
     for fn in ('set_credentials', 'protect_experiment_files', 'archive',
-               'send_letters', 'antenna_feedback', 'nme_report'):
+               'antenna_feedback', 'nme_report'):
         monkeypatch.setattr(f'evn_postprocess.process.{fn}', lambda _e: True)
+    monkeypatch.setattr(JiveDistributor, 'send_letter', lambda _self, _e: True)
     monkeypatch.setattr('evn_postprocess.process.print_exp',
                         lambda _e, display_in_terminal=True: True)
     monkeypatch.setattr('evn_postprocess.pipeline.archive', lambda _e: True)

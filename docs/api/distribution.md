@@ -18,3 +18,15 @@ Distribution backends: how the finished experiment is delivered (`jive`, `none`,
       show_root_heading: true
       members_order: source
       show_source: false
+
+## PI letter (`jive`)
+
+Generation of the PI letter from `templates/piletter.md.template` and its renderings
+(plain text, HTML, `.eml` draft), plus the chat delivery. Used only by the `jive`
+backend. See [The PI Letter](../guide/pi-letter.md).
+
+::: evn_postprocess.distribution.piletter
+    options:
+      show_root_heading: true
+      members_order: source
+      show_source: false

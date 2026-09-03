@@ -20,7 +20,6 @@ import datetime as dt
 from pathlib import Path
 
 import astropy.units as u
-import pytest
 from astropy import coordinates as coord
 
 from evn_postprocess import experiment, process

@@ -300,11 +300,13 @@ comment_tasav_file.py '{exp}'   # writes {exp}.tasav.txt and the .comment file
 
 followed by the in-tree Python port of `feedback.pl`
 (`evn_postprocess.feedback` / `pipeline.pipeline_feedback` — no external Perl script
-needed any more). The PI letter is then auto-filled with non-observing antennas and
-PolConvert remarks. **This is the usual review pause**: the terminal and the
-notifier point to `postprocess info --serve` (dashboard: plots, Pipeline tab, and the
-Comments tab) and to the PI letter; answering re-runs from a chosen step, or falls
-through to finalisation.
+needed any more). The distribution backend then writes the
+[PI letter](../guide/pi-letter.md) from its template (`{exp}.piletter` and
+`{exp}.piletter.html`), already carrying the correlation parameters and the automatic
+remarks — in `jive` mode only: the backends that deliver nowhere write no letter. **This is the usual review pause**: the terminal
+and the notifier point to `postprocess info --serve` (dashboard: plots, Pipeline tab,
+and the Comments tab) and to the PI letter; answering re-runs from a chosen step, or
+falls through to finalisation.
 
 ### 15. `prearchive` → `pre_archive`
 
@@ -390,7 +392,9 @@ archive.pl -fits -e {exp}_{YYMMDD} *IDI*
 archive.pl -pipe -e {exp}_{YYMMDD}        # pipeline $IN/$OUT directories
 ```
 
-then the PI letter is sent, the operator is reminded to log station feedback
+then the [PI letter](../guide/pi-letter.md) is generated again (now with the reviewed
+comments and the archive credentials) and posted to the operator's chat as Markdown
+plus an `.eml` draft to send, the operator is reminded to log station feedback
 (`/feedback` in Mattermost + JIVE RedMine), and — for NMEs — reminded to write the
 NME Report. In `regular` mode nothing is archived: `distribute` instead **verifies** the
 expected `*.IDI*` files are present for every correlator pass and reports "ready" (or a
@@ -437,4 +441,4 @@ lists every command; the table mirrors the step-by-step tools described above:
 | `issues` / `nme` | Station-feedback / NME-report reminders |
 | `antab` / `uvflg` / `vlbeer` | `antab_editor.py`, `uvflgall.sh`, retrieval backend |
 | `pyinput` / `pipe` / `comment_tasav` / `feedback` | EVN Pipeline input, `EVN.py`, tasav/comment, feedback page |
-| `piletter` | PI letter auto-fill |
+| `piletter` | PI letter generation, through the distribution backend (`jive` only) |

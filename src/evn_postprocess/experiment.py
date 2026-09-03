@@ -474,7 +474,9 @@ class Subbands:
         - frequencies : array-like
             Reference frequency for each channel and subband (NxM array, with N
             number of subbands, and M number of channels per subband).
-        - bandwidths : astropy.units.Quantity or float
+        - bandwidth : astropy.units.Quantity
+            Total bandwidth of the observation (all subbands together, so the
+            bandwidth of a single subband is `bandwidth / subbands`).
     """
     subbands: int
     channels: int
@@ -715,7 +717,7 @@ class Experiment:
         try:
             vex_data = vex.Vex(self.vixfile)
         except Exception as e:
-            raise RuntimeError(f"Error parsing VEX file {self.vixfile}: {e}")
+            raise RuntimeError(f"Error parsing VEX file {self.vixfile}: {e}") from e
 
         if 'STATION' not in vex_data:
             raise ValueError("VEX file missing STATION section")
@@ -783,7 +785,7 @@ class Experiment:
                                        source=sources_in_scan[0], stations_scheduled=stations_scheduled,
                                        phase_centers=tuple(sources_in_scan) if len(sources_in_scan) > 1 else ()))
         except Exception as e:
-            raise RuntimeError(f"Error processing VEX data: {e}")
+            raise RuntimeError(f"Error processing VEX data: {e}") from e
 
 
     def eEVN_experiments(self) -> list[str]:
@@ -973,13 +975,13 @@ class Experiment:
 
             return Experiment.from_dict(exp_dict)
         except FileNotFoundError as e:
-            raise FileNotFoundError(f"Could not load experiment: {e}")
+            raise FileNotFoundError(f"Could not load experiment: {e}") from e
         except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(f"Invalid JSON in experiment file: {e}", e.doc, e.pos)
+            raise json.JSONDecodeError(f"Invalid JSON in experiment file: {e}", e.doc, e.pos) from e
         except (KeyError, TypeError) as e:
-            raise ValueError(f"Invalid experiment data structure: {e}")
+            raise ValueError(f"Invalid experiment data structure: {e}") from e
         except Exception as e:
-            raise RuntimeError(f"Unexpected error loading experiment: {e}")
+            raise RuntimeError(f"Unexpected error loading experiment: {e}") from e
 
 
     def __repr__(self, *args, **kwargs) -> str:

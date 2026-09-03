@@ -79,6 +79,15 @@ def set_batch_mode(enabled: bool) -> None:
     _BATCH_MODE = bool(enabled)
 
 
+def notifier() -> _comms.Notifier | None:
+    """The notifier configured for this run, or None when comms are not set up.
+
+    Lets the modules that do not own the comms plumbing (e.g. the jive backend posting the
+    PI letter) reach the same notifier the workflow uses.
+    """
+    return _NOTIFIER
+
+
 def is_batch_mode() -> bool:
     """Returns the current batch-mode flag."""
     return _BATCH_MODE
@@ -932,21 +941,51 @@ def run_pipeline(exp: experiment.Experiment) -> bool:
     return _run_pipeline_stage(exp, 'run')
 
 
-def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
-    """Creates diagnostic files after pipeline completion and updates the PI letter.
+def _distributor(exp: experiment.Experiment) -> distribution.Distributor:
+    """The distribution backend of this experiment's mode (jive / none / sweeps)."""
+    return distribution.get_distributor(_backends(exp).distribution)
 
-    Runs comment_tasav, feedback, and then auto-fills the PI letter with:
-    - "Could not observe" for non-participating antennas
-    - PolConvert remarks (if applicable)
-    - Bandwidth limitation notes
-    - Opacity correction notes
+
+def _sends_pi_letter(exp: experiment.Experiment) -> bool:
+    """Whether this experiment's distribution backend writes a letter to the PI at all.
+
+    Only decides whether the review pause mentions the letter, so an unresolvable mode or
+    backend answers "no letter" instead of interrupting the pause.
+    """
+    try:
+        return _distributor(exp).sends_letter
+    except Exception as e:
+        logger.debug(f"Could not tell whether the distribution backend writes a PI letter "
+                     f"({e}); not mentioning it in the review pause.")
+        return False
+
+
+def _prepare_pi_letter(exp: experiment.Experiment) -> bool:
+    """Writes the PI letter through the mode's distribution backend (the `piletter` step).
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        True when the letter was written, or when this backend writes none.
+    """
+    return _distributor(exp).prepare_letter(exp)
+
+
+def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
+    """Creates the diagnostic files after the pipeline, then writes the PI letter.
+
+    Runs comment_tasav and feedback, and asks the distribution backend to prepare the letter
+    to the PI, so the operator can review it during the review pause that follows. Only the
+    backends that deliver to a PI write one (the JIVE delivery does; `none` and `sweeps` do
+    nothing), which is why it goes through the backend and not through a step of its own.
 
     Args:
         exp: Experiment object.
     """
     result = _run_pipeline_stage(exp, 'collect')
     if result:
-        result &= process.update_piletter(exp)
+        result &= _prepare_pi_letter(exp)
 
     # After feedback, re-open the web dashboard so the user can review the pipeline
     # feedback page (shown as a new "Pipeline" tab, on top of the standard plots) in
@@ -1025,7 +1064,7 @@ def archive(exp: experiment.Experiment) -> bool:
     ``sweeps`` (not implemented yet).
     """
     try:
-        return distribution.get_distributor(_backends(exp).distribution).deliver(exp)
+        return _distributor(exp).deliver(exp)
     except distribution.DistributionError as e:
         logger.error(f"Distribution failed: {e}")
         rprint(f"[red]{e}[/red]")
@@ -1087,7 +1126,8 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
                                      "Protect experiment files."),
         'archive-fits':  ExecCommand(process.archive,
                                      "Archive standard plots and FITS-IDI files."),
-        'archive-pilet': ExecCommand(process.send_letters, "Archive the PI letter."),
+        'archive-pilet': ExecCommand(lambda exp: _distributor(exp).send_letter(exp),
+                                     "Archive the PI letter and hand it to the operator."),
         'append':        ExecCommand(process.append_antab,
                                      "Append the Tsys and GC to the FITS-IDI files."),
         'verify':        ExecCommand(verification.verify,
@@ -1113,8 +1153,8 @@ def _build_exec_commands() -> dict[str, ExecCommand]:
                                      "Create the .comment and .tasav files."),
         'feedback':      ExecCommand(pipeline.pipeline_feedback,
                                      "Run the Pipeline Feedback script."),
-        'piletter':      ExecCommand(process.update_piletter,
-                                     "Auto-fill the PI letter (non-observing antennas, PolConvert, etc.)."),
+        'piletter':      ExecCommand(_prepare_pi_letter,
+                                     "Write the PI letter (text, HTML and .eml) from its template."),
     }
 
 
@@ -1531,20 +1571,26 @@ def _review_pause(exp: experiment.Experiment, step: str) -> str | None:
         None to continue with the remaining steps, 'quit' to end the run here, or the
         name of the step to re-run from.
     """
-    piletter = f"{exp.expname.lower()}.piletter"
+    letter = f"{exp.expname.lower()}.piletter"
     open_cmd = f"postprocess -e {exp.expname} info --serve"
     logger.info(f"Paused after '{step}': waiting for the operator to review the results.")
     # Written once, in Markdown, and used for both channels: the terminal panel renders it
     # and the notifier sends it verbatim, so the operator reads the same instructions in
-    # the chat as on the screen.
+    # the chat as on the screen. The PI letter is only there to review in the modes whose
+    # distribution backend writes one.
+    letter_step = (f"2. Review the PI letter (`{letter}`, or `{letter}.html` in a browser): it "
+                   f"is generated from the template with the automatic remarks (non-observing "
+                   f"antennas, PolConvert, bandwidth, opacity) and whatever you write in the "
+                   f"**Comments** tab. Correct it there, not in the file: the letter is "
+                   f"generated again before it is sent.\n"
+                   if _sends_pi_letter(exp) else "")
     needed = (f"1. Open the dashboard: `{open_cmd}` (from `{Path.cwd()}`) and check the "
               f"plots, the Pipeline tab, and fill in the **Comments** tab per station.\n"
-              f"2. Review the PI letter (`{piletter}`). Non-observing antennas and "
-              f"PolConvert remarks have been filled in automatically — verify and edit "
-              f"if needed.\n"
-              f"3. Answer in the terminal where the run is waiting: Enter to finalize and "
-              f"archive, a step name (e.g. `pipeline`) to re-run from it, or `quit` to "
-              f"stop here. With the terminal already gone, `postprocess run` finalizes.")
+              f"{letter_step}"
+              f"{3 if letter_step else 2}. Answer in the terminal where the run is waiting: "
+              f"Enter to finalize and archive, a step name (e.g. `pipeline`) to re-run from "
+              f"it, or `quit` to stop here. With the terminal already gone, `postprocess run` "
+              f"finalizes.")
     Console().print(Panel(Markdown(f"**Please review before continuing:**\n\n{needed}"),
                           title=f"[bold yellow]Paused after '{step}' — results ready "
                                 "for review[/bold yellow]",

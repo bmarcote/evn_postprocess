@@ -11,10 +11,9 @@ import re
 import glob
 import string
 import random
-from typing import Optional, Union
+from typing import Optional
 from pathlib import Path
 from itertools import product
-from collections import defaultdict
 from datetime import datetime, timedelta
 import shutil
 import subprocess
@@ -975,134 +974,6 @@ def flag_weights(exp: experiment.Experiment) -> bool:
     with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
         for fut in [executor.submit(_flag_weights_pass, a_pass) for a_pass in exp.correlator_passes]:
             fut.result()  # Propagate any exceptions
-    return True
-
-
-def update_piletter(exp: experiment.Experiment) -> bool:
-    """Updates the PI letter by changing two things:
-    - Removing the trailing epoch-related character in the experiment name.
-    - Adding the weightthreshold that was used and how much data were flagged.
-    """
-    if exp.correlator_passes[0].flagged_weights is None:
-        weightthreshold: Union[int, float] = -1
-        flaggeddata: Union[int, float] = -1
-    else:
-        weightthreshold = float(exp.correlator_passes[0].flagged_weights.threshold)
-        flaggeddata = float(exp.correlator_passes[0].flagged_weights.percentage)
-
-    polconvert_written = subprocess.call(["grep", "Martí-Vidal,",
-                                          f"{exp.expname.lower()}.piletter"],
-                                         shell=False, stdout=subprocess.PIPE) == 0
-    with open(f"{exp.expname.lower()}.piletter", 'r') as orifile:
-        with open(f"{exp.expname.lower()}.piletter~", 'w') as destfile:
-            for a_line in orifile.readlines():
-                tmp_line = a_line
-                if ('derived from the following EVN project code(s):' in tmp_line) and (exp.expname[-1].isalpha()):
-                    tmp_line = tmp_line.replace(exp.expname, exp.expname[:-1])
-
-                if ('***SuppSci:' not in tmp_line) and ('there is one***' not in tmp_line):
-                    if '***weight cutoff***' in tmp_line:
-                        tmp_line = tmp_line.replace('***weight cutoff***', f"{weightthreshold:.2}")
-
-                    if '***percent flagged***' in tmp_line:
-                        tmp_line = tmp_line.replace('***percent flagged***', f"{flaggeddata:.2}")
-
-                    for ant in exp.correlator_passes[0].antennas:
-                        if (f"{ant.name.capitalize()}:" in tmp_line) and (not ant.observed):
-                            tmp_line = tmp_line.replace(f"{ant.name.capitalize()}:",
-                                                    f"{ant.name.capitalize()}: Could not observe.")
-
-                    destfile.write(tmp_line)
-                    if (utils.PILETTER_REMARKS_ANCHOR in tmp_line) and (not polconvert_written):
-                        # The polconvert paragraph, the bandwidth-limitation paragraph, and
-                        # the opacity paragraph are independent: each may apply on its own.
-                        # Previously the bandwidth and opacity blocks were nested inside
-                        # `if len(polconvert) > 0`, which silently suppressed them whenever
-                        # no antenna required PolConvert.
-                        if len(exp.antennas.polconvert) > 0:
-                            destfile.write("\n")
-                            if len(exp.antennas.polconvert) > 1:
-                                s = f"s {', '.join(exp.antennas.polconvert[:-1])} and {exp.antennas.polconvert[-1]} "
-                            else:
-                                s = f" {exp.antennas.polconvert[0]} "
-
-                            destfile.write(f"- Note that the antenna{s}originally observed linear "
-                                           "polarizations, which were transformed to circular "
-                                           "ones during post-processing via the PolConvert "
-                                           "program (Martí-Vidal, et al. 2016, A&A,587, A143). "
-                                           "Thanks to this correction, you can automatically "
-                                           "recover the absolute EVPA value when using the "
-                                           "antenna as reference station during fringe-fitting.\n")
-
-                        ants_bw: dict[str, list[str]] = {}
-                        first_freqsetup = exp.correlator_passes[0].freqsetup
-                        if any(cp.freqsetup is None for cp in exp.correlator_passes):
-                            logger.warning(f"{exp.expname}: not all correlator passes have a frequency "
-                                           "setup yet; the per-antenna bandwidth-limitation note in the "
-                                           "PI letter may be incomplete.")
-                        if first_freqsetup is not None and len({cp.freqsetup.subbands for cp
-                                in exp.correlator_passes if cp.freqsetup is not None}) == 1:
-                            for antenna in exp.correlator_passes[0].antennas:
-                                if 0 < len(antenna.subbands) < first_freqsetup.subbands:
-                                    # In case the antenna observed a consecutive number of subbands
-                                    ant_sbs = np.array(antenna.subbands)
-                                    ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
-                                    if (ant_sbs[1:] == 1).all():
-                                        ants_bw[antenna.name] = [f"{min(antenna.subbands)+1}-{max(antenna.subbands)+1}"]
-                                    else:
-                                        ants_bw[antenna.name] = [f"{antenna.subbands}"]
-                        else:
-                            for antenna in exp.correlator_passes[0].antennas:
-                                for i,a_pass in enumerate(exp.correlator_passes):
-                                    if a_pass.freqsetup is None:
-                                        continue
-                                    if 0 < len(antenna.subbands) < a_pass.freqsetup.subbands:
-                                        if antenna.name not in ants_bw:
-                                            ant_sbs = np.array(antenna.subbands)
-                                            ant_sbs[1:] = ant_sbs[1:] - ant_sbs[:-1]
-                                            if (ant_sbs[1:] == 1).all():
-                                                ants_bw[antenna.name] = [
-                                                        f"{min(antenna.subbands)+1}-"
-                                                        f"{max(antenna.subbands)+1} "
-                                                        f"(in correlator pass #{i+1})"]
-                                            else:
-                                                ants_bw[antenna.name] = [f"{antenna.subbands} "
-                                                                 f"(in correlator pass #{i+1})"]
-                                        else:
-                                            ants_bw[antenna.name].append( \
-                                                f"{min(antenna.subbands)+1}-" \
-                                                f"{max(antenna.subbands)+1} "
-                                                f"(in correlator pass #{i+1})")
-
-                        if len(ants_bw) > 0:
-                            ants_bw_r = defaultdict(list)
-                            for ant_name in ants_bw:
-                                for sb_range in ants_bw[ant_name]:
-                                    ants_bw_r[sb_range].append(ant_name)
-
-                            s = "- Note that "
-                            for i,ant_r in enumerate(ants_bw_r):
-                                if i == 0:
-                                    s += f"{', '.join(ants_bw_r[ant_r])} only observed subbands {ant_r}, "
-                                elif i== len(ants_bw_r)-1:
-                                    s += f"and {', '.join(ants_bw_r[ant_r])} subbands {ant_r}, "
-                                else:
-                                    s += f"{', '.join(ants_bw_r[ant_r])} subbands {ant_r}, "
-
-                            s += "due to their local bandwidth limitations.\n"
-                            destfile.write(s)
-
-                        if len(exp.antennas.opacity) >= 1:
-                            s = "- Note that the data from the antenna"
-                            s_end = (" have been corrected for opacity in the Tsys/Gain Curve "
-                                     "measurements.\n")
-                            if len(exp.antennas.opacity) > 1:
-                                s += f"s {', '.join(exp.antennas.opacity[:-1])} and {exp.antennas.opacity[-1]}"
-                            else:
-                                s += f" {exp.antennas.opacity[0]}"
-                            destfile.write(s + s_end)
-
-    os.rename(f"{exp.expname.lower()}.piletter~", f"{exp.expname.lower()}.piletter")
     return True
 
 
@@ -2079,85 +1950,6 @@ def append_antab(exp: experiment.Experiment) -> bool:
         logger.error("The Tsys/GC could not be imported into the FITS-IDI files.")
         return False
 
-    return True
-
-
-def create_piletter_auth(exp: experiment.Experiment) -> bool:
-    """Creates a copy of the PI letter with download credentials inserted.
-
-    Copies {expname}.piletter to {expname}.piletter_auth and inserts the
-    archive download credentials as a new paragraph right after the line
-    ending the second paragraph ("...EVN Pipeline plots and products.").
-    Does nothing if no credentials are set.
-
-    Args:
-        exp: Experiment object.
-
-    Returns:
-        True if the file was created or no credentials are set, False on error.
-    """
-    if exp.credentials is None or exp.credentials.password is None:
-        logger.debug("No credentials set; skipping .piletter_auth creation.")
-        return True
-
-    piletter = Path(f"{exp.expname.lower()}.piletter")
-    piletter_auth = Path(f"{exp.expname.lower()}.piletter_auth")
-
-    if not piletter.exists():
-        logger.error(f"{piletter} not found; cannot create {piletter_auth.name}.")
-        return False
-
-    marker = "EVN Pipeline plots and products."
-    credentials_block = (
-        "\nTo access the data, use the following credentials:\n"
-        f"  username: {exp.credentials.username}\n"
-        f"  password: {exp.credentials.password}\n"
-    )
-
-    with open(piletter, 'r') as f:
-        lines = f.readlines()
-
-    inserted = False
-    with open(piletter_auth, 'w') as f:
-        for line in lines:
-            f.write(line)
-            if not inserted and marker in line:
-                f.write(credentials_block)
-                inserted = True
-
-    if not inserted:
-        logger.warning(f"Marker '{marker}' not found in {piletter.name}; "
-                       f"appending credentials at the end of {piletter_auth.name}.")
-        with open(piletter_auth, 'a') as f:
-            f.write(credentials_block)
-
-    logger.info(f"Created {piletter_auth.name} with download credentials.")
-    return True
-
-
-def send_letters(exp: experiment.Experiment) -> bool:
-    """Creates the authenticated PI letter (if needed), archives it, and
-    reminds the user to send it to the PIs.
-
-    Args:
-        exp: Experiment object.
-
-    Returns:
-        True always.
-    """
-    has_auth = exp.credentials is not None and exp.credentials.password is not None
-    if has_auth:
-        if not create_piletter_auth(exp):
-            return False
-
-    utils.shell_command("archive.pl", ["-stnd", "-e", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
-                                       f"{exp.expname.lower()}.piletter"])
-    body = f"[bold]Send[/bold] [bold green]{f"{exp.expname.lower()}.piletter{'_auth' if has_auth else ''}"}[/bold green] [bold]to [/bold]" \
-           f"[bold cyan]{', '.join(p.name for p in exp.pi)}[/bold cyan]: " \
-           f"[bold]{', '.join(p.email for p in exp.pi)}[/bold]" \
-           f"\nAnd CC [cyan]jops@jive.eu[/cyan]"
-    Console().print(Panel(body, title="[bold yellow]Send the PI Letter[/bold yellow]",
-                          border_style="yellow", padding=(1, 2)))
     return True
 
 

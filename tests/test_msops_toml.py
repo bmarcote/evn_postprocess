@@ -10,9 +10,6 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-import pytest
-from astropy import units as u
-from astropy import coordinates as coord
 
 from evn_postprocess import experiment
 from evn_postprocess import experiment_state as es
