@@ -348,6 +348,11 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
 
     Returns:
         bool: True if all lis files are valid.
+
+    Raises:
+        StepFailed: If the .lis files show issues that need a manual fix. The message is
+            the operator-facing summary from `lisfiles.check_lisfiles_report`, so it reaches
+            the terminal, the desktop notification and the chat.
     """
     try:
         if not exp.correlator_passes:
@@ -359,12 +364,19 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
             logger.debug("MS files already exist. Skipping checklis.")
             return True
 
-        if not lisfiles.check_lisfiles(exp):
-            # TODO: In case of e-EVN runs, it needs to do it!
-            logger.error("Issues found in .lis files. Please check the files.")
-            return False
+        # TODO: In case of e-EVN runs, it needs to do it!
+        # The report is a summary (multi-phase-center runs can have dozens of .lis files):
+        # it says which files show skipped scans, duplicated data, or any other error.
+        all_ok, report = lisfiles.check_lisfiles_report(exp)
+        if not all_ok:
+            raise StepFailed(report)
+
+        if len(report) > 0:  # tolerated issues (skipped scans in a multi-phase-center run)
+            logger.warning(report)
 
         return True
+    except StepFailed:
+        raise
     except Exception as e:
         logger.opt(exception=True).error(f"Unexpected error checking the .lis files: {e}")
         return False

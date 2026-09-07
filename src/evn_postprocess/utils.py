@@ -127,6 +127,9 @@ def notify(title: str, body: str = "") -> None:
     # OSC 777 — VTE-based terminals (GNOME Terminal, Tilix, etc.)
 
 
+    # OSC strings end at the BEL below, so a multi-line body (e.g. a step failure summary)
+    # would truncate the sequence and leave the rest as garbage on the terminal: flatten it.
+    title, body = (' '.join(text.split()) for text in (title, body))
     msg = f"{title}: {body}" if body else title
     for seq in (f"\033]9;{msg}\a", f"\033]777;notify;{title};{body}\a"):
         if ("TMUX" in os.environ):

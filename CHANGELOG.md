@@ -48,6 +48,19 @@ Removed:
     the `issues` workflow step, whose only content it was.
 
 Changed:
+  - The `checklis` step now says what is actually wrong with the .lis files, and stops the
+    run through `StepFailed` (so the summary reaches the terminal, the desktop notification
+    and the chat) instead of the bare "Issues found in .lis files. Please check the files.".
+    The raw `checklis.py` output of every correlator pass is classified into skipped scans,
+    duplicated data, and anything else, and reported as one summary per issue — "N .lis
+    file(s): a.lis, b.lis, ..." (truncated after 8 names, since a multi-phase-center run can
+    have dozens of passes) — saying that skipped scans may well be right but have to be
+    double checked manually, that duplicated data MUST be fixed by hand, and asking the
+    operator to verify the .lis file(s). Repeated .lis/MS/FITS-IDI names across passes are
+    reported in the same summary instead of failing on the first one found. A `checklis.py`
+    that cannot run at all is now an explicit error rather than an unexpected exception, and
+    the per-pass output no longer interleaves in the terminal (the passes run in parallel):
+    the full lines go to the debug log.
   - Once antab_editor.py is closed, the run asks in the terminal — behind its own rule and
     panel, like the review pause — whether to go on and run the EVN Pipeline or to stop
     there ("Enter" / "stop"). Stopping raises `StepPaused`, so the run ends cleanly (exit
