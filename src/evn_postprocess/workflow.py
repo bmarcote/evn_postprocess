@@ -370,7 +370,7 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
         # .lis file and the boxed summary of what it found; only the verdict is used here.
         report = lisfiles.run_checklis(exp)
         if not report.all_ok:
-            raise StepFailed(report.headline)
+            raise StepFailed(f"{report.headline} {lisfiles.NEXT_STEPS}")
 
         if len(report.details) > 0:  # tolerated issues (skipped scans in a multi-phase-center run)
             logger.warning(report.headline)
