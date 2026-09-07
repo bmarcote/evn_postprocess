@@ -72,13 +72,15 @@ Runs `checklis.py` on every correlator pass (in parallel, output captured), and 
 that all passes have unique `.lis`/MS/FITS-IDI names. Also extracts the correlator passes
 (`lisfiles.get_passes_from_lisfiles`).
 
-What `checklis.py` reports is classified into **skipped scans**, **duplicated data** and
-**any other error**, and summarised per issue as `N .lis file(s): a.lis, b.lis, ...`
-(truncated after 8 names: a multi-phase-center run can have dozens of passes; the full
-lines go to the debug log). Skipped scans are expected when there is more than one pass,
-so there they are only a warning telling the operator to double check them by hand;
-duplicated data, any other error, and repeated names always stop the step with
-`StepFailed`, whose message reaches the terminal, the desktop notification and the chat.
+`lisfiles.run_checklis` always prints what `checklis.py` returned for every .lis file,
+verbatim and in pass order, and then shows a boxed review of them. The box classifies what
+was reported into **skipped scans**, **duplicated data** and **any other error**, and
+summarises each as `N .lis file(s): a.lis, b.lis, ...` (truncated after 8 names: a
+multi-phase-center run can have dozens of passes). Skipped scans are expected when there is
+more than one pass, so there they are only a warning telling the operator to double check
+them by hand; duplicated data, any other error, and repeated names always stop the step
+with `StepFailed`, whose one-line headline also reaches the desktop notification and the
+chat.
 
 ### 4. `j2ms2` → `create_msfile`
 
