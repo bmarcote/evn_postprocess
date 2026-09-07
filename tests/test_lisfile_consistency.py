@@ -13,6 +13,9 @@ import os
 from evn_postprocess import lisfiles, experiment
 
 
+CLEAN_OUTPUT = "First scan = 1\nLast scan = 100"
+
+
 def clean_checklis_results(number_of_passes: int) -> list:
     """Return value of the parallel checklis run when no .lis file reports any issue.
 
@@ -20,9 +23,11 @@ def clean_checklis_results(number_of_passes: int) -> list:
         number_of_passes (int): How many correlator passes were checked.
 
     Returns:
-        list: One (lisfile name, issues) tuple per pass, with every issue list empty.
+        list: One (lisfile name, raw output, issues) tuple per pass, with every issue list
+        empty.
     """
-    return [(f"pass{i}.lis", {'duplicated': [], 'skipping': [], 'other': []}) for i in range(number_of_passes)]
+    return [(f"pass{i}.lis", CLEAN_OUTPUT, {'duplicated': [], 'skipping': [], 'other': []})
+            for i in range(number_of_passes)]
 
 
 
@@ -203,7 +208,8 @@ class TestLisFileConsistency:
             
             with patch('evn_postprocess.lisfiles.ThreadPoolExecutor') as mock_executor:
                 mock_executor.return_value.__enter__.return_value.map.return_value = \
-                [("testexp1.lis", {'duplicated': [], 'skipping': [], 'other': ["Error: Missing scan 50"]})] \
+                [("testexp1.lis", "First scan = 1\nError: Missing scan 50\nLast scan = 100",
+                  {'duplicated': [], 'skipping': [], 'other': ["Error: Missing scan 50"]})] \
                 + clean_checklis_results(1)
                 
                 result = lisfiles.check_lisfiles(self.mock_exp)
@@ -358,16 +364,33 @@ def checklis_outputs(outputs: dict):
     return run
 
 
-class TestCheckLisfilesReport:
-    """Test suite for the operator-facing summary of the checklis results."""
+class TestRunChecklis:
+    """Test suite for the operator-facing result of running checklis on every pass."""
 
     def test_no_issues_reports_nothing(self):
         exp = make_exp([make_pass("testexp1"), make_pass("testexp2")])
         with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs({})):
-            all_ok, message = lisfiles.check_lisfiles_report(exp)
+            report = lisfiles.run_checklis(exp)
 
-        assert all_ok is True
-        assert message == ''
+        assert report.all_ok is True
+        assert report.details == ''
+        assert "passed checklis" in report.headline
+
+    def test_raw_checklis_output_is_always_printed(self, capsys):
+        """The operator must always see what checklis returned, one block per .lis file."""
+        exp = make_exp([make_pass("testexp1"), make_pass("testexp2")])
+        outputs = {"testexp1.lis": "First scan = 1\nLast scan = 42",
+                   "testexp2.lis": "First scan = 1\n**** Skipped scan no 34\nLast scan = 100"}
+        with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs(outputs)):
+            lisfiles.run_checklis(exp)
+
+        printed = capsys.readouterr().out
+        assert "checklis.py testexp1.lis" in printed
+        assert "Last scan = 42" in printed
+        assert "checklis.py testexp2.lis" in printed
+        assert "**** Skipped scan no 34" in printed
+        # ... and the summary comes after the raw output of every .lis file.
+        assert printed.index("**** Skipped scan no 34") < printed.index("skipped scans")
 
     def test_skipped_scans_tolerated_in_multi_phase_center(self):
         """Several passes: skipped scans are expected, so they only warn (all_ok stays True)."""
@@ -375,51 +398,53 @@ class TestCheckLisfilesReport:
         skipped = "First scan = 1\n**** Skipped scan no 34\nLast scan = 100"
         outputs = {"testexp1.lis": skipped, "testexp3.lis": skipped}
         with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs(outputs)):
-            all_ok, message = lisfiles.check_lisfiles_report(exp)
+            report = lisfiles.run_checklis(exp)
 
-        assert all_ok is True
-        assert "skipped scans" in message
-        assert "double check them manually" in message
-        assert "2 .lis file(s): testexp1.lis, testexp3.lis" in message
-        assert "Please verify the .lis file(s) to see if they are OK" in message
+        assert report.all_ok is True
+        assert "skipped scans" in report.details
+        assert "double check the file(s) manually" in report.details
+        assert "2 .lis file(s): testexp1.lis, testexp3.lis" in report.details
+        assert "Please verify the .lis file(s) to see if they are OK" in report.headline
 
     def test_skipped_scans_fail_in_single_pass_experiment(self):
         exp = make_exp([make_pass("testexp1")])
         outputs = {"testexp1.lis": "First scan = 1\n**** Skipped scan no 34\nLast scan = 100"}
         with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs(outputs)):
-            all_ok, message = lisfiles.check_lisfiles_report(exp)
+            report = lisfiles.run_checklis(exp)
 
-        assert all_ok is False
-        assert "skipped scans" in message
+        assert report.all_ok is False
+        assert "skipped scans" in report.details
+        assert "skipped scans in 1 .lis file(s)" in report.headline
 
     def test_duplicated_data_always_fails(self):
         exp = make_exp([make_pass("testexp1"), make_pass("testexp2")])
         outputs = {"testexp2.lis": "First scan = 1\nDuplicated data for scan 12\nLast scan = 100"}
         with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs(outputs)):
-            all_ok, message = lisfiles.check_lisfiles_report(exp)
+            report = lisfiles.run_checklis(exp)
 
-        assert all_ok is False
-        assert "duplicated data" in message
-        assert "MUST be fixed manually" in message
-        assert "1 .lis file(s): testexp2.lis" in message
+        assert report.all_ok is False
+        assert "duplicated data" in report.details
+        assert "MUST be fixed manually" in report.details
+        assert "1 .lis file(s): testexp2.lis" in report.details
+        assert "Please verify the .lis file(s) to see if they are OK" in report.headline
 
     def test_other_errors_are_treated_as_errors(self):
         exp = make_exp([make_pass("testexp1"), make_pass("testexp2")])
         outputs = {"testexp1.lis": "First scan = 1\nNo scans in the .lis file\nLast scan = 100"}
         with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs(outputs)):
-            all_ok, message = lisfiles.check_lisfiles_report(exp)
+            report = lisfiles.run_checklis(exp)
 
-        assert all_ok is False
-        assert "other errors" in message
+        assert report.all_ok is False
+        assert "other errors" in report.details
 
     def test_checklis_failure_is_reported_as_an_error(self):
         """A checklis.py that cannot even run must never be silently ignored."""
         exp = make_exp([make_pass("testexp1")])
         with patch('evn_postprocess.utils.shell_command', side_effect=ValueError("command not found")):
-            all_ok, message = lisfiles.check_lisfiles_report(exp)
+            report = lisfiles.run_checklis(exp)
 
-        assert all_ok is False
-        assert "other errors" in message
+        assert report.all_ok is False
+        assert "other errors" in report.details
 
     def test_many_lisfiles_are_summarized(self):
         """Multi-phase-center runs can have dozens of passes: the list of names is truncated."""
@@ -428,21 +453,21 @@ class TestCheckLisfilesReport:
         duplicated = "First scan = 1\nDuplicated data for scan 12\nLast scan = 100"
         outputs = {a_pass.lisfile.name: duplicated for a_pass in passes}
         with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs(outputs)):
-            all_ok, message = lisfiles.check_lisfiles_report(exp)
+            report = lisfiles.run_checklis(exp)
 
-        assert all_ok is False
-        assert "20 .lis file(s)" in message
-        assert f"(+{20 - lisfiles._MAX_LISFILES_LISTED} more)" in message
+        assert report.all_ok is False
+        assert "20 .lis file(s)" in report.details
+        assert f"(+{20 - lisfiles._MAX_LISFILES_LISTED} more)" in report.details
 
     def test_repeated_msfile_names_are_reported(self):
         exp = make_exp([make_pass("testexp1"), make_pass("testexp2")])
         exp.correlator_passes[1].msfile = Path("testexp1.ms")
         with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs({})):
-            all_ok, message = lisfiles.check_lisfiles_report(exp)
+            report = lisfiles.run_checklis(exp)
 
-        assert all_ok is False
-        assert "repeated MS names" in message
-        assert "testexp1.ms" in message
+        assert report.all_ok is False
+        assert "repeated MS names" in report.details
+        assert "testexp1.ms" in report.details
 
     def test_classify_checklis_output(self):
         issues = lisfiles._classify_checklis_output("First scan = 1\n**** Skipped scan no 3\n"

@@ -351,8 +351,9 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
 
     Raises:
         StepFailed: If the .lis files show issues that need a manual fix. The message is
-            the operator-facing summary from `lisfiles.check_lisfiles_report`, so it reaches
-            the terminal, the desktop notification and the chat.
+            the one-line headline from `lisfiles.run_checklis`, so it reaches the terminal,
+            the desktop notification and the chat (the details are already on screen, in
+            the boxed summary).
     """
     try:
         if not exp.correlator_passes:
@@ -365,14 +366,14 @@ def check_lisfiles(exp: experiment.Experiment) -> bool:
             return True
 
         # TODO: In case of e-EVN runs, it needs to do it!
-        # The report is a summary (multi-phase-center runs can have dozens of .lis files):
-        # it says which files show skipped scans, duplicated data, or any other error.
-        all_ok, report = lisfiles.check_lisfiles_report(exp)
-        if not all_ok:
-            raise StepFailed(report)
+        # run_checklis already showed the operator the raw checklis.py output of every
+        # .lis file and the boxed summary of what it found; only the verdict is used here.
+        report = lisfiles.run_checklis(exp)
+        if not report.all_ok:
+            raise StepFailed(report.headline)
 
-        if len(report) > 0:  # tolerated issues (skipped scans in a multi-phase-center run)
-            logger.warning(report)
+        if len(report.details) > 0:  # tolerated issues (skipped scans in a multi-phase-center run)
+            logger.warning(report.headline)
 
         return True
     except StepFailed:
