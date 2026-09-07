@@ -50,7 +50,10 @@ def _backends(exp: experiment.Experiment) -> _mode.Backends:
     """
     return _mode.backends_for(exp.mode if exp.mode is not None else _mode.detect())
 
-_RICH_TAG_RE = re.compile(r'\[/?[\w\s#.,;:!?=-]+\]')
+# Rich markup tags, to strip from the plain-text log. The first character after the optional
+# '/' must be a letter or '#', exactly as Rich itself requires, so that interpolated Python
+# lists survive: the looser '[\w...]' this used to be also ate every "IFs=[1, 2, 3]".
+_RICH_TAG_RE = re.compile(r'\[/?[a-zA-Z#][\w\s#.,;:!?=-]*\]')
 _stdout_console = Console(highlight=False)
 _stderr_console = Console(stderr=True, highlight=False)
 

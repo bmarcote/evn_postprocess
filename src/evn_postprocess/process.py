@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import glob
+import shlex
 import string
 import random
 from typing import Optional
@@ -26,6 +27,7 @@ from rich import progress
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from . import experiment, utils, mstools
 from . import lisfiles
+from . import reporting
 from . import plotting
 # polconvert_main kept for future use once version compatibility is resolved.
 # from .scripts.polconvert import main as polconvert_main
@@ -63,10 +65,12 @@ _TCONVERT_PROGRESS_MIN_PASSES: int = 5
 # _TCONVERT_BIN = "tConvert"  # This will be the one to use once we certify the following one works
 _TCONVERT_BIN = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert"
 
-# It occasionally crashes with a segmentation fault; because it runs in a subprocess,
-# a crash returns a negative exit code instead of killing post-processing, so the same
-# attempt is simply retried up to this many extra times before moving on.
-_POLCONVERT_SEGFAULT_RETRIES: int = 3
+# PolConvert nearly always dies in its own teardown ("double free or corruption",
+# "malloc(): invalid next size", or the PyQt5 libqsvgicon.so symbol lookup error) *after* it
+# has computed and written the solution, so its exit code says nothing about whether it
+# worked: an attempt is judged by the files it left behind (see _fringe_peak_ratios). Only a
+# run that died before writing a complete result is retried, up to this many extra times.
+_POLCONVERT_RETRIES: int = 3
 
 # A converted solution is accepted when, in every IF, the parallel-to-cross fringe-peak
 # amplitude ratio (RR+LL)/(RL+LR) on the reference baseline exceeds this value. A failed/linear
@@ -83,12 +87,23 @@ _POLCONVERT_SOLVE_MIN_SNR: float = 3.0
 # A scan must last longer than this for the trim to leave a usable range.
 _POLCONVERT_TRIM_MIN: int = 1
 
-# Parameter space of the search, tried in this nesting order for each (scan, time range). It is
-# deliberately small: the previous search also looped over every candidate reference antenna and
-# took hours to give up when no solution existed.
-_POLCONVERT_DOWEIGHTS: tuple[float, ...] = (0.1, 0.01, 0.001)
+# Reference antennas tried per scan, strongest fringe first. Two rather than one because the
+# solutions found by hand on ES123D and ES123F used the runner-up, and rather than all of them
+# because looping over every candidate is what used to make a hopeless search take hours.
+_POLCONVERT_MAX_REFANTS: int = 2
+
+# Parameter space of the search, tried in this nesting order for each (scan, refant, time
+# range). The doweights are ordered by how often they produced the solutions found by hand;
+# 0.0001 (ES123D, RS005A) and 1 (EY054) are last because they are needed only rarely.
+_POLCONVERT_DOWEIGHTS: tuple[float, ...] = (0.1, 0.01, 0.001, 0.0001, 1.0)
 _POLCONVERT_TIMEAVGS_S: tuple[int, ...] = (10, 20, 30, 60)
 _POLCONVERT_CHANAVGS: tuple[int, ...] = (8, 16, 32)
+
+# Ceiling on the whole search, so widening it above cannot turn a hopeless run into an
+# overnight one: the full space is 3 time ranges x 2 refants x 60 parameter sets per scan,
+# and one attempt costs ~30-60 s. The combinations are ordered best-first, so the cap only
+# ever cuts into the least likely tail.
+_POLCONVERT_MAX_ATTEMPTS: int = 150
 
 
 def archive(exp: experiment.Experiment) -> bool:
@@ -1167,10 +1182,12 @@ def _aips_timerange(start: datetime, end: datetime, obsdate) -> list[int]:
 def _polconvert_time_ranges(scan: experiment.Scan, obsdate) -> list[list[int]]:
     """Tentative time ranges to solve the PolConvert bandpass on, best-first, for one scan.
 
-    Both candidates drop the first minute of the scan, where antennas are frequently still
-    settling: first the last minute alone (short, and the most stable part of the scan), then
-    everything after that first minute. A scan no longer than the trim cannot give either, so
-    it contributes its full range unchanged.
+    All three candidates avoid the first minute of the scan, where antennas are frequently
+    still settling: the last minute alone (short, and the most stable part of the scan), then
+    the minute around the middle of the scan (the part several of the solutions found by hand
+    used, and the one that avoids antennas slewing away early), then everything after that
+    first minute. On a short scan these collapse into each other, so duplicates are dropped;
+    a scan no longer than the trim contributes its full range unchanged.
 
     Args:
         scan: Scan object (starttime + duration_s as scheduled in the vex).
@@ -1184,8 +1201,11 @@ def _polconvert_time_ranges(scan: experiment.Scan, obsdate) -> list[list[int]]:
     end = scan.starttime + timedelta(seconds=scan.duration_s)
     if scan.duration_s <= trim.total_seconds():
         return [_aips_timerange(start, end, obsdate)]
-    return [_aips_timerange(end - trim, end, obsdate),
-            _aips_timerange(start + trim, end, obsdate)]
+    middle = start + (end - start) / 2
+    ranges = [_aips_timerange(end - trim, end, obsdate),
+              _aips_timerange(middle - trim / 2, middle + trim / 2, obsdate),
+              _aips_timerange(start + trim, end, obsdate)]
+    return [list(r) for r in dict.fromkeys(tuple(r) for r in ranges)]
 
 
 def _pc_ants(names) -> list[str]:
@@ -1342,14 +1362,15 @@ def _refant_bandpass_scatter(exp: experiment.Experiment, ant: str, scan_key: str
     return float(np.std(arr) / mean) if mean > 0 else float('inf')
 
 
-def _polconvert_refant(exp: experiment.Experiment, lin_ants: list[str], subbands: set[int],
-                       scan_key: str) -> Optional[str]:
-    """Reference antenna for the PolConvert solve: the strongest fringe on the solve scan.
+def _polconvert_refants(exp: experiment.Experiment, lin_ants: list[str], subbands: set[int],
+                        scan_key: str) -> list[str]:
+    """Reference antennas for the PolConvert solve, strongest fringe on the solve scan first.
 
     A candidate must be (1) observed, (2) NOT one of the linear antennas being converted (the
-    conversion cannot reference itself), and (3) cover every IF that has to be converted. The
-    candidate with the highest lag SNR on this scan wins; the experiment ``refant`` order breaks
-    ties and decides on its own when no lag data is available.
+    conversion cannot reference itself), and (3) cover every IF that has to be converted. They
+    are ranked by their lag SNR on this scan; the experiment ``refant`` order breaks ties and
+    decides on its own when no lag data is available. At most ``_POLCONVERT_MAX_REFANTS`` are
+    returned, so the second one is a fallback rather than the start of a long sweep.
 
     Args:
         exp: Experiment object.
@@ -1358,15 +1379,14 @@ def _polconvert_refant(exp: experiment.Experiment, lin_ants: list[str], subbands
         scan_key: MS scan number of the solve scan, as a string.
 
     Returns:
-        The reference antenna name, or None when no antenna qualifies.
+        The reference antenna names to try, best first; empty when no antenna qualifies.
     """
     candidates = [a.name for a in exp.antennas
                   if a.observed and a.name not in lin_ants and subbands.issubset(set(a.subbands))]
-    if not candidates:
-        return None
     priority = {name: i for i, name in enumerate(exp.refant or [])}
-    return max(candidates, key=lambda a: (_ant_scan_snr(exp, a, scan_key),
-                                          -priority.get(a, len(priority))))
+    candidates.sort(key=lambda a: (_ant_scan_snr(exp, a, scan_key),
+                                   -priority.get(a, len(priority))), reverse=True)
+    return candidates[:_POLCONVERT_MAX_REFANTS]
 
 
 def _polconvert_solve_scans(exp: experiment.Experiment, lin_ants: list[str]) -> list[experiment.Scan]:
@@ -1439,22 +1459,33 @@ def _polconvert_exclude_ants(exp: experiment.Experiment, lin_ants: list[str], re
     return sorted(set(exclude))
 
 
-def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
-    """Whether the PolConvert FRINGE.PEAKS indicate a good conversion.
+def _fringe_peak_ratios(logdir: str, n_ifs: int) -> list[float]:
+    """Per-IF ``(RR+LL)/(RL+LR)`` of a finished ``--compute``, or ``[]`` if it did not finish.
 
-    Each ``FRINGE.PEAKS_*.dat`` (one per IF) lists the normalized fringe-peak amplitude of RR,
-    LL, RL and LR on the reference baseline. A real conversion concentrates power in the
-    parallel hands, so we require ``(RR+LL)/(RL+LR) >= _POLCONVERT_MIN_RATIO`` in every IF; a
-    failed/linear solution leaves the four products comparable (ratio ~1).
+    Each ``FRINGE.PEAKS_IF*_SCAN_*.dat`` (one per converted IF) lists the normalized
+    fringe-peak amplitude of RR, LL, RL and LR on the reference baseline. A real conversion
+    concentrates power in the parallel hands; a failed/linear solution leaves the four
+    products comparable (ratio ~1).
+
+    This is what says whether an attempt ran, because PolConvert's exit code does not: it
+    almost always dies in its own teardown after writing everything. A run counts as finished
+    only when it left the complete set that it writes at the very end -- the gains file plus
+    one readable peaks file per IF -- so a crash halfway through cannot be mistaken for a
+    solution that merely converted badly.
+
+    Args:
+        logdir: The log folder given to PolConvert.
+        n_ifs: Number of IFs the attempt was asked to convert.
+
+    Returns:
+        One ratio per IF, in file order, or an empty list when the run left no full result.
     """
     peaks_dir = Path(logdir) / 'FRINGE.PEAKS'
-    dat_files = sorted(peaks_dir.glob('*.dat')) if peaks_dir.exists() else []
-    if not dat_files:
-        logger.warning(f"No FRINGE.PEAKS/*.dat files in {logdir}; cannot assess the solution.")
-        return False
+    if not (Path(logdir) / 'polconvert.gains').exists() or not peaks_dir.exists():
+        return []
 
     ratios: list[float] = []
-    for dat_file in dat_files:
+    for dat_file in sorted(peaks_dir.glob('FRINGE.PEAKS_IF*_SCAN_*.dat')):
         content = dat_file.read_text()  # read once, searched per polarization
         a = {pol: float(m.group(1)) for pol in ('RR', 'LL', 'RL', 'LR')
              if (m := re.search(rf'{pol}:\s*([\d.eE+-]+)\s*;', content))}
@@ -1463,32 +1494,30 @@ def _check_fringe_peaks(logdir: str = 'polconvert_logs') -> bool:
         cross = a['RL'] + a['LR']
         ratios.append((a['RR'] + a['LL']) / cross if cross > 0 else float('inf'))
 
-    if not ratios:
-        logger.warning("Could not parse any FRINGE.PEAKS amplitudes.")
-        return False
-
-    worst = min(ratios)
-    logger.info(f"PolConvert (RR+LL)/(RL+LR) per IF: min={worst:.1f}, "
-                f"median={float(np.median(ratios)):.1f} (need >= {_POLCONVERT_MIN_RATIO} in every IF).")
-    return worst >= _POLCONVERT_MIN_RATIO
+    return ratios if len(ratios) == n_ifs else []
 
 
 # PolConvert plots through matplotlib, whose default backend on this machine is 'qtagg'.
 # Loading it pulls in a PyQt5 Qt5 plugin that dies with "symbol lookup error: ...
-# libqsvgicon.so: undefined symbol: _ZdlPvm" and takes the interpreter down with it (rc=127)
-# before any solving happens — so the run looks like a failed solution when in fact nothing
-# was ever computed. The post-processing is headless anyway, so the child runs on the
-# non-interactive Agg backend, which still writes the PNGs PolConvert produces.
+# libqsvgicon.so: undefined symbol: _ZdlPvm" and takes the interpreter down with it (rc=127).
+# The post-processing is headless anyway, so the child runs on the non-interactive Agg
+# backend, which still writes the PNGs PolConvert produces and keeps Qt out of the process.
+# It does not make the child exit cleanly — PolConvert then aborts on its own corrupted heap
+# instead — which is why nothing here reads the exit code.
 _POLCONVERT_ENV: dict[str, str] = {'MPLBACKEND': 'Agg'}
 
 
 def _run_polconvert_cli(template_file: Path, mode: str) -> int:
-    """Run ``polconvert.py <template> <mode>`` in a child process, retrying transient segfaults.
+    """Run ``polconvert.py <template> <mode>`` once, in a child process.
 
-    Deliberately a child process rather than an in-process import. PolConvert segfaults often
-    (which is why the retries exist), and a SIGSEGV cannot be held by ``try``/``except``: it
+    Deliberately a child process rather than an in-process import. PolConvert corrupts its own
+    heap and dies of it, and a SIGSEGV/SIGABRT cannot be held by ``try``/``except``: it
     terminates the interpreter, so in-process it would take the whole post-processing down
-    with it. Isolated in a child, the very same crash is only a negative return code to retry.
+    with it. Isolated in a child, the very same crash is only a return code.
+
+    That return code is reported but never acted on: the crash happens in the teardown that
+    follows a completed run, so it marks good solutions as failures. What the run left on disk
+    is the verdict (:func:`_fringe_peak_ratios`, :func:`_polconvert_apply`).
 
     The child's stdout/stderr are inherited rather than captured, so its progress — and the
     fringe-SNR table it prints when it finishes — is visible as it runs instead of surfacing
@@ -1496,24 +1525,72 @@ def _run_polconvert_cli(template_file: Path, mode: str) -> int:
     log directory regardless.
 
     Returns:
-        The final exit code (0 on success).
+        The child's exit code, for logging only (negative when a signal killed it).
     """
-    attempts = _POLCONVERT_SEGFAULT_RETRIES + 1
-    rc = 1
-    for attempt in range(1, attempts + 1):
-        result = subprocess.run(['polconvert.py', str(template_file), mode],
-                                env={**os.environ, **_POLCONVERT_ENV})
-        rc = result.returncode
-        if rc == 0:
-            return 0
-        if rc < 0:  # killed by a signal (e.g. -11 = SIGSEGV): transient, retry
-            logger.warning(f"polconvert.py {mode} crashed (signal {-rc}) "
-                           f"[attempt {attempt}/{attempts}]; retrying.")
-            continue
-        logger.warning(f"polconvert.py {mode} failed (rc={rc}); its output is above, and in "
-                       f"the PolConvert log of this attempt.")
-        break
-    return rc
+    return subprocess.run(['polconvert.py', str(template_file), mode],
+                          env={**os.environ, **_POLCONVERT_ENV}).returncode
+
+
+def _record_polconvert_command(template_file: Path, mode: str) -> None:
+    """Records one ``polconvert.py`` invocation in ``logs/commands.sh``.
+
+    Called once per outcome rather than once per launch: the search overwrites the same input
+    file on every attempt, so recording all of them would fill the runbook with hundreds of
+    identical lines pointing at a file that no longer holds those parameters. Recorded when a
+    combination is accepted, and once when the search gives up — in both cases the file left
+    on disk is the one the recorded command would read.
+    """
+    reporting.record_command(shlex.join(['polconvert.py', str(template_file), mode]))
+
+
+def _polconvert_compute(template_file: Path, logdir: str, n_ifs: int) -> list[float]:
+    """Solve one PolConvert combination and return its per-IF fringe-peak ratios.
+
+    Retries only a run that died before writing a complete solution — the crashes that happen
+    mid-solve are transient, while the far more common teardown crash leaves everything on
+    disk and needs no retry at all.
+
+    Args:
+        template_file: The input TOML written for this combination.
+        logdir: The log folder PolConvert writes into.
+        n_ifs: Number of IFs being converted.
+
+    Returns:
+        One ratio per IF, or an empty list when no attempt produced a complete solution.
+    """
+    for attempt in range(1, _POLCONVERT_RETRIES + 2):
+        rc = _run_polconvert_cli(template_file, '--compute')
+        if ratios := _fringe_peak_ratios(logdir, n_ifs):
+            return ratios
+        logger.warning(f"PolConvert wrote no complete solution for the {n_ifs} IFs (it exited "
+                       f"{rc}) [attempt {attempt}/{_POLCONVERT_RETRIES + 1}].")
+        # It never reached the summary it prints on its own; render whatever fringe SNRs it
+        # did manage to write, so a crash still says something.
+        _log_fringe_snr_table(logdir)
+    logger.warning("PolConvert died before writing a solution every time with these "
+                   "parameters; trying the next combination.")
+    return []
+
+
+def _polconvert_apply(template_file: Path, idi_files: list[str]) -> bool:
+    """Apply an accepted solution to every FITS-IDI file, judged by the files it produces.
+
+    Args:
+        template_file: The input TOML of the accepted combination.
+        idi_files: The FITS-IDI files that must come out converted.
+
+    Returns:
+        True once every file has its ``.PCONVERT`` counterpart, False if some never appear.
+    """
+    for attempt in range(1, _POLCONVERT_RETRIES + 2):
+        rc = _run_polconvert_cli(template_file, '--apply')
+        missing = [f for f in idi_files if not Path(f + '.PCONVERT').exists()]
+        if not missing:
+            return True
+        logger.warning(f"PolConvert did not convert {len(missing)} of {len(idi_files)} FITS-IDI "
+                       f"files (it exited {rc}) [attempt {attempt}/{_POLCONVERT_RETRIES + 1}]: "
+                       f"{', '.join(missing)}.")
+    return False
 
 
 def _log_fringe_snr_table(logdir: str) -> None:
@@ -1539,22 +1616,24 @@ def polconvert(exp: experiment.Experiment) -> bool:
     """Run PolConvert locally, auto-selecting the scan, time range and reference antenna.
 
     Linear-polarization antennas (``exp.antennas.polconvert``) are converted to circular. The
-    search is deliberately narrow, so that failing to converge costs minutes rather than hours:
+    search is bounded (``_POLCONVERT_MAX_ATTEMPTS``) and ordered best-first:
 
       * scans: fringe-finder scans where a linear antenna actually shows a strong fringe,
         falling back to the phase calibrators (:func:`_polconvert_solve_scans`);
-      * time ranges: two per scan, the last minute and everything after the first minute
-        (:func:`_polconvert_time_ranges`);
-      * reference antenna: one per scan, the circular full-band antenna with the strongest
-        fringe (:func:`_polconvert_refant`), with weak / partial-band antennas excluded from
-        the solve (:func:`_polconvert_exclude_ants`);
+      * reference antenna: the two circular full-band antennas with the strongest fringe
+        (:func:`_polconvert_refants`), with weak / partial-band antennas excluded from the
+        solve (:func:`_polconvert_exclude_ants`);
+      * time ranges: up to three per scan, the last minute, the middle minute and everything
+        after the first minute (:func:`_polconvert_time_ranges`);
       * solution parameters: ``doweight`` x time averaging x channel averaging
         (``_POLCONVERT_DOWEIGHTS`` x ``_POLCONVERT_TIMEAVGS_S`` x ``_POLCONVERT_CHANAVGS``).
 
-    Each combination runs ``polconvert.py --compute`` (retrying transient segfaults) and is
-    accepted on the FRINGE.PEAKS ``(RR+LL)/(RL+LR)`` ratio per IF. The first accepted solution
-    is applied to every FITS-IDI file with ``--apply``; otherwise the search moves on to the
-    next parameter set, then the next time range, then the next scan.
+    Each combination runs ``polconvert.py --compute`` and is judged by what it wrote, never by
+    its exit code (see :func:`_run_polconvert_cli`): a complete solution is accepted when the
+    FRINGE.PEAKS ``(RR+LL)/(RL+LR)`` ratio reaches ``_POLCONVERT_MIN_RATIO`` in *every* IF. The
+    first accepted solution is applied to every FITS-IDI file with ``--apply``; otherwise the
+    search moves on to the next parameter set, then the next time range, then the next
+    reference antenna, then the next scan.
 
     Args:
         exp: Experiment object.
@@ -1592,70 +1671,85 @@ def polconvert(exp: experiment.Experiment) -> bool:
     tried = 0
     for scan in scans:
         scan_key = str(_scan_number(scan))
-        refant = _polconvert_refant(exp, lin_ants, subbands, scan_key)
-        if refant is None:
+        refants = _polconvert_refants(exp, lin_ants, subbands, scan_key)
+        if not refants:
             logger.warning(f"No circular reference antenna covers all IFs on scan {scan.scanno}.")
             continue
 
-        exclude_ants = _polconvert_exclude_ants(exp, lin_ants, refant, subbands, scan_key)
-        scatter = _refant_bandpass_scatter(exp, refant, scan_key, sorted(subbands))
         n_det, snr_sum = _scan_lag_score(exp, scan)
-        logger.info(f"PolConvert: scan {scan.scanno} on {scan.source} ({n_det} antennas detected, "
-                    f"SNR sum {snr_sum}); linants={_pc_ants(lin_ants)}, refant={refant.upper()} "
-                    f"(SNR {_ant_scan_snr(exp, refant, scan_key):.1f}, bandpass scatter {scatter:.3f}), "
-                    f"exclude={_pc_ants(exclude_ants)}, IFs={do_ifs}.")
+        for refant in refants:
+            exclude_ants = _polconvert_exclude_ants(exp, lin_ants, refant, subbands, scan_key)
+            scatter = _refant_bandpass_scatter(exp, refant, scan_key, sorted(subbands))
+            logger.info(f"PolConvert: scan {scan.scanno} on {scan.source} ({n_det} antennas "
+                        f"detected, SNR sum {snr_sum}); linants={_pc_ants(lin_ants)}, "
+                        f"refant={refant.upper()} (SNR {_ant_scan_snr(exp, refant, scan_key):.1f}, "
+                        f"bandpass scatter {scatter:.3f}), exclude={_pc_ants(exclude_ants)}, "
+                        f"IFs={do_ifs}.")
 
-        for time_range in _polconvert_time_ranges(scan, exp.obsdate):
-            ref_idi = find_idi_mod.find_idi_with_time(idi_files=idi_files, aipstime=time_range[:4],
-                                                      verbose=False)
-            if ref_idi is None:
-                logger.debug(f"No FITS-IDI covers {time_range[:4]} on scan {scan.scanno}; skipping.")
-                continue
-
-            for solve_weight, time_avg, chan_avg in product(_POLCONVERT_DOWEIGHTS, _POLCONVERT_TIMEAVGS_S,
-                                                            _POLCONVERT_CHANAVGS):
-                template_file = _write_polconvert_template(exp, ref_idi, lin_ants, refant, exclude_ants,
-                                                           do_ifs, time_range, time_avg=time_avg,
-                                                           chan_avg=chan_avg, solve_weight=solve_weight,
-                                                           logdir=logdir)
-                tried += 1
-                # Every attempt says what it is trying before it runs: a search that ends
-                # without converging is otherwise a single failure line with no record of the
-                # combinations it went through, or of which one came closest.
-                logger.info(f"PolConvert --compute [attempt {tried}]: scan {scan.scanno} "
-                            f"({scan.source}), {_aips_timerange_str(time_range)}, "
-                            f"refant={refant.upper()}, linants={_pc_ants(lin_ants)}, "
-                            f"exclude={_pc_ants(exclude_ants)}, IFs={do_ifs}, ref_idi={ref_idi}, "
-                            f"doweight={solve_weight}, timeavg={time_avg}s, chanavg={chan_avg}.")
-
-                if _run_polconvert_cli(template_file, '--compute') != 0:
-                    # Trying second time as Ivan's code failes every other time due to mem issues...
-                    if _run_polconvert_cli(template_file, '--compute') != 0:
-                        # It never reached the summary it prints on its own; render whatever
-                        # fringe SNRs it did manage to write, so a crash still says something.
-                        _log_fringe_snr_table(logdir)
-                        continue
-
-                if not _check_fringe_peaks(logdir):
-                    logger.info(f"Scan {scan.scanno} {_aips_timerange_str(time_range)}: no good "
-                                f"solution with doweight={solve_weight}, timeavg={time_avg}s, "
-                                f"chanavg={chan_avg}; trying the next combination.")
+            for time_range in _polconvert_time_ranges(scan, exp.obsdate):
+                ref_idi = find_idi_mod.find_idi_with_time(idi_files=idi_files,
+                                                          aipstime=time_range[:4], verbose=False)
+                if ref_idi is None:
+                    logger.debug(f"No FITS-IDI covers {time_range[:4]} on scan {scan.scanno}; skipping.")
                     continue
 
-                logger.info(f"Good PolConvert solution: scan {scan.scanno}, refant "
-                            f"{refant.upper()}, time range {_aips_timerange_str(time_range)}, "
-                            f"doweight={solve_weight}, timeavg={time_avg}s, chanavg={chan_avg}. "
-                            "Applying it to all FITS-IDI files.")
-                if _run_polconvert_cli(template_file, '--apply') != 0:
-                    if _run_polconvert_cli(template_file, '--apply') != 0:
-                        logger.error("PolConvert --apply failed after a good --compute. Stopping.")
+                for solve_weight, time_avg, chan_avg in product(_POLCONVERT_DOWEIGHTS,
+                                                                _POLCONVERT_TIMEAVGS_S,
+                                                                _POLCONVERT_CHANAVGS):
+                    if tried >= _POLCONVERT_MAX_ATTEMPTS:
+                        _record_polconvert_command(Path('polconvert_inputs.toml'), '--compute')
+                        logger.error(f"PolConvert reached its budget of {_POLCONVERT_MAX_ATTEMPTS} "
+                                     f"attempts without a good solution. Inspect {logdir}, adjust "
+                                     "polconvert_inputs.toml, and run it manually.")
                         return False
 
-                exp.store()
-                return True
+                    template_file = _write_polconvert_template(exp, ref_idi, lin_ants, refant,
+                                                               exclude_ants, do_ifs, time_range,
+                                                               time_avg=time_avg, chan_avg=chan_avg,
+                                                               solve_weight=solve_weight, logdir=logdir)
+                    tried += 1
+                    # Every attempt says what it is trying before it runs: a search that ends
+                    # without converging is otherwise a single failure line with no record of the
+                    # combinations it went through, or of which one came closest.
+                    logger.info(f"PolConvert --compute [attempt {tried}]: scan {scan.scanno} "
+                                f"({scan.source}), {_aips_timerange_str(time_range)}, "
+                                f"refant={refant.upper()}, linants={_pc_ants(lin_ants)}, "
+                                f"exclude={_pc_ants(exclude_ants)}, IFs={do_ifs}, ref_idi={ref_idi}, "
+                                f"doweight={solve_weight}, timeavg={time_avg}s, chanavg={chan_avg}.")
 
+                    ratios = _polconvert_compute(template_file, logdir, len(do_ifs))
+                    if not ratios:
+                        continue
+
+                    worst = min(ratios)
+                    logger.info(f"PolConvert (RR+LL)/(RL+LR) per IF: min={worst:.1f}, "
+                                f"median={float(np.median(ratios)):.1f} "
+                                f"(need >= {_POLCONVERT_MIN_RATIO} in every IF).")
+                    if worst < _POLCONVERT_MIN_RATIO:
+                        logger.info(f"Scan {scan.scanno} {_aips_timerange_str(time_range)}: no good "
+                                    f"solution with doweight={solve_weight}, timeavg={time_avg}s, "
+                                    f"chanavg={chan_avg}; trying the next combination.")
+                        continue
+
+                    logger.info(f"Good PolConvert solution: scan {scan.scanno}, refant "
+                                f"{refant.upper()}, time range {_aips_timerange_str(time_range)}, "
+                                f"doweight={solve_weight}, timeavg={time_avg}s, chanavg={chan_avg}. "
+                                "Applying it to all FITS-IDI files.")
+                    _record_polconvert_command(template_file, '--compute')
+                    _record_polconvert_command(template_file, '--apply')
+                    if not _polconvert_apply(template_file, idi_files):
+                        logger.error("PolConvert --apply left FITS-IDI files unconverted after a "
+                                     "good --compute. Stopping.")
+                        return False
+
+                    exp.store()
+                    return True
+
+    if tried:
+        _record_polconvert_command(Path('polconvert_inputs.toml'), '--compute')
     logger.error(f"PolConvert could not reach a good solution after {tried} attempt(s) over "
-                 f"{len(scans)} scan(s). Inspect {logdir} or run it manually.")
+                 f"{len(scans)} scan(s). Inspect {logdir}, adjust polconvert_inputs.toml, "
+                 "and run it manually.")
     return False
 
 
