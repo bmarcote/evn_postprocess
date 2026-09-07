@@ -76,11 +76,16 @@ that all passes have unique `.lis`/MS/FITS-IDI names. Also extracts the correlat
 verbatim and in pass order, and then shows a boxed review of them. The box classifies what
 was reported into **skipped scans**, **duplicated data** and **any other error**, and
 summarises each as `N .lis file(s): a.lis, b.lis, ...` (truncated after 8 names: a
-multi-phase-center run can have dozens of passes). Skipped scans are expected when there is
-more than one pass, so there they are only a warning telling the operator to double check
-them by hand; duplicated data, any other error, and repeated names always stop the step
-with `StepFailed`, whose one-line headline also reaches the desktop notification and the
-chat.
+multi-phase-center run can have dozens of passes).
+
+Skipped scans get their own wording ("Only skipped scans were reported ... This may well be
+right, but please verify ..."), never the "issues found" one. They are expected when there
+is more than one pass, and there they are only a warning; with a single pass they stop the
+step so the operator can look at them. Duplicated data, any other error, and repeated names
+always stop it. Whenever the step stops (`StepFailed`, whose one-line headline also reaches
+the desktop notification and the chat), the box says what to do next: fix the `.lis` file(s)
+and run `postprocess run` to check them again, or run `postprocess run j2ms2` to accept them
+as they are and continue.
 
 ### 4. `j2ms2` → `create_msfile`
 
