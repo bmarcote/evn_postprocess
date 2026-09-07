@@ -42,6 +42,13 @@ from .. import experiment, experiment_state, review
 
 TEMPLATE_NAME = 'piletter.md.template'
 
+<<<<<<< HEAD
+=======
+# What the per-station status adds to the station's line in the letter (the note itself is
+# written by the support scientist in the dashboard).
+STATUS_LABELS = {'minor': ' (minor issues)', 'major': ' (could not observe)', 'success': ''}
+
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
 # The e-MERLIN out-stations. When any of them is in the array the PI owes e-MERLIN its own
 # acknowledgment on top of the EVN one. Jb is deliberately not here: Jodrell Bank observes
 # with the EVN in its own right, and its presence alone does not make it an e-MERLIN run.
@@ -56,6 +63,14 @@ EMERLIN_ACKNOWLEDGMENT = ("e-MERLIN is a National Facility operated by the Unive
 # produced by review.default_station_comments.
 _BANDWIDTH_NOTE_RE = re.compile(r"\s*Observed with reduced bandwidth\s*\([^)]*\)\.?", re.IGNORECASE)
 
+<<<<<<< HEAD
+=======
+# A note that already says the station did not (or could not) observe makes the 'major'
+# STATUS_LABELS suffix a repetition ("Did not observe. (could not observe)"), so the suffix
+# is left out for it.
+_NO_OBSERVE_NOTE_RE = re.compile(r"(did|could)\s+not\s+observe", re.IGNORECASE)
+
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
 # The inline Markdown forms, in one pass so nothing is processed twice (an URL inside a
 # [text](url) link must not be auto-linked again, and no escaping can eat the markup).
 _INLINE_RE = re.compile(r"\[(?P<ltext>[^\]]+)\]\((?P<lurl>[^)\s]+)\)"
@@ -329,10 +344,15 @@ def _station_remarks_block(exp: experiment.Experiment) -> str:
     The first bullet always names the antennas that did observe, so the PI can see the array
     at a glance. After it, one bullet per station with a note: the reduced-bandwidth sentence
     is stripped from every note (it is already written once, for all affected antennas, in the
+<<<<<<< HEAD
     general remarks). The note itself is the whole message: the traffic-light status the
     support scientist set in the dashboard is for us, and adding it to the letter as
     '(minor issues)' / '(could not observe)' only restates in jargon what the note already
     says in words.
+=======
+    general remarks) and the status adds its label, unless the note already says as much (a
+    station that did not observe is not also labelled '(could not observe)').
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
 
     Args:
         exp: Experiment object.
@@ -343,9 +363,19 @@ def _station_remarks_block(exp: experiment.Experiment) -> str:
     lines = []
     if (observed := _observing_antennas(exp)):
         lines.append(f"- **Antennas that observed**: {', '.join(observed)}.")
+<<<<<<< HEAD
     for name, (_status, note) in sorted(station_entries(exp).items()):
         if (text := _BANDWIDTH_NOTE_RE.sub('', note).strip()):
             lines.append(f"- **{name}**: {text}")
+=======
+    for name, (status, note) in sorted(station_entries(exp).items()):
+        text = _BANDWIDTH_NOTE_RE.sub('', note).strip()
+        if text:
+            label = STATUS_LABELS.get(status, '')
+            if status == 'major' and _NO_OBSERVE_NOTE_RE.search(text):
+                label = ''   # the note already says it: no ' (could not observe)' on top
+            lines.append(f"- **{name}**: {text}{label}")
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
     return _block("Remarks on individual stations", '\n'.join(lines))
 
 
@@ -447,6 +477,7 @@ def build(exp: experiment.Experiment, with_credentials: bool = True,
         '{supsci}': exp.supsci.capitalize() if exp.supsci else 'EVN User Support',
     }
     text = _template_text()
+<<<<<<< HEAD
     # Checked on the template, and dropped from it, *before* anything is substituted in: a
     # comment written in the dashboard may legitimately contain braces, and only the template
     # can have a typo'd (or, after a partial upgrade, a not-yet-implemented) placeholder.
@@ -457,6 +488,13 @@ def build(exp: experiment.Experiment, with_credentials: bool = True,
                        f"template and this module are probably out of step.")
         for placeholder in unknown:
             text = text.replace(placeholder, '')
+=======
+    # Checked on the template, not on the result: a comment written in the dashboard may
+    # legitimately contain braces, and only the template can have a typo'd placeholder.
+    if (unknown := set(re.findall(r"\{[a-z_]+\}", text)) - replacements.keys()):
+        logger.warning(f"The PI letter template has placeholders nothing fills: "
+                       f"{', '.join(sorted(unknown))}.")
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
     for placeholder, value in replacements.items():
         text = text.replace(placeholder, value)
     headers, body = _split_headers(re.sub(r"\n{3,}", "\n\n", text))
@@ -650,6 +688,7 @@ def render_html(letter: Letter) -> str:
 def render_eml(letter: Letter) -> bytes:
     """The letter as an ``.eml`` draft: headers, plain text, and the HTML alternative.
 
+<<<<<<< HEAD
     Opening the file in a local mail client gives a message with the recipients, the subject
     and the formatted body already in place. Whether it opens *editable* is up to the client:
     ``X-Unsent: 1`` is an Outlook-for-Windows convention (and it is written first, which is
@@ -657,6 +696,11 @@ def render_eml(letter: Letter) -> bytes:
     ignore it and show the file as a message to read, from which the operator sends the
     letter with 'Edit as New Message' / 'Forward'. No ``From`` or ``Date`` header is written,
     so nothing marks the file as already sent either.
+=======
+    Opening the file in a local mail client (Thunderbird, Outlook, Apple Mail) gives a message
+    with the recipients, the subject and the formatted body already in place. ``X-Unsent``
+    tells the clients that honour it to open it as a draft rather than as received mail.
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
 
     Args:
         letter: The letter to render.
@@ -665,9 +709,15 @@ def render_eml(letter: Letter) -> bytes:
         The .eml file content.
     """
     message = EmailMessage()
+<<<<<<< HEAD
     message['X-Unsent'] = '1'
     for key, value in letter.headers.items():
         message[key] = value
+=======
+    for key, value in letter.headers.items():
+        message[key] = value
+    message['X-Unsent'] = '1'
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
     message.set_content(render_text(letter, headers=False))
     message.add_alternative(render_html(letter), subtype='html')
     # A fixed MIME boundary (the default is random): regenerating an unchanged letter must

@@ -74,7 +74,11 @@ def test_comments_land_in_the_generated_letter(tmp_path, monkeypatch):
     assert JiveDistributor().prepare_letter(exp) is True
     text = (tmp_path / 'eb101.piletter').read_text()
     assert 'Good observation overall.' in text
+<<<<<<< HEAD
     assert 'Wb: Missed one hour.' in text and 'minor issues' not in text
+=======
+    assert 'Wb: Missed one hour. (minor issues)' in text
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
     assert 'Ef' not in text.split('Remarks on individual stations')[1]  # nothing to say
 
 
@@ -184,7 +188,12 @@ def test_deliver_fails_and_warns_when_jex_unrecovered(tmp_path, monkeypatch, cap
     # False so the distribute step is flagged as failed for the operator to resolve.
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(_FETCH, _raise_retrieval)
+<<<<<<< HEAD
     for fn in ('set_credentials', 'protect_experiment_files', 'archive', 'nme_report'):
+=======
+    for fn in ('set_credentials', 'protect_experiment_files', 'archive',
+               'antenna_feedback', 'nme_report'):
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
         monkeypatch.setattr(f'evn_postprocess.process.{fn}', lambda _e: True)
     monkeypatch.setattr(JiveDistributor, 'send_letter', lambda _self, _e: True)
     monkeypatch.setattr('evn_postprocess.process.print_exp',

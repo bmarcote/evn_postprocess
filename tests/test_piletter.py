@@ -101,6 +101,7 @@ def test_automatic_remarks_cover_polconvert_bandwidth_and_opacity(tmp_path, monk
     assert 'antenna Ys have been corrected for opacity' in body
 
 
+<<<<<<< HEAD
 def test_a_placeholder_nothing_fills_never_reaches_the_letter(tmp_path, monkeypatch):
     """A template ahead of this module (a half-finished upgrade) must not send the PI a
     letter with a literal '{...}' in it: the placeholder is dropped and a warning logged."""
@@ -120,6 +121,8 @@ def test_braces_written_in_the_dashboard_survive(tmp_path, monkeypatch):
     assert 'Flagged the {bad_scan} range by hand.' in piletter.build(exp).body
 
 
+=======
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
 def test_emerlin_stations_add_their_own_acknowledgment(tmp_path, monkeypatch):
     """An array with e-MERLIN out-stations owes e-MERLIN an acknowledgment of its own."""
     monkeypatch.chdir(tmp_path)
@@ -146,11 +149,19 @@ def test_dashboard_comments_reach_the_letter(tmp_path, monkeypatch):
                             'Ys': es.StationComment('success', '')})
     body = piletter.build(exp).body
     assert '- Everything went well.' in body
+<<<<<<< HEAD
     # The note is the whole message: the dashboard status never reaches the letter.
     assert '- **Ef**: Maser problems for one hour.\n' in body
     assert '**Ys**' not in body                    # reviewed, nothing to say: not listed
     assert '- **Tr**: Did not observe.' in body    # automatic finding
     assert 'minor issues' not in body and 'could not observe' not in body
+=======
+    assert '- **Ef**: Maser problems for one hour. (minor issues)' in body
+    assert '**Ys**' not in body                    # reviewed, nothing to say: not listed
+    # Automatic finding. The status label is left out: the note already says as much.
+    assert '- **Tr**: Did not observe.' in body
+    assert 'could not observe' not in body
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
 
 
 def test_station_remarks_open_with_the_antennas_that_observed(tmp_path, monkeypatch):
@@ -162,6 +173,7 @@ def test_station_remarks_open_with_the_antennas_that_observed(tmp_path, monkeypa
     assert 'Tr' not in remarks.splitlines()[1]      # Tr did not observe: not in the list
 
 
+<<<<<<< HEAD
 def test_the_dashboard_status_never_reaches_the_letter(tmp_path, monkeypatch):
     """The traffic-light status is ours; the PI reads the note, whatever the status is."""
     monkeypatch.chdir(tmp_path)
@@ -171,6 +183,17 @@ def test_the_dashboard_status_never_reaches_the_letter(tmp_path, monkeypatch):
         body = piletter.build(exp).body
         assert '- **Tr**: Receiver broken.\n' in body
         assert 'minor issues' not in body and 'could not observe' not in body
+=======
+def test_the_did_not_observe_note_is_not_labelled_twice(tmp_path, monkeypatch):
+    """'Did not observe.' already says it: no ' (could not observe)' on top of it."""
+    monkeypatch.chdir(tmp_path)
+    exp = make_exp(tmp_path)
+    save_comments(exp, stations={'Tr': es.StationComment('major', 'Did not observe.')})
+    assert '- **Tr**: Did not observe.\n' in piletter.build(exp).body
+    # A 'major' note that does not say it itself still gets the label.
+    save_comments(exp, stations={'Tr': es.StationComment('major', 'Receiver broken.')})
+    assert '- **Tr**: Receiver broken. (could not observe)' in piletter.build(exp).body
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
 
 
 def test_station_comments_are_reread_from_disk(tmp_path, monkeypatch):
@@ -192,7 +215,11 @@ def test_reduced_bandwidth_sentence_is_not_repeated_per_station(tmp_path, monkey
         'Wb': es.StationComment('success', 'Observed with reduced bandwidth (2/4 subbands).'),
         'Ef': es.StationComment('minor', 'Missed one hour. Observed with reduced bandwidth (2/4 subbands).')})
     body = piletter.build(exp).body
+<<<<<<< HEAD
     assert '- **Ef**: Missed one hour.\n' in body
+=======
+    assert '- **Ef**: Missed one hour. (minor issues)' in body
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
     assert '**Wb**' not in body                     # only the bandwidth sentence: nothing left
     assert body.count('reduced bandwidth') == 0
 

@@ -81,6 +81,7 @@ class TestLinkVixfile:
         exp.vixfile.unlink()
         pipeline._link_vixfile(exp)  # must not raise
         assert not (exp.dirs.pipe_temp / 'es124.vix').exists()
+<<<<<<< HEAD
 
 
 class TestAntabEditorExitCode:
@@ -113,3 +114,5 @@ class TestAntabEditorExitCode:
         exp.antennas = []
         with pytest.raises(ValueError, match="exited with code 1"):
             pipeline.run_antab_editor(exp)
+=======
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
