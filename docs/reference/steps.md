@@ -394,12 +394,7 @@ archive.pl -pipe -e {exp}_{YYMMDD}        # pipeline $IN/$OUT directories
 
 then the [PI letter](../guide/pi-letter.md) is generated again (now with the reviewed
 comments and the archive credentials) and posted to the operator's chat as Markdown
-<<<<<<< HEAD
 plus an `.eml` draft to send, and — for NMEs — the operator is reminded to write the
-=======
-plus an `.eml` draft to send, the operator is reminded to log station feedback
-(`/feedback` in Mattermost + JIVE RedMine), and — for NMEs — reminded to write the
->>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
 NME Report. In `regular` mode nothing is archived: `distribute` instead **verifies** the
 expected `*.IDI*` files are present for every correlator pass and reports "ready" (or a
 hard error naming what is missing), contacting no server.

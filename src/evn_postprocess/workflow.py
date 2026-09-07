@@ -1730,7 +1730,6 @@ def _review_pause(exp: experiment.Experiment, step: str) -> str | None:
                    f"**Comments** tab. Correct it there, not in the file: the letter is "
                    f"generated again before it is sent.\n"
                    if _sends_pi_letter(exp) else "")
-<<<<<<< HEAD
     options = '\n'.join(f"    - `{key}` — {help_text}" for key, help_text in _review_options(step))
     review_items = (f"1. Open the dashboard: `{open_cmd}` (from `{Path.cwd()}`) and check the "
                     f"plots, the Pipeline tab, and fill in the **Comments** tab per station.\n"
@@ -1764,24 +1763,6 @@ def _review_pause(exp: experiment.Experiment, step: str) -> str | None:
                                f"The `{step}` step finished and the results are ready for your "
                                f"review; the post-processing waits until you answer.",
                                needed, _NOTIFIER)
-=======
-    needed = (f"1. Open the dashboard: `{open_cmd}` (from `{Path.cwd()}`) and check the "
-              f"plots, the Pipeline tab, and fill in the **Comments** tab per station.\n"
-              f"{letter_step}"
-              f"{3 if letter_step else 2}. Answer in the terminal where the run is waiting: "
-              f"Enter to finalize and archive, a step name (e.g. `pipeline`) to re-run from "
-              f"it, or `quit` to stop here. With the terminal already gone, `postprocess run` "
-              f"finalizes.")
-    Console().print(Panel(Markdown(f"**Please review before continuing:**\n\n{needed}"),
-                          title=f"[bold yellow]Paused after '{step}' — results ready "
-                                "for review[/bold yellow]",
-                          border_style="yellow", padding=(1, 2)))
-    utils.notify(f"{exp.expname} post-processing", f"Paused after '{step}' — review the results")
-    _comms.notify_operator(exp, f"paused after '{step}'",
-                           f"The `{step}` step finished and the results are ready for your "
-                           f"review; the post-processing waits until you answer.",
-                           needed, _NOTIFIER)
->>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
     if _BATCH_MODE:
         _write_review_flag(exp, step,
                            f"Review the dashboard ({open_cmd}) and the PI letter, then resume "
