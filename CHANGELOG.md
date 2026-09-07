@@ -17,7 +17,6 @@ Fixed:
   - `Ms.overview()` printed the bandwidth as `nspw x (bandwidth * nspw) subbands
     (total bandwidth of bandwidth)`: the two numbers were swapped and the per-subband
     one was multiplied instead of divided.
-<<<<<<< HEAD
   - `verification.check_multipart()` failed the whole `verification` step on any
     experiment whose FITS-IDI was not split. `tConvert` only appends a sequence number
     when it has to write several chunks, so a pass below `chunk_size` becomes a single
@@ -32,8 +31,6 @@ Fixed:
     `{extra_acknowledgments}`. Unfilled placeholders are now removed from the template
     before anything is substituted into it — before, so a dashboard comment that happens to
     contain braces is still passed through untouched.
-=======
->>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
   - The vex symlink placed in `antenna_files/` for `antab_editor.py` carried the name
     of `exp.vixfile`, which is the *uppercase* `{EXP}.vix` of the experiment root. It is
     now named after the lowercase experiment (`{exp}.vix`), which is what the editor
@@ -44,7 +41,6 @@ Fixed:
     rather than by the number of polarizations. An unexpected count now falls back to
     'mixed' instead of raising.
 
-<<<<<<< HEAD
 Removed:
   - The "Station Feedback" panel printed at the end of a run ("Update the database with
     observed issues: /feedback in Mattermost, JIVE RedMine"). With it go
@@ -81,9 +77,6 @@ Changed:
     closes it themselves, so they are sitting in front of the prompt and both are noise. The
     terminal announcement is unchanged, and both still go out in batch mode and when the
     pause follows any other step.
-=======
-Changed:
->>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
   - The `-auto-` and `-cross-` standardplots plot against frequency (`pt ampfreq` /
     `pt anpfreq`) instead of channel number. `Jplot.amp_chan_auto_plot()` and
     `Jplot.anp_chan_cross_plot()` are renamed to `amp_freq_auto_plot()` and
@@ -93,16 +86,11 @@ Changed:
     correlation parameter the PI needs to be told about.
   - The 'Remarks on individual stations' section of the PI letter opens with a bullet
     listing, comma-separated, the antennas that observed.
-<<<<<<< HEAD
   - The per-station lines of the PI letter no longer carry the dashboard's traffic-light
     status as a suffix: neither ' (minor issues)' nor ' (could not observe)'. The note the
     support scientist wrote is the whole message — the status is ours to triage with, and
     restating it in jargon only repeats what the note already says in words. The
     `piletter.STATUS_LABELS` mapping is gone with it.
-=======
-  - A station whose note already says it did not observe no longer also gets the
-    ' (could not observe)' status label ("T6: Did not observe. (could not observe)").
->>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
   - The acknowledgment section of the PI letter is dynamic: an array containing any
     e-MERLIN out-station (De, Da, Pi, Kn) now carries e-MERLIN's own acknowledgment as a
     second quote, after the EVN one and introduced by its own sentence. Only the

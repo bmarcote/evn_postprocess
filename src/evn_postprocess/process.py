@@ -2045,28 +2045,6 @@ def append_antab(exp: experiment.Experiment) -> bool:
     return True
 
 
-<<<<<<< HEAD
-=======
-def antenna_feedback(exp: experiment.Experiment) -> bool:
-    """Reminds the user to report antenna issues via Mattermost and RedMine.
-
-    Args:
-        exp: Experiment object.
-
-    Returns:
-        True always.
-    """
-    body = ("[bold]Update the database with observed issues:[/bold]\n\n"
-            "  1. Type [bold cyan]/feedback[/bold cyan] in Mattermost to bookkeep antenna issues.\n"
-            "  2. Update JIVE RedMine:\n"
-            "     [link=https://jrm.jive.nl/projects/science-support/news]"
-            "https://jrm.jive.nl/projects/science-support/news[/link]")
-    Console().print(Panel(body, title="[bold yellow]Station Feedback[/bold yellow]",
-                          border_style="yellow", padding=(1, 2)))
-    return True
-
-
->>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
 def nme_report(exp: experiment.Experiment) -> bool:
     """Reminds the user to write the NME report if applicable.
 
