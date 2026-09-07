@@ -4,9 +4,10 @@ Covers the helpers that replaced the old "most scheduled stations" heuristic:
   * _scan_lag_score / _rank_fringefinder_scans   (scan picked by real lag SNR),
   * _polconvert_solve_scans                      (fringe-finders with a fringe on the linear
                                                  antenna, else the phase calibrators),
-  * _polconvert_time_ranges                      (last minute / scan minus its first minute),
-  * _polconvert_refant                           (reference = non-linear, full-IF, strongest),
-  * _polconvert_exclude_ants, _check_fringe_peaks, _run_polconvert_cli (segfault retry),
+  * _polconvert_time_ranges                      (last / middle minute, scan minus its first),
+  * _polconvert_refants                          (reference = non-linear, full-IF, strongest),
+  * _polconvert_exclude_ants, _fringe_peak_ratios, _polconvert_compute / _polconvert_apply
+    (judged by what PolConvert wrote, never by its exit code),
   * end-to-end process.polconvert() selection and the bounds of its parameter search,
   * persistence of the new exp.lag_bandpass field.
 
@@ -114,7 +115,13 @@ class TestRefantSelection:
     def test_refant_is_the_strongest_valid_fringe(self, tmp_path):
         # Mc (SNR 419) beats O8 (286) even though the experiment refant order lists O8 first.
         exp = _make_exp(tmp_path)
-        assert process._polconvert_refant(exp, ["Ef"], set(IFS), "18") == "Mc"
+        assert process._polconvert_refants(exp, ["Ef"], set(IFS), "18")[0] == "Mc"
+
+    def test_refant_offers_the_runner_up_as_a_fallback(self, tmp_path):
+        # Two candidates, best first: the solutions found by hand on ES123D/ES123F used the
+        # second one. Never more than two, so a hopeless search cannot sweep the whole array.
+        exp = _make_exp(tmp_path)
+        assert process._polconvert_refants(exp, ["Ef"], set(IFS), "18") == ["Mc", "O8"]
 
     def test_refant_skips_linear_partial_band_and_unobserved(self, tmp_path):
         # Ef is the strongest of all (SNR 410) but is the antenna being converted; Wb is strong
@@ -122,18 +129,19 @@ class TestRefantSelection:
         exp = _make_exp(tmp_path)
         exp.lag_snr["18"]["Mc"] = {"RR": 5.0, "LL": 5.0}      # demote the usual winner
         exp.lag_snr["18"]["O8"] = {"RR": 6.0, "LL": 6.0}
-        refant = process._polconvert_refant(exp, ["Ef"], set(IFS), "18")
-        assert refant == "O8"                                  # strongest full-band, non-linear
+        refants = process._polconvert_refants(exp, ["Ef"], set(IFS), "18")
+        assert refants[0] == "O8"                              # strongest full-band, non-linear
+        assert "Ef" not in refants and "Wb" not in refants and "Cm" not in refants
 
-    def test_refant_is_none_when_nothing_qualifies(self, tmp_path):
+    def test_refant_is_empty_when_nothing_qualifies(self, tmp_path):
         exp = _make_exp(tmp_path)
-        assert process._polconvert_refant(exp, ["Ef", "Mc", "O8"], set(IFS), "18") is None
+        assert process._polconvert_refants(exp, ["Ef", "Mc", "O8"], set(IFS), "18") == []
 
     def test_refant_falls_back_to_experiment_order_without_lag_data(self, tmp_path):
         exp = _make_exp(tmp_path)
         exp.lag_snr = {}
         # exp.refant is ["Ef", "O8", "Wb", "Mc"]; Ef is linear and Wb partial-band, so O8 wins.
-        assert process._polconvert_refant(exp, ["Ef"], set(IFS), "18") == "O8"
+        assert process._polconvert_refants(exp, ["Ef"], set(IFS), "18")[0] == "O8"
 
     def test_exclude_ants_drops_unobserved_and_partial_band(self, tmp_path):
         exp = _make_exp(tmp_path)
@@ -199,12 +207,21 @@ class TestSolveScanSelection:
 # --- solve time ranges -------------------------------------------------------------------
 
 class TestSolveTimeRanges:
-    def test_last_minute_then_scan_without_its_first_minute(self, tmp_path):
+    def test_last_minute_then_middle_then_scan_without_its_first_minute(self, tmp_path):
         exp = _make_exp(tmp_path)
         scan = exp.scans[1]                       # No0018: 13:40:00 + 220 s -> 13:43:40
         ranges = process._polconvert_time_ranges(scan, exp.obsdate)
         assert ranges == [[0, 13, 42, 40, 0, 13, 43, 40],     # last minute
+                          [0, 13, 41, 20, 0, 13, 42, 20],     # the minute around the middle
                           [0, 13, 41, 0, 0, 13, 43, 40]]      # all but the first minute
+
+    def test_a_short_scan_does_not_repeat_the_same_range(self, tmp_path):
+        # 13:40:00 + 120 s: the last minute and "all but the first" are the same 13:41-13:42.
+        exp = _make_exp(tmp_path)
+        scan = experiment.Scan("No0099", dt.datetime(2026, 6, 25, 13, 40), 120, "4C39.25",
+                               stations_scheduled=("Ef", "Mc"))
+        assert process._polconvert_time_ranges(scan, exp.obsdate) == \
+            [[0, 13, 41, 0, 0, 13, 42, 0], [0, 13, 40, 30, 0, 13, 41, 30]]
 
     def test_short_scan_keeps_its_full_range(self, tmp_path):
         exp = _make_exp(tmp_path)
@@ -219,14 +236,18 @@ class TestSolveTimeRanges:
                                stations_scheduled=("Ef", "Mc"))
         ranges = process._polconvert_time_ranges(scan, exp.obsdate)
         assert ranges == [[1, 0, 2, 0, 1, 0, 3, 0],
+                          [1, 0, 0, 0, 1, 0, 1, 0],
                           [0, 23, 59, 0, 1, 0, 3, 0]]
 
 
 # --- solution quality check -------------------------------------------------------------
 
-def _write_peaks(logdir: Path, per_if):
+def _write_peaks(logdir: Path, per_if, gains=True):
+    """Writes what a finished --compute leaves behind: the gains file plus one peaks file/IF."""
     peaks = logdir / "FRINGE.PEAKS"
     peaks.mkdir(parents=True, exist_ok=True)
+    if gains:
+        (logdir / "polconvert.gains").write_bytes(b"pickled gains")
     for i, (rr, ll, rl, lr) in enumerate(per_if, start=1):
         (peaks / f"FRINGE.PEAKS_IF{i}_SCAN_0_EF-MC.dat").write_text(
             f"BASELINE EF TO MC\n  FOR IF #{i}.\n"
@@ -235,21 +256,34 @@ def _write_peaks(logdir: Path, per_if):
             f"     AMPLITUDE: 5.0e-01  RL/LR Norm.: 1.0e+00\n")
 
 
-class TestFringePeaksCheck:
-    def test_good_solution_passes(self, tmp_path):
-        _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 8)   # ratio ~19
-        assert process._check_fringe_peaks(str(tmp_path)) is True
+class TestFringePeakRatios:
+    """A finished run is read off its files; anything short of a full set reads as unfinished."""
 
-    def test_one_bad_if_fails(self, tmp_path):
+    def test_good_solution_gives_a_ratio_per_if(self, tmp_path):
+        _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 8)   # ratio ~19
+        ratios = process._fringe_peak_ratios(str(tmp_path), 8)
+        assert len(ratios) == 8 and min(ratios) > process._POLCONVERT_MIN_RATIO
+
+    def test_one_bad_if_is_still_a_finished_run(self, tmp_path):
         peaks = [(0.9, 1.0, 0.05, 0.05)] * 7 + [(0.5, 0.5, 0.5, 0.5)]  # last IF ratio ~1
         _write_peaks(tmp_path, peaks)
-        assert process._check_fringe_peaks(str(tmp_path)) is False
+        ratios = process._fringe_peak_ratios(str(tmp_path), 8)
+        assert len(ratios) == 8 and min(ratios) < process._POLCONVERT_MIN_RATIO
 
-    def test_missing_dir_fails(self, tmp_path):
-        assert process._check_fringe_peaks(str(tmp_path / "nope")) is False
+    def test_missing_dir_is_unfinished(self, tmp_path):
+        assert process._fringe_peak_ratios(str(tmp_path / "nope"), 8) == []
+
+    def test_a_partial_set_of_ifs_is_unfinished(self, tmp_path):
+        # Crashed halfway: 5 of the 8 IFs written. Judging those 5 would accept a torn run.
+        _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 5)
+        assert process._fringe_peak_ratios(str(tmp_path), 8) == []
+
+    def test_peaks_without_the_gains_file_are_unfinished(self, tmp_path):
+        _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 8, gains=False)
+        assert process._fringe_peak_ratios(str(tmp_path), 8) == []
 
 
-# --- subprocess runner with segfault retry ----------------------------------------------
+# --- the runner: results on disk decide, not the exit code -------------------------------
 
 class _FakeProc:
     def __init__(self, rc, stdout=""):
@@ -258,22 +292,62 @@ class _FakeProc:
         self.stderr = "boom"
 
 
-class TestRunnerRetry:
-    def test_retries_transient_segfault_then_succeeds(self, monkeypatch):
-        seq = iter([-11, -11, 0])   # two SIGSEGVs then success
-        monkeypatch.setattr(process.subprocess, "run", lambda *a, **k: _FakeProc(next(seq)))
-        assert process._run_polconvert_cli(Path("in.toml"), "--compute") == 0
+class TestComputeIgnoresTheExitCode:
+    """PolConvert dies in its teardown *after* writing the solution (verified on ES123B and
+    ES123E: the solutions found by hand are reproduced, and the process still exits 134)."""
 
-    def test_persistent_segfault_gives_up(self, monkeypatch):
-        monkeypatch.setattr(process.subprocess, "run", lambda *a, **k: _FakeProc(-11))
-        assert process._run_polconvert_cli(Path("in.toml"), "--compute") == -11
+    def test_a_complete_solution_is_kept_even_when_the_process_aborts(self, tmp_path, monkeypatch):
+        def fake_run(cmd, **kwargs):
+            _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 8)
+            return _FakeProc(-6)                       # SIGABRT: "double free or corruption"
 
-    def test_real_error_not_retried(self, monkeypatch):
+        monkeypatch.setattr(process.subprocess, "run", fake_run)
+        ratios = process._polconvert_compute(Path("in.toml"), str(tmp_path), 8)
+        assert len(ratios) == 8                        # the crash did not lose the solution
+
+    def test_only_a_run_that_wrote_nothing_is_retried(self, tmp_path, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(1)
+            if len(calls) == 3:                        # writes a full result only on the third go
+                _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 8)
+            return _FakeProc(-11)
+
+        monkeypatch.setattr(process.subprocess, "run", fake_run)
+        assert len(process._polconvert_compute(Path("in.toml"), str(tmp_path), 8)) == 8
+        assert len(calls) == 3
+
+    def test_gives_up_after_the_retries(self, tmp_path, monkeypatch):
         calls = []
         monkeypatch.setattr(process.subprocess, "run",
-                            lambda *a, **k: calls.append(1) or _FakeProc(2))
-        assert process._run_polconvert_cli(Path("in.toml"), "--compute") == 2
-        assert len(calls) == 1   # a non-signal failure is not retried
+                            lambda *a, **k: calls.append(1) or _FakeProc(-11))
+        monkeypatch.setattr(process, "_log_fringe_snr_table", lambda logdir: None)
+        assert process._polconvert_compute(Path("in.toml"), str(tmp_path), 8) == []
+        assert len(calls) == process._POLCONVERT_RETRIES + 1
+
+
+class TestApplyIsJudgedByItsOutputFiles:
+    def test_success_when_every_idi_came_out_converted(self, tmp_path, monkeypatch):
+        idis = [str(tmp_path / f"ez041a_1_1.IDI{n}") for n in (1, 2)]
+
+        def fake_run(cmd, **kwargs):
+            for idi in idis:
+                Path(idi + '.PCONVERT').write_text('converted')
+            return _FakeProc(-6)                       # aborts on the way out, as it always does
+
+        monkeypatch.setattr(process.subprocess, "run", fake_run)
+        assert process._polconvert_apply(Path("in.toml"), idis) is True
+
+    def test_failure_when_a_file_is_left_unconverted(self, tmp_path, monkeypatch):
+        idis = [str(tmp_path / f"ez041a_1_1.IDI{n}") for n in (1, 2)]
+
+        def fake_run(cmd, **kwargs):
+            Path(idis[0] + '.PCONVERT').write_text('converted')
+            return _FakeProc(0)                        # exits cleanly, but IDI2 never appears
+
+        monkeypatch.setattr(process.subprocess, "run", fake_run)
+        assert process._polconvert_apply(Path("in.toml"), idis) is False
 
 
 # --- end-to-end selection ---------------------------------------------------------------
@@ -292,9 +366,10 @@ class TestPolconvertIntegration:
 
         modes: list[str] = []
         monkeypatch.setattr(process, "_write_polconvert_template", fake_write)
-        monkeypatch.setattr(process, "_run_polconvert_cli",
-                            lambda tmpl, mode: modes.append(mode) or 0)
-        monkeypatch.setattr(process, "_check_fringe_peaks", lambda logdir='polconvert_logs': True)
+        monkeypatch.setattr(process, "_polconvert_compute",
+                            lambda tmpl, logdir, n_ifs: modes.append('--compute') or [19.0] * n_ifs)
+        monkeypatch.setattr(process, "_polconvert_apply",
+                            lambda tmpl, idis: modes.append('--apply') or True)
         monkeypatch.setattr(process.find_idi_mod, "find_idi_with_time",
                             lambda idi_files, aipstime, verbose=False: "ez041a_1_1.IDI1")
         monkeypatch.setattr(process.glob, "glob",
@@ -310,12 +385,36 @@ class TestPolconvertIntegration:
         assert captured["time_range"][1] == 13
         assert modes == ["--compute", "--apply"]          # computed, accepted, then applied
 
-    def test_search_space_is_bounded_and_ordered(self, tmp_path, monkeypatch):
-        """A search that never converges stays inside the declared parameter space.
+    def test_the_accepted_combination_is_recorded_once_in_the_runbook(self, tmp_path, monkeypatch):
+        """logs/commands.sh gets the two lines that reproduce the accepted run, not one per
+        subprocess launch: the search overwrites the same input file on every attempt."""
+        exp = _make_exp(tmp_path)
+        recorded: list[str] = []
 
-        The old search also looped over every candidate reference antenna, so a non-converging
-        run took hours; the space is now one reference antenna x two time ranges x
-        doweight x timeavg x chanavg per scan.
+        monkeypatch.setattr(process, "_write_polconvert_template",
+                            lambda *a, **k: Path('polconvert_inputs.toml'))
+        monkeypatch.setattr(process, "_polconvert_compute",
+                            lambda tmpl, logdir, n_ifs: [19.0] * n_ifs)
+        monkeypatch.setattr(process, "_polconvert_apply", lambda tmpl, idis: True)
+        monkeypatch.setattr(process.reporting, "record_command",
+                            lambda command, step=None: recorded.append(command))
+        monkeypatch.setattr(process.find_idi_mod, "find_idi_with_time",
+                            lambda idi_files, aipstime, verbose=False: "ez041a_1_1.IDI1")
+        monkeypatch.setattr(process.glob, "glob",
+                            lambda pat: [] if "PCONVERT" in pat else
+                            (["ez041a_1_1.IDI1"] if "IDI" in pat else []))
+        monkeypatch.setattr(exp, "store", lambda: None)
+
+        assert process.polconvert(exp) is True
+        assert recorded == ['polconvert.py polconvert_inputs.toml --compute',
+                            'polconvert.py polconvert_inputs.toml --apply']
+
+    def test_search_space_is_bounded_and_ordered(self, tmp_path, monkeypatch):
+        """A search that never converges stays inside the declared, capped parameter space.
+
+        The space is two reference antennas x three time ranges x doweight x timeavg x chanavg
+        per scan, ordered best-first and stopped at _POLCONVERT_MAX_ATTEMPTS so that widening
+        it cannot turn a hopeless run into an overnight one.
         """
         exp = _make_exp(tmp_path)
         attempts: list[tuple] = []
@@ -327,8 +426,9 @@ class TestPolconvertIntegration:
             return Path('polconvert_inputs.toml')
 
         monkeypatch.setattr(process, "_write_polconvert_template", fake_write)
-        monkeypatch.setattr(process, "_run_polconvert_cli", lambda tmpl, mode: 0)
-        monkeypatch.setattr(process, "_check_fringe_peaks", lambda logdir='polconvert_logs': False)
+        # Every attempt finishes and every attempt is bad, so the search runs to its bound.
+        monkeypatch.setattr(process, "_polconvert_compute",
+                            lambda tmpl, logdir, n_ifs: [1.0] * n_ifs)
         monkeypatch.setattr(process.find_idi_mod, "find_idi_with_time",
                             lambda idi_files, aipstime, verbose=False: "ez041a_1_1.IDI1")
         monkeypatch.setattr(process.glob, "glob",
@@ -337,18 +437,45 @@ class TestPolconvertIntegration:
 
         assert process.polconvert(exp) is False          # never converges
 
-        # One usable scan (No0018) x 2 time ranges x 3 doweights x 4 timeavgs x 3 chanavgs.
-        assert len(attempts) == 1 * 2 * 3 * 4 * 3 == 72
-        assert {a[0] for a in attempts} == {"Mc"}                      # a single reference antenna
-        assert len({a[1] for a in attempts}) == 2                      # the two time ranges
-        assert {a[2] for a in attempts} == {0.1, 0.01, 0.001}          # doweight
+        # One usable scan (No0018) x 2 refants x 3 time ranges x 5 doweights x 4 timeavgs x
+        # 3 chanavgs = 360, cut short by the attempt budget.
+        assert len(attempts) == process._POLCONVERT_MAX_ATTEMPTS
+        assert attempts[0][0] == "Mc"                                  # strongest fringe first
+        assert len({a[1] for a in attempts}) == 3                      # the three time ranges
         assert {a[3] for a in attempts} == {10, 20, 30, 60}            # time averaging (s)
         assert {a[4] for a in attempts} == {8, 16, 32}                 # channel averaging
-        # Cheapest-first within a time range, doweight slowest-varying.
+        # Cheapest-first within a time range, doweight slowest-varying and ordered by how
+        # often it produced the solutions found by hand.
         assert attempts[0][2:] == (0.1, 10, 8)
         assert attempts[1][2:] == (0.1, 10, 16)
         assert attempts[3][2:] == (0.1, 20, 8)
         assert attempts[12][2:] == (0.01, 10, 8)
+        assert attempts[36][2:] == (0.0001, 10, 8)
+        assert attempts[48][2:] == (1.0, 10, 8)
+        assert [a[2] for a in attempts[:60]] == \
+            [w for w in (0.1, 0.01, 0.001, 0.0001, 1.0) for _ in range(12)]
+
+    def test_the_second_reference_antenna_is_a_fallback_not_a_sweep(self, tmp_path, monkeypatch):
+        """Mc is exhausted before O8 is tried at all, and no third antenna ever is."""
+        exp = _make_exp(tmp_path)
+        monkeypatch.setattr(process, "_POLCONVERT_MAX_ATTEMPTS", 1000)   # let it run to the end
+        attempts: list[str] = []
+
+        monkeypatch.setattr(process, "_write_polconvert_template",
+                            lambda exp, ref_idi, lin_ants, refant, *a, **k:
+                            attempts.append(refant) or Path('polconvert_inputs.toml'))
+        monkeypatch.setattr(process, "_polconvert_compute",
+                            lambda tmpl, logdir, n_ifs: [1.0] * n_ifs)
+        monkeypatch.setattr(process.find_idi_mod, "find_idi_with_time",
+                            lambda idi_files, aipstime, verbose=False: "ez041a_1_1.IDI1")
+        monkeypatch.setattr(process.glob, "glob",
+                            lambda pat: [] if "PCONVERT" in pat else
+                            (["ez041a_1_1.IDI1"] if "IDI" in pat else []))
+
+        assert process.polconvert(exp) is False
+        assert len(attempts) == 1 * 2 * 3 * 5 * 4 * 3 == 360
+        assert set(attempts) == {"Mc", "O8"}
+        assert attempts[:180] == ["Mc"] * 180 and attempts[180:] == ["O8"] * 180
 
 
 # --- persistence ------------------------------------------------------------------------
@@ -483,8 +610,9 @@ class TestComputeAttemptIsAnnounced:
         exp = _make_exp(tmp_path)
         monkeypatch.setattr(process, "_write_polconvert_template",
                             lambda *a, **k: Path('polconvert_inputs.toml'))
-        monkeypatch.setattr(process, "_run_polconvert_cli", lambda tmpl, mode: 0)
-        monkeypatch.setattr(process, "_check_fringe_peaks", lambda logdir='polconvert_logs': True)
+        monkeypatch.setattr(process, "_polconvert_compute",
+                            lambda tmpl, logdir, n_ifs: [19.0] * n_ifs)
+        monkeypatch.setattr(process, "_polconvert_apply", lambda tmpl, idis: True)
         monkeypatch.setattr(process.find_idi_mod, "find_idi_with_time",
                             lambda idi_files, aipstime, verbose=False: "ez041a_1_1.IDI1")
         monkeypatch.setattr(process.glob, "glob",

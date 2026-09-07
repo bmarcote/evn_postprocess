@@ -43,6 +43,37 @@ server-agnostic, and per-step output is split into three channels.
   local vex). The ccs `.lis` transport moved from `lisfiles.py` (now local-only) into
   `retrieval/jive.py`.
 
+### Fixed
+
+- **The PolConvert search discarded the solutions it found.** PolConvert nearly always
+  dies in its own teardown (`double free or corruption`, `malloc(): invalid next size`,
+  or the PyQt5 `libqsvgicon.so` symbol lookup error) *after* it has written the gains and
+  the FRINGE.PEAKS, and the search treated any non-zero exit as a failed attempt. On
+  ES123B the very first of 360 attempts was already the accepted answer; ES123C-F
+  evaluated none of their ~290 attempts, and EY054 threw away 117 of 144. An attempt is
+  now judged by the files it left behind (`_fringe_peak_ratios`: the gains file plus one
+  readable peaks file per IF), never by the exit code, and only a run that died before
+  writing a complete result is retried. `--apply` is likewise judged by whether every
+  FITS-IDI file has its `.PCONVERT` counterpart.
+- `scripts/polconvert.py` never read the results of its `--apply` process pool, so a
+  child that died left its FITS-IDI unconverted while the program reported success.
+- The plain-text log ate every interpolated Python list of numbers: `_RICH_TAG_RE`
+  matched `[1, 2, 3]`, so `logs/logging_messages.log` showed `IFs=` on every PolConvert
+  line. It now requires a tag to start with a letter or `#`, exactly as Rich does.
+- `logs/commands.sh` never recorded the `polconvert.py` invocations, so a PolConvert run
+  was not replayable. The accepted combination (or, when the search gives up, the last
+  one tried) is now recorded.
+
+### Changed
+
+- The PolConvert search is wider but bounded: `doweight` gains 0.0001 and 1 (needed by
+  the ES123D/RS005A and EY054 solutions found by hand), a third time range (the middle
+  minute of the scan) is tried, and the runner-up reference antenna is used as a fallback
+  (ES123D and ES123F were solved by hand with it). A new
+  `_POLCONVERT_MAX_ATTEMPTS = 150` caps the whole search, so the worst case is shorter
+  than it was: combinations are ordered best-first and each now runs once rather than
+  twice.
+
 ## v2.0.0a6 (in development) — Modular refactor
 
 Standalone, modular re-design (see `docs/PRD-refactor.md`): the core now consumes

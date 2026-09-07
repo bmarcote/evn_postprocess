@@ -156,13 +156,21 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
 
         try:
             with futures.ProcessPoolExecutor(max_workers=8) as executor:
-                workers = []
+                workers = {}
                 for an_idi in idi_files:
                     kwargs = {'IDI': an_idi, 'OUTPUTIDI': an_idi + suffix, 'doTest': False,
                                         'linAntIdx': linear_antennas, 'plotAnt': -1, 'doIF': do_ifs,
                                         'doSolve': -1, 'saveArgs': True, 'plotRange': time_range, 'XYadd': XYadd,
                                         'XYratio': XYratio}
-                    workers.append(executor.submit(pconv.polconvert, **kwargs))
+                    workers[executor.submit(pconv.polconvert, **kwargs)] = an_idi
+
+                # Without reading the results, a child that died (or raised) would leave its
+                # FITS-IDI unconverted while this program still reported success.
+                for worker in futures.as_completed(workers):
+                    try:
+                        worker.result()
+                    except Exception as apply_error:
+                        print(f"ERROR: PolConvert failed on {workers[worker]}: {apply_error}")
         finally:
             # Move all created output files (but the IDIs) into the expected log folder
             for a_path in _TEMP_FILES:
