@@ -1,6 +1,8 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*/*.pyc
+*/*/*.pyc
 *$py.class
 
 # C extensions
@@ -114,4 +116,6 @@ CLAUDE.md
 .claude
 uv.lock
 *.pyc\ntests/__pycache__\n*/*/*pyc
+.gitignore
+.devin
 .gitignore

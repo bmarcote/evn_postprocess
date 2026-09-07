@@ -74,6 +74,10 @@ class JiveDistributor(Distributor):
                   ('archive-data', process.archive),
                   ('archive-pipeline', pipeline.archive),
                   ('pi-letter', self.send_letter),
+<<<<<<< HEAD
+=======
+                  ('station-feedback', process.antenna_feedback),
+>>>>>>> d499383ef8bc92d1fc9aaf2ee21dd4b1b9e1d214
                   ('nme-report', process.nme_report),
                   ('feedback-upload', self.upload_feedback)]
         for stage_name, stage in stages:
