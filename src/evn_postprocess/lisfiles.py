@@ -230,82 +230,189 @@ def get_passes_from_lisfiles(exp: experiment.Experiment) -> bool:
     return True
 
 
-def _check_single_lisfile(args):
-    """Helper function to check a single lisfile in parallel.
-    
+# checklis.py prints these two lines for a healthy .lis file; every other line it writes
+# reports an issue that the operator has to look at.
+_CHECKLIS_OK_PREFIXES = ('First scan', 'Last scan')
+
+# How each issue reported by checklis.py is described to the operator. 'skipping' scans are
+# expected in multi-phase-center runs (each pass only keeps its own scans), so they are a
+# warning; 'duplicated' data and anything else are hard errors that need a manual fix.
+_LIS_ISSUE_ADVICE = {'duplicated': "duplicated data (this MUST be fixed manually in the .lis file(s))",
+                     'skipping': "skipped scans (this may well be right, but double check them manually)",
+                     'other': "other errors (they need to be checked, and fixed manually)"}
+
+# Maximum number of .lis file names quoted per issue in the summary. Multi-phase-center
+# experiments can have dozens of passes, and the full list would bury the message.
+_MAX_LISFILES_LISTED = 8
+
+
+def _classify_checklis_output(output: str) -> dict[str, list[str]]:
+    """Splits the raw checklis.py output of one .lis file into the issues it reports.
+
     Args:
-        args: Tuple of (correlator_pass, is_multi_phase_center)
-    
+        output (str): Raw stdout of `checklis.py {file}.lis`.
+
     Returns:
-        bool: True if this pass is valid, False if issues are found.
+        dict[str, list[str]]: The reported lines keyed by issue type ('skipping',
+        'duplicated', 'other'). Every key is always present, with an empty list when
+        that issue was not reported.
     """
-    a_pass, is_multi_phase_center = args
-    
+    issues: dict[str, list[str]] = {'duplicated': [], 'skipping': [], 'other': []}
+    for line in output.split('\n'):
+        text = line.strip()
+        if (len(text) == 0) or text.startswith(_CHECKLIS_OK_PREFIXES):
+            continue
+
+        if 'skip' in text.lower():
+            issues['skipping'].append(text)
+        elif 'duplicat' in text.lower():
+            issues['duplicated'].append(text)
+        else:
+            issues['other'].append(text)
+
+    return issues
+
+
+def _check_single_lisfile(a_pass: experiment.CorrelatorPass) -> tuple[str, dict[str, list[str]]]:
+    """Runs checklis.py on a single .lis file (called in parallel) and classifies its output.
+
+    Args:
+        a_pass (experiment.CorrelatorPass): The correlator pass whose .lis file is checked.
+
+    Returns:
+        tuple[str, dict[str, list[str]]]: The .lis file name, and the issues it reported as
+        returned by :func:`_classify_checklis_output`. A checklis.py that cannot run at all
+        is reported as an 'other' issue, so it is never silently ignored.
+    """
     # checklis.py (external, /home/jops/opt/evn_support) uses non-raw regex strings that
     # emit noisy SyntaxWarnings on Python >= 3.12. The script still works (the sequences are
     # interpreted literally), and we cannot edit it, so silence the warning for this call.
-    output = utils.shell_command("PYTHONWARNINGS=ignore::SyntaxWarning checklis.py",
-                                 a_pass.lisfile.name, shell=True)
-    # The output has the form:
-    #      First scan = X
-    #       {errors if any otherwise no extra lines}
-    #      Last scan = Y
-    # removing any possible trailing empty line:
-    temp = [o for o in output.split('\n') if len(o) > 0]
-    
-    if is_multi_phase_center:
-        # For multi-phase center experiments, we expect to miss some scans in the different passes
-        return not len([t for t in temp if '**** Skipped' not in t]) > 2
+    # echo=False: the passes run in parallel, so their raw outputs would interleave in the
+    # terminal; the operator gets the aggregated summary from check_lisfiles_report instead.
+    try:
+        output = utils.shell_command("PYTHONWARNINGS=ignore::SyntaxWarning checklis.py",
+                                     a_pass.lisfile.name, shell=True, echo=False)
+    except Exception as e:
+        logger.error(f"checklis.py could not be run on {a_pass.lisfile.name}: {e}")
+        return a_pass.lisfile.name, {'duplicated': [], 'skipping': [], 'other': [f"checklis.py failed: {e}"]}
+
+    return a_pass.lisfile.name, _classify_checklis_output(output)
+
+
+def _natural_key(name: str) -> list[tuple[int, object]]:
+    """Sort key that orders embedded numbers numerically (so _2.lis comes before _10.lis).
+
+    Args:
+        name (str): File name to sort.
+
+    Returns:
+        list[tuple[int, object]]: Alternating text/number chunks, each tagged with its kind
+        so that a number is never compared against a text chunk.
+    """
+    return [(0, int(chunk)) if chunk.isdigit() else (1, chunk) for chunk in re.split(r'(\d+)', name)]
+
+
+def _summarize_lisfiles(lisfile_names: list[str]) -> str:
+    """Renders the list of .lis files affected by one issue, truncated when there are many.
+
+    Args:
+        lisfile_names (list[str]): Names of the .lis files reporting the same issue.
+
+    Returns:
+        str: Text of the form '3 .lis file(s): a.lis, b.lis, c.lis', with the names beyond
+        _MAX_LISFILES_LISTED replaced by a '... (+N more)' tail.
+    """
+    listed = ', '.join(sorted(lisfile_names, key=_natural_key)[:_MAX_LISFILES_LISTED])
+    remaining = len(lisfile_names) - _MAX_LISFILES_LISTED
+    if remaining > 0:
+        listed = f"{listed} ... (+{remaining} more)"
+
+    return f"{len(lisfile_names)} .lis file(s): {listed}"
+
+
+def check_lisfiles_report(exp: experiment.Experiment) -> tuple[bool, str]:
+    """Checks the existing .lis files and reports what is wrong with them, if anything.
+
+    Runs checklis.py on every correlator pass in parallel and classifies what it reports
+    (skipped scans, duplicated data, anything else). It also verifies that the passes have
+    unique .lis, MS and FITS-IDI names, as repeated names would make later steps overwrite
+    each other's products.
+
+    Skipped scans are the one tolerated issue, and only in multi-phase-center experiments,
+    where each pass legitimately keeps a subset of the scans: they are still reported so the
+    operator can double check them.
+
+    Args:
+        exp (experiment.Experiment): Experiment object with the correlator passes to check.
+
+    Returns:
+        tuple[bool, str]: (all_ok, message). 'message' is empty when there is nothing to
+        report; otherwise it is a multi-line, operator-facing summary saying which .lis
+        files show which issue and what has to be done about it. Note that a message can
+        also come with all_ok=True (tolerated skipped scans), as a warning.
+    """
+    is_multi_phase_center = len(exp.correlator_passes) > 2 if exp.spectral_line else len(exp.correlator_passes) > 1
+    with ThreadPoolExecutor() as executor:
+        results = list(executor.map(_check_single_lisfile, exp.correlator_passes))
+
+    # Which .lis files reported each issue (the full lines only go to the log file).
+    files_with: dict[str, list[str]] = {issue: [] for issue in _LIS_ISSUE_ADVICE}
+    for lisfile_name, issues in results:
+        for issue, lines in issues.items():
+            if len(lines) > 0:
+                files_with[issue].append(lisfile_name)
+                logger.debug(f"checklis.py on {lisfile_name} reported {issue}: {' | '.join(lines)}")
+
+    # Repeated names across passes are always a manual fix (later steps would clobber files).
+    repeated_names = []
+    for label, names in (('.lis file', [a_pass.lisfile.name for a_pass in exp.correlator_passes]),
+                         ('MS', [a_pass.msfile.name for a_pass in exp.correlator_passes]),
+                         ('FITS-IDI', [str(a_pass.fitsidifile) for a_pass in exp.correlator_passes])):
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if len(repeated) > 0:
+            repeated_names.append(f"repeated {label} names across the correlator passes "
+                                  f"(this MUST be fixed manually): {', '.join(repeated)}")
+
+    blocking = [issue for issue in ('duplicated', 'other') if len(files_with[issue]) > 0]
+    if (len(files_with['skipping']) > 0) and (not is_multi_phase_center):
+        blocking.append('skipping')
+
+    reported = [f"  - {_LIS_ISSUE_ADVICE[issue]}: {_summarize_lisfiles(files_with[issue])}"
+                for issue in ('duplicated', 'skipping', 'other') if len(files_with[issue]) > 0]
+    reported += [f"  - {text}" for text in repeated_names]
+    if len(reported) == 0:
+        logger.debug("All .lis files passed the checklis and unique-name consistency checks.")
+        return True, ''
+
+    all_ok = (len(blocking) == 0) and (len(repeated_names) == 0)
+    if all_ok:
+        header = ("Only skipped scans were reported by checklis, which is expected in a "
+                  "multi-phase-center experiment like this one. Please verify the .lis file(s) "
+                  "to see if they are OK:")
     else:
-        return (not (len(temp) > 2)) and (all(['No scans in' not in t for t in temp]))
+        header = "Issues found in the .lis file(s). Please verify the .lis file(s) to see if they are OK:"
+
+    return all_ok, '\n'.join([header] + reported)
 
 
 def check_lisfiles(exp: experiment.Experiment) -> bool:
-    """Checks the existing .lis files to spot possible issues.
-    If at least one of the .lis files reports a possible issue (e.g. duplicated scans,
-    missing scans, etc), it will return False. Otherwise it will return True.
-    
-    Additionally, ensures that all .lis files have different names, different output 
-    msfile names, and different fitsidinames for consistency and robustness.
-    
-    This function processes lisfiles in parallel using ThreadPoolExecutor.
-    
+    """Checks the existing .lis files to spot possible issues, logging what it finds.
+
+    Thin wrapper around :func:`check_lisfiles_report` for the callers that only need the
+    verdict (e.g. `postprocess exec checklis`). The workflow step uses the report directly,
+    so it can pass the summary on to the operator on every channel.
+
     Args:
         exp (experiment.Experiment): Experiment object with correlator passes to check.
-    
+
     Returns:
-        bool: True if all lis files are valid and have unique names, False if issues are found.
+        bool: True if all the .lis files are valid and have unique names, False otherwise.
     """
-    is_multi_phase_center = len(exp.correlator_passes) > 2 if exp.spectral_line else len(exp.correlator_passes) > 1
-    args_list = [(a_pass, is_multi_phase_center) for a_pass in exp.correlator_passes]
-    with ThreadPoolExecutor() as executor:
-        results = list(executor.map(_check_single_lisfile, args_list))
-    
-    # Original checks - ensure all individual lis file checks pass
-    if not all(results):
-        logger.error("One or more .lis files failed validation checks")
-        return False
-    
-    # Check for unique msfile names
-    msfile_names = [a_pass.msfile.name for a_pass in exp.correlator_passes]
-    if len(msfile_names) != len(set(msfile_names)):
-        duplicate_msfiles = [name for name in msfile_names if msfile_names.count(name) > 1]
-        logger.error(f"Duplicate msfile names found: {set(duplicate_msfiles)}")
-        return False
-    
-    # Enhanced checks - ensure unique .lis file names
-    lisfile_names = [a_pass.lisfile.name for a_pass in exp.correlator_passes]
-    if len(lisfile_names) != len(set(lisfile_names)):
-        duplicate_lisfiles = [name for name in lisfile_names if lisfile_names.count(name) > 1]
-        logger.error(f"Duplicate .lis file names found: {set(duplicate_lisfiles)}")
-        return False
-    
-    # Enhanced checks - ensure unique fitsidinames
-    fitsidinames = [a_pass.fitsidifile for a_pass in exp.correlator_passes]
-    if len(fitsidinames) != len(set(fitsidinames)):
-        duplicate_fitsidinames = [name for name in fitsidinames if fitsidinames.count(name) > 1]
-        logger.error(f"Duplicate FITS IDI names found: {set(duplicate_fitsidinames)}")
-        return False
-    
-    logger.debug("All .lis files passed consistency checks with unique names")
-    return True
+    all_ok, message = check_lisfiles_report(exp)
+    if len(message) > 0:
+        if all_ok:
+            logger.warning(message)
+        else:
+            logger.error(message)
+
+    return all_ok
