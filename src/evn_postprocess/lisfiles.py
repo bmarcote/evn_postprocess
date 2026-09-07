@@ -247,6 +247,11 @@ _LIS_ISSUE_ADVICE = {'duplicated': "This MUST be fixed manually in the .lis file
                      'skipping': "This may well be right, but double check the file(s) manually.",
                      'other': "These need to be checked, and fixed manually."}
 
+# What the operator can do when the .lis files did not pass, as one line: the boxed message
+# lists the same two options, but the chat and the desktop notification only get the headline.
+NEXT_STEPS = ("Fix the .lis file(s) and run `postprocess run` to check them again, or run "
+              "`postprocess run j2ms2` to accept them as they are and continue.")
+
 # Maximum number of .lis file names quoted per issue in the summary. Multi-phase-center
 # experiments can have dozens of passes, and the full list would bury the message.
 _MAX_LISFILES_LISTED = 8
@@ -436,11 +441,13 @@ def run_checklis(exp: experiment.Experiment) -> LisfilesReport:
     which issue and what has to be done about it.
 
     What checklis.py reports is classified into skipped scans, duplicated data, and
-    anything else. Skipped scans are the one tolerated issue, and only in multi-phase-center
-    experiments, where each pass legitimately keeps a subset of the scans: they are still
-    reported so the operator can double check them. This also verifies that the passes have
-    unique .lis, MS and FITS-IDI names, as repeated names would make later steps overwrite
-    each other's products.
+    anything else. Skipped scans get their own message ("this may well be right, but double
+    check them"), as opposed to the "issues found" one: they are legitimate in a
+    multi-phase-center run, where each pass only keeps its own scans, and there they are
+    tolerated (all_ok stays True). With a single pass they still stop the step, so the
+    operator can look at them, but the message says how to continue if they are fine. This
+    also verifies that the passes have unique .lis, MS and FITS-IDI names, as repeated names
+    would make later steps overwrite each other's products.
 
     Args:
         exp (experiment.Experiment): Experiment object with the correlator passes to check.
@@ -475,24 +482,36 @@ def run_checklis(exp: experiment.Experiment) -> LisfilesReport:
     reported = [issue for issue in ('duplicated', 'skipping', 'other') if len(files_with[issue]) > 0]
     blocking = [issue for issue in reported if (issue != 'skipping') or (not is_multi_phase_center)]
     all_ok = (len(blocking) == 0) and (len(repeated_names) == 0)
+    # Skipped scans on their own are a different message from a broken .lis file: they may
+    # well be right (they always are in a multi-phase-center run), so the operator is asked
+    # to double check them instead of being told that something is wrong.
+    only_skipping = (reported == ['skipping']) and (len(repeated_names) == 0)
 
     details = []
     for issue in reported:
         details.append(f"- {_LIS_ISSUE_LABEL[issue]} — {_summarize_lisfiles(files_with[issue])}")
-        details.append(f"  {_LIS_ISSUE_ADVICE[issue]}")
+        if not only_skipping:  # for that single case the headline already gives the advice
+            details.append(f"  {_LIS_ISSUE_ADVICE[issue]}")
 
     for text in repeated_names:
         details.append(f"- {text}")
         details.append("  This MUST be fixed manually before continuing.")
 
+    if not all_ok:  # the step is about to stop: say how to go on, either way
+        details += ["", "What to do now:",
+                    "- fix the .lis file(s) and run `postprocess run` to check them again, or",
+                    "- run `postprocess run j2ms2` to accept them as they are and continue."]
+
     counts = [f"{_LIS_ISSUE_LABEL[issue]} in {len(files_with[issue])} .lis file(s)" for issue in reported]
     counts += [text.split(':')[0] for text in repeated_names]
-    if all_ok and (len(details) == 0):
+    expected = (" (which is expected in an experiment with several correlator passes, as each "
+                "one only keeps its own scans)" if is_multi_phase_center else "")
+    if len(reported) == 0 and (len(repeated_names) == 0):
         headline = "All the .lis file(s) passed checklis, with unique .lis, MS and FITS-IDI names."
-    elif all_ok:
-        headline = (f"Only skipped scans were reported ({len(files_with['skipping'])} .lis file(s)), "
-                    f"which is expected in a multi-phase-center experiment like this one. "
-                    f"Please verify the .lis file(s) to see if they are OK.")
+    elif only_skipping:
+        headline = (f"Only skipped scans were reported by checklis, in "
+                    f"{len(files_with['skipping'])} .lis file(s){expected}. This may well be right, "
+                    f"but please verify the .lis file(s) to see if they are OK.")
     else:
         headline = (f"Issues found in the .lis file(s): {'; '.join(counts)}. "
                     f"Please verify the .lis file(s) to see if they are OK.")

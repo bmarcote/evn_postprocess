@@ -402,19 +402,27 @@ class TestRunChecklis:
 
         assert report.all_ok is True
         assert "skipped scans" in report.details
-        assert "double check the file(s) manually" in report.details
         assert "2 .lis file(s): testexp1.lis, testexp3.lis" in report.details
-        assert "Please verify the .lis file(s) to see if they are OK" in report.headline
+        assert "Only skipped scans were reported" in report.headline
+        assert "This may well be right" in report.headline
+        assert "please verify the .lis file(s) to see if they are OK" in report.headline
 
-    def test_skipped_scans_fail_in_single_pass_experiment(self):
-        exp = make_exp([make_pass("testexp1")])
-        outputs = {"testexp1.lis": "First scan = 1\n**** Skipped scan no 34\nLast scan = 100"}
+    def test_only_skipped_scans_is_never_reported_as_issues_found(self):
+        """A single .lis file reporting only skipped scans (gs046): the message is the
+        'may well be right' one, and it says how to go on."""
+        exp = make_exp([make_pass("gs046")])
+        skips = '\n'.join(f" **** Skipped scans between {n} and {n + 2}" for n in range(143, 455, 6))
+        outputs = {"gs046.lis": f"  First scan = 1\n{skips}\n   Last scan = 457"}
         with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs(outputs)):
             report = lisfiles.run_checklis(exp)
 
-        assert report.all_ok is False
-        assert "skipped scans" in report.details
-        assert "skipped scans in 1 .lis file(s)" in report.headline
+        assert report.all_ok is False  # a single pass should not skip scans: stop and be looked at
+        assert "Issues found" not in report.headline
+        assert "Only skipped scans were reported" in report.headline
+        assert "This may well be right" in report.headline
+        assert "1 .lis file(s): gs046.lis" in report.details
+        assert "postprocess run j2ms2" in report.details
+        assert "postprocess run j2ms2" in lisfiles.NEXT_STEPS
 
     def test_duplicated_data_always_fails(self):
         exp = make_exp([make_pass("testexp1"), make_pass("testexp2")])

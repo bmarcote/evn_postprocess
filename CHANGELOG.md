@@ -57,11 +57,17 @@ Changed:
     as "N .lis file(s): a.lis, b.lis, ..." (truncated after 8 names, since a multi-phase-center
     run can have dozens of passes), saying that skipped scans may well be right but have to be
     double checked manually, that duplicated data MUST be fixed by hand, and asking the
-    operator to verify the .lis file(s). Repeated .lis/MS/FITS-IDI names across passes are
-    reported in the same box instead of failing on the first one found, and a `checklis.py`
-    that cannot run at all is an explicit error rather than an unexpected exception. Anything
-    needing a manual fix stops the run through `StepFailed`, whose one-line headline also
-    reaches the desktop notification and the chat.
+    operator to verify the .lis file(s). When skipped scans are the only thing reported the
+    message says exactly that ("Only skipped scans were reported ... This may well be right,
+    but please verify ..."), never the "issues found" one: they are the norm in a
+    multi-phase-center run (where they are tolerated and the run goes on), and with a single
+    pass they still stop the step but are not evidence on their own that the file is broken.
+    Whenever the step stops, the box (and the failure message on every channel) says what to
+    do about it: fix the .lis file(s) and run `postprocess run` to check them again, or run
+    `postprocess run j2ms2` to accept them as they are and continue. Repeated
+    .lis/MS/FITS-IDI names across passes are reported in the same box instead of failing on
+    the first one found, and a `checklis.py` that cannot run at all is an explicit error
+    rather than an unexpected exception.
   - Once antab_editor.py is closed, the run asks in the terminal — behind its own rule and
     panel, like the review pause — whether to go on and run the EVN Pipeline or to stop
     there ("Enter" / "stop"). Stopping raises `StepPaused`, so the run ends cleanly (exit
