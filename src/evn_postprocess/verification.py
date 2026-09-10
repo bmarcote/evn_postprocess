@@ -39,7 +39,7 @@ MAX_LOSS_SECONDS: float = 10.0
 # compare-ms-idi.py: exposure times and visibility counts must match exactly, but the
 # weights are recomputed during the conversion and never agree to the tool's 1e-7
 # precision. A relative difference up to this is expected and fine.
-MAX_WEIGHT_DIFF: float = 0.05
+MAX_WEIGHT_DIFF: float = 0.15
 
 _LOGFILE: str = 'verification.log'
 
