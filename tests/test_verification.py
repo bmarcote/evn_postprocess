@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import datetime as dt
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from astropy.io import fits
+from rich import progress
 
 from evn_postprocess import experiment
 from evn_postprocess import tools
+from evn_postprocess import utils
 from evn_postprocess import verification
 
 
@@ -239,24 +243,110 @@ class TestCompareProblems:
         assert len(problems) == 1 and 'did not get as far as comparing' in problems[0]
 
 
+def ready_exp(tmp_path, passes: int):
+    """An experiment whose passes all have their MS and one FITS-IDI file on disk."""
+    exp = make_exp(tmp_path, passes=passes)
+    for a_pass in exp.correlator_passes:
+        a_pass.msfile.mkdir(exist_ok=True)  # an MS is a directory
+        Path(f'{a_pass.fitsidifile}1').touch()
+    return exp
+
+
 class TestCompareMsIdi:
     """One comparison per correlator pass, MS against the FITS-IDI files made from it."""
 
     def test_passes_and_calls_the_tool_per_pass(self, tmp_path, monkeypatch):
-        exp = make_exp(tmp_path, passes=2)
-        for a_pass in exp.correlator_passes:
-            a_pass.msfile.mkdir()  # an MS is a directory
-            Path(f'{a_pass.fitsidifile}1').touch()
+        exp = ready_exp(tmp_path, passes=2)
         seen = stub_tool(monkeypatch, stdout=HEALTHY)
         assert verification.compare_ms_idi(exp).ok
-        assert seen == [['compare-ms-idi.py', '--ms', 'es124-pass1.ms', '--idi', 'es124_1_1.IDI1'],
-                        ['compare-ms-idi.py', '--ms', 'es124-pass2.ms', '--idi', 'es124_2_1.IDI1']]
+        # Sorted, not in sequence: the passes are compared concurrently, so which tool call
+        # is recorded first is up to the scheduler (the *problems* do keep pass order below).
+        assert sorted(seen) == [
+            ['compare-ms-idi.py', '--ms', 'es124-pass1.ms', '--idi', 'es124_1_1.IDI1'],
+            ['compare-ms-idi.py', '--ms', 'es124-pass2.ms', '--idi', 'es124_2_1.IDI1']]
 
     def test_missing_ms_is_reported_not_crashed(self, tmp_path, monkeypatch):
         Path('es124_1_1.IDI1').touch()
         stub_tool(monkeypatch, stdout=HEALTHY)
         check = verification.compare_ms_idi(make_exp(tmp_path))
         assert not check.ok and 'the MS is gone' in check.details[0]
+
+
+class TestVerificationRunsThePassesAtOnce:
+    """Each pass reads only its own MS and FITS-IDI files, so they are verified together.
+
+    compare-ms-idi.py reads both data sets in full; done one pass after the other, a
+    multi-phase-centre experiment would take hours.
+    """
+
+    def _timed_tool(self, monkeypatch, delays: dict[str, float]):
+        """A stubbed tool that sleeps per pass, so the finishing order can be forced."""
+        live, peak, lock = [0], [0], threading.Lock()
+
+        def fake_run(name, args, **kwargs):
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(next((d for key, d in delays.items() if key in ' '.join(args)), 0.02))
+            with lock:
+                live[0] -= 1
+            # No 'Checked ...' line: every pass reports exactly one problem, naming its MS.
+            return subprocess.CompletedProcess([name, *args], 0, 'Successful readonly open\n', '')
+
+        monkeypatch.setattr(tools, 'run', fake_run)
+        return peak
+
+    def test_passes_are_compared_concurrently(self, tmp_path, monkeypatch):
+        peak = self._timed_tool(monkeypatch, {})
+        verification.compare_ms_idi(ready_exp(tmp_path, passes=4))
+        assert peak[0] > 1, "the passes were still compared one after the other"
+
+    def test_never_more_at_once_than_the_io_ceiling(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(utils, 'MAX_PASS_IO_WORKERS', 2)
+        peak = self._timed_tool(monkeypatch, {})
+        verification.compare_ms_idi(ready_exp(tmp_path, passes=6))
+        assert peak[0] == 2
+
+    def test_problems_are_reported_in_pass_order_whatever_finishes_first(self, tmp_path,
+                                                                        monkeypatch):
+        # Pass 1 is made the slowest, so it finishes last; its problem must still come first.
+        self._timed_tool(monkeypatch, {'es124-pass1.ms': 0.25, 'es124-pass2.ms': 0.01})
+        check = verification.compare_ms_idi(ready_exp(tmp_path, passes=3))
+        assert not check.ok
+        assert [d.split(' vs ')[0] for d in check.details] == \
+            ['es124-pass1.ms', 'es124-pass2.ms', 'es124-pass3.ms']
+
+    def test_a_tool_that_cannot_run_is_reported_once(self, tmp_path, monkeypatch):
+        def missing(name, args, **kwargs):
+            raise tools.ToolMissingError(f"{name} not found")
+
+        monkeypatch.setattr(tools, 'run', missing)
+        check = verification.compare_ms_idi(ready_exp(tmp_path, passes=4))
+        assert not check.ok
+        # Once, with the count — not once per pass, which on a real MPC run would be hundreds.
+        assert len(check.details) == 1
+        assert 'could not be run' in check.details[0] and 'on 4 of the 4' in check.details[0].replace(
+            'It failed on', 'on')
+
+    def test_antab_check_also_runs_over_the_passes_at_once(self, tmp_path, monkeypatch):
+        exp = ready_exp(tmp_path, passes=3)
+        for a_pass in exp.correlator_passes:
+            write_idi(f'{a_pass.fitsidifile}1')
+        assert verification.check_antab(exp).ok
+
+    def test_the_bar_shows_only_past_the_threshold(self, tmp_path, monkeypatch):
+        disabled: list[bool] = []
+        real_progress = progress.Progress
+
+        def spy(*columns, **kwargs):
+            disabled.append(kwargs.get('disable', False))
+            return real_progress(*columns, **kwargs)
+
+        monkeypatch.setattr(progress, 'Progress', spy)
+        stub_tool(monkeypatch, stdout=HEALTHY)
+        verification.compare_ms_idi(ready_exp(tmp_path, utils.PASS_PROGRESS_MIN_PASSES))
+        verification.compare_ms_idi(ready_exp(tmp_path, utils.PASS_PROGRESS_MIN_PASSES + 1))
+        assert disabled == [True, False]
 
 
 class TestVerify:

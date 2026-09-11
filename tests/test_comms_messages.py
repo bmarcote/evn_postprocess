@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from evn_postprocess import comms, experiment, workflow
+from evn_postprocess import comms, experiment, plotting, process, workflow
 
 
 def _exp(tmp_path):
@@ -163,6 +163,132 @@ class TestMattermostFormatting:
         assert notifier.send_message('subject', 'body', files)
         assert uploaded == ['eb101.piletter.eml', 'eb101.piletter.html', 'plot.png']
         assert posted['file_ids'] == [f"id-{name}" for name in uploaded]
+
+
+class TestTheEndOfThePipelineIsAnnounced:
+    """The operator has to be told the pipeline finished and the dashboard is waiting.
+
+    Serving the dashboard blocks until they stop it themselves, so the review pause that
+    follows is reached only once they are demonstrably at the terminal — and stays quiet on
+    purpose. The announcement therefore has to go out while the server is starting, which is
+    also the first moment the tunnel command (and its port) is known.
+    """
+
+    def test_the_message_carries_the_url_and_the_tunnel_command(self, tmp_path):
+        exp = _exp(tmp_path)
+        recorder = Recorder()
+        workflow.set_notifier(recorder)
+        try:
+            workflow._announce_pipeline_dashboard(exp)("http://localhost:8050",
+                                                       "ssh -L 8050:localhost:8050 tester@eee2")
+        finally:
+            workflow.set_notifier(comms.NoneNotifier())
+        assert recorder.sent, "the end of the pipeline was not announced"
+        subject, body = recorder.sent[0][0], recorder.sent[0][1]
+        assert 'pipeline results are ready' in subject
+        assert 'ssh -L 8050:localhost:8050 tester@eee2' in body
+        assert 'http://localhost:8050' in body
+
+    def test_a_failing_announcement_never_stops_the_dashboard(self):
+        """The chat being down must not be what keeps the dashboard from coming up."""
+        def boom(url, tunnel):
+            raise RuntimeError("the chat is down")
+
+        # Returns normally: serve_dashboard goes straight on to serve_forever after this.
+        assert plotting._announce_ready(boom, 'http://localhost:8050', 'ssh -L ...', 'EB101') is None
+
+    def test_no_callback_is_not_an_announcement(self):
+        assert plotting._announce_ready(None, 'http://localhost:8050', 'ssh -L ...', 'EB101') is None
+
+    def test_the_callback_is_handed_to_the_dashboard(self, tmp_path, monkeypatch):
+        got = {}
+        monkeypatch.setattr(plotting, 'serve_dashboard',
+                            lambda exp, plots_dir, pipeline_dir=None, on_ready=None:
+                            got.update(on_ready=on_ready, pipeline_dir=pipeline_dir))
+        exp = _exp(tmp_path)
+        process.open_pipeline_dashboard(exp, on_ready=lambda url, tunnel: None)
+        assert callable(got['on_ready'])
+        assert got['pipeline_dir'] == exp.dirs.pipe_out
+
+
+class TestAPostTooLongForTheChat:
+    """A message past Mattermost's MaxPostSize is refused outright, attachments and all.
+
+    EM164B (658 correlator passes) produced a PI letter of ~130 000 characters: the
+    'the PI letter is ready' message was silently lost while the shorter ones arrived. It now
+    travels as a short head plus the full text attached.
+    """
+
+    def _notifier(self, monkeypatch):
+        config = comms.CommsConfig(mode='mattermost', username='jive.marcote',
+                                   mm_server_url='https://mm.example', mm_token='t',
+                                   mm_channel_id='chan')
+        notifier = comms.MattermostNotifier(config)
+        uploaded, posted = [], {}
+        monkeypatch.setattr(notifier, '_ensure_channel', lambda: None)
+        monkeypatch.setattr(notifier, '_upload_file',
+                            lambda path: uploaded.append((path.name, path.read_text()))
+                            or f"id-{path.name}")
+        monkeypatch.setattr(notifier, '_api',
+                            lambda method, endpoint, data=None: posted.update(data or {}) or
+                            {'create_at': 1})
+        return notifier, uploaded, posted
+
+    def test_a_message_that_fits_is_untouched(self):
+        body = "short enough\nby far"
+        assert comms._shorten_for_post(body, limit=1000) == (body, None)
+
+    def test_a_long_message_is_cut_on_a_line_boundary(self):
+        body = '\n'.join(f"- correlator pass #{i}" for i in range(500))
+        posted, full = comms._shorten_for_post(body, limit=400)
+        assert full == body                       # nothing of it is lost
+        assert len(posted) <= 400
+        assert 'too long for the chat' in posted and comms._FULL_MESSAGE_NAME in posted
+        assert posted.splitlines()[0] == "- correlator pass #0"
+
+    def test_the_full_text_is_attached_and_the_head_posted(self, monkeypatch):
+        notifier, uploaded, posted = self._notifier(monkeypatch)
+        monkeypatch.setattr(comms, 'MM_MAX_POST_CHARS', 500)
+        body = '\n'.join(f"- correlator pass #{i}" for i in range(500))
+        assert notifier.send_message('the PI letter is ready', body) is True
+        assert [name for name, _ in uploaded] == [comms._FULL_MESSAGE_NAME]
+        assert dict(uploaded)[comms._FULL_MESSAGE_NAME] == body
+        assert posted['file_ids'] == [f"id-{comms._FULL_MESSAGE_NAME}"]
+        assert len(posted['message']) <= 500
+
+    def test_the_real_attachments_still_travel_with_it(self, monkeypatch, tmp_path):
+        notifier, uploaded, posted = self._notifier(monkeypatch)
+        monkeypatch.setattr(comms, 'MM_MAX_POST_CHARS', 500)
+        (tmp_path / 'eb101.piletter.eml').write_text('draft')
+        body = '\n'.join(f"- correlator pass #{i}" for i in range(500))
+        assert notifier.send_message('subject', body, [tmp_path / 'eb101.piletter.eml'])
+        assert [name for name, _ in uploaded] == ['eb101.piletter.eml',
+                                                  comms._FULL_MESSAGE_NAME]
+
+    def test_the_overflow_file_does_not_outlive_the_call(self, monkeypatch):
+        notifier, uploaded, _ = self._notifier(monkeypatch)
+        monkeypatch.setattr(comms, 'MM_MAX_POST_CHARS', 200)
+        paths = []
+        monkeypatch.setattr(notifier, '_upload_file',
+                            lambda path: paths.append(path) or f"id-{path.name}")
+        notifier.send_message('subject', 'x\n' * 500)
+        assert paths and not paths[0].exists() and not paths[0].parent.exists()
+
+    def test_a_failing_post_says_what_was_lost(self, monkeypatch, caplog):
+        notifier, _, _ = self._notifier(monkeypatch)
+
+        def refuse(method, endpoint, data=None):
+            raise ValueError("HTTP 400: message too long")
+
+        monkeypatch.setattr(notifier, '_api', refuse)
+        errors = []
+        from loguru import logger
+        sink = logger.add(lambda m: errors.append(m.record['message']), level='ERROR')
+        try:
+            assert notifier.send_message('the PI letter is ready', 'body') is False
+        finally:
+            logger.remove(sink)
+        assert any('the PI letter is ready' in m for m in errors)
 
 
 class TestAttachmentTypes:

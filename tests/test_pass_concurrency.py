@@ -196,12 +196,12 @@ class TestTconvertProgressAndErrors:
 
     def test_no_bar_for_a_handful_of_passes(self, tmp_path, tconvert, monkeypatch):
         shown = _record_progress(monkeypatch)
-        process.tconvert(make_exp(tmp_path, passes=process._TCONVERT_PROGRESS_MIN_PASSES))
+        process.tconvert(make_exp(tmp_path, passes=utils.PASS_PROGRESS_MIN_PASSES))
         assert shown == [True], "the bar must be disabled at or below the threshold"
 
     def test_bar_shown_once_past_the_threshold(self, tmp_path, tconvert, monkeypatch):
         shown = _record_progress(monkeypatch)
-        process.tconvert(make_exp(tmp_path, passes=process._TCONVERT_PROGRESS_MIN_PASSES + 1))
+        process.tconvert(make_exp(tmp_path, passes=utils.PASS_PROGRESS_MIN_PASSES + 1))
         assert shown == [False], "the bar must be enabled above the threshold"
 
     def test_bar_counts_every_pass(self, tmp_path, tconvert, monkeypatch):

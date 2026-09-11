@@ -223,7 +223,15 @@ def create_input_file(exp) -> bool:
             continue
 
         template_content = template_text
-        
+
+        # Order-preserving dedupe (targets, then fringe finders, then calibrators; first
+        # occurrence wins). A set would reorder the names on every run, making the generated
+        # input file differ between otherwise identical runs.
+        all_sources: list[str] = []
+        for src_name in list(apass.sources.target) + list(apass.sources.fringefinder) + list(apass.sources.calibrator):
+            if src_name not in all_sources:
+                all_sources.append(src_name)
+
         replacements = {
             '{expname}': exp.expname.lower() if len(pipepasses) == 1 else f"{exp.expname.lower()}_{i}",
             '{userno}': subprocess.run(['aips_userno.py', exp.supsci.lower()], 
@@ -245,7 +253,7 @@ def create_input_file(exp) -> bool:
             '{doprimarybeam}': '1' if exp.multi_phase_center else '-1',
             '{setup_station}': exp.refant[0] if len(exp.refant) > 0 else '',
             '{do_all_sources}': '' if exp.multi_phase_center else '#',
-            '{all_sources}': ', '.join(set(apass.sources.target + apass.sources.fringefinder + apass.sources.calibrator)) if exp.multi_phase_center else '',
+            '{all_sources}': ', '.join(all_sources) if exp.multi_phase_center else '',
             }
         
         for placeholder, value in replacements.items():
@@ -368,9 +376,34 @@ def pipeline_feedback(exp) -> bool:
     This is the in-tree Python port of the historical ``feedback.pl`` script
     (see :mod:`evn_postprocess.feedback`). For multi-pass experiments one page is
     produced per pass (``{expname}_{p}.html``), otherwise a single ``{expname}.html``.
+
+    Each page shows the sources of its own correlator pass, and only those: a pass
+    (in particular each phase centre of a multi-phase-centre experiment) contains just
+    the sources that have visibilities in its MS. The experiment-wide source list is only
+    used as a fallback for a pass with no sources recorded.
     """
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
-    sources = [s.name for s in exp.sources]
+    exp_sources = [s.name for s in exp.sources]
+
+    def _sources_of(apass, page_name: str) -> list[str]:
+        """Returns the source names to show in the feedback page of one correlator pass.
+
+        Args:
+            apass (experiment.CorrelatorPass | None): The pass the page belongs to, or None
+                if no correlator pass is associated to it.
+            page_name (str): Name of the feedback page, only used for logging.
+
+        Returns:
+            list[str]: The source names of that pass, or the experiment-wide ones if the
+            pass has no sources recorded.
+        """
+        if apass is None or len(apass.sources) == 0:
+            logger.warning(f"No sources recorded for the pass of {page_name}; using the experiment-wide "
+                           f"source list ({', '.join(exp_sources)}) in its feedback page.")
+            return exp_sources
+
+        return apass.sources.names
+
     # Network Monitoring Experiments use the NME-formatted feedback page
     # (see experiment.is_nme for the single definition of what an NME is).
     is_nme = experiment.is_nme(exp.expname)
@@ -387,11 +420,14 @@ def pipeline_feedback(exp) -> bool:
             old_page.unlink()
 
     if len(pipepasses) > 1:
-        for p in range(1, len(pipepasses) + 1):
-            feedback.generate_feedback_page(f"{exp.expname.lower()}_{p}", sources=sources,
+        for p, apass in enumerate(pipepasses, 1):
+            page_name = f"{exp.expname.lower()}_{p}"
+            feedback.generate_feedback_page(page_name, sources=_sources_of(apass, page_name),
                                             nme=is_nme, contact=exp.supsci, directory=exp.dirs.pipe_out)
     else:
-        feedback.generate_feedback_page(exp.expname.lower(), sources=sources,
+        page_name = exp.expname.lower()
+        feedback.generate_feedback_page(page_name,
+                                        sources=_sources_of(pipepasses[0] if pipepasses else None, page_name),
                                         nme=is_nme, contact=exp.supsci, directory=exp.dirs.pipe_out)
     return True
 

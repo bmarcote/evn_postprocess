@@ -243,8 +243,10 @@ VLBA_STATIONS: frozenset[str] = frozenset(('br', 'fd', 'hn', 'kp', 'la', 'mk', '
                                            'ov', 'pt', 'sc', 'yy', 'gb'))
 # Directory on ccs where the correlator leaves the {exp}cal.vlba calibration file.
 CCS_LOG2VEX = '/ccs/var/log2vex/logexp_date'
-# Per-antenna, per-frequency GAIN curves for the VLBA/GBT antennas, kept locally on eee.
-GAINS_KEY = Path('/data/tsys/gbt_gains.key')
+# Per-antenna, per-frequency GAIN curves of the GBT and of the VLBA antennas, respectively,
+# kept locally on eee. antab_editor.py needs both because the VLBA antab information carries
+# no GAIN/INDEX headers of its own.
+GAINS_KEYS: tuple[Path, ...] = (Path('/data/tsys/gbt_gains.key'), Path('/data/tsys/vlba_gains.key'))
 
 
 def has_vlba_stations(exp) -> bool:
@@ -252,18 +254,49 @@ def has_vlba_stations(exp) -> bool:
     return any(name.lower() in VLBA_STATIONS for name in exp.antennas.names)
 
 
+def _fetch_gains_key(gains_key: Path, destination: Path, config) -> None:
+    """Places one gain-curve key file into ``destination``: a local copy, else an scp from eee.
+
+    A file that cannot be obtained is only reported (logger.warning): the operator can copy it
+    by hand and re-run the antab step, so this never raises and never fails the step.
+
+    Args:
+        gains_key: Absolute path of the key file as it lives on eee (e.g. /data/tsys/gbt_gains.key).
+        destination: Directory where the file must end up (the experiment's ``antenna_files/``).
+        config: Server configuration; ``config['eee']`` is used when the file is not on this machine.
+
+    Returns:
+        None. Success or failure is visible through the presence of the file in ``destination``.
+    """
+    local_copy = destination / gains_key.name
+    if gains_key.exists():
+        shutil.copy(gains_key, local_copy)
+        logger.debug(f"Copied the local {gains_key} into {destination}.")
+        return
+
+    try:
+        eee = config['eee']
+        host = f"{eee.user}@{eee.host}" if eee.user else eee.host
+        utils.scp(f"{host}:{gains_key}", str(local_copy))
+    except (subprocess.TimeoutExpired, ValueError, KeyError) as e:
+        logger.warning(f"Could not retrieve {gains_key} ({e}). The VLBA antab entries will lack "
+                       f"their GAIN headers; copy it into {destination}/ by hand before running "
+                       "antab_editor.py.")
+
+
 def get_vlba_antab(exp) -> bool:
     """Retrieves the VLBA calibration files into ``antenna_files/`` for antab_editor.
 
-    A global (EVN+VLBA) experiment needs two extra files, because the VLBA antab
+    A global (EVN+VLBA) experiment needs three extra files, because the VLBA antab
     information lacks the GAIN and INDEX headers antab_editor.py expects:
 
       * ``{exp}cal.vlba`` -- flag table, antab and weather information, produced by the
         correlator under ``{CCS_LOG2VEX}/{EXP}_{YYYYMMDD}/`` on ccs;
-      * ``gbt_gains.key`` -- the per-antenna, per-frequency gain curves, a local file on
-        eee (copied from the configured 'eee' server when it is not local).
+      * ``gbt_gains.key`` and ``vlba_gains.key`` -- the per-antenna, per-frequency gain curves
+        of the GBT and of the VLBA antennas, local files on eee (copied from the configured
+        'eee' server when they are not on this machine).
 
-    With both files in ``antenna_files/``, antab_editor.py parses them into the individual
+    With the three files in ``antenna_files/``, antab_editor.py parses them into the individual
     .antabfs files. A file that cannot be obtained is a warning, never a step failure: the
     operator can still place it by hand and re-run the antab step.
 
@@ -271,17 +304,18 @@ def get_vlba_antab(exp) -> bool:
         exp: Experiment object (provides the name, observing date and pipe_temp directory).
 
     Returns:
-        True when both files are in place, False when at least one is missing.
+        True when all three files are in place, False when at least one of them is missing.
     """
     destination = exp.dirs.pipe_temp
     destination.mkdir(parents=True, exist_ok=True)
     cal_file = destination / f"{exp.expname.lower()}cal.vlba"
-    gains_file = destination / GAINS_KEY.name
+    gains_files = [destination / gains_key.name for gains_key in GAINS_KEYS]
     try:
         config = servers.retrieve_servers()
     except (FileNotFoundError, KeyError) as e:
         logger.warning(f"No server configuration to retrieve the VLBA calibration files ({e}). "
-                       f"Copy {cal_file.name} and {GAINS_KEY.name} into {destination}/ by hand.")
+                       f"Copy {', '.join(f.name for f in (cal_file, *gains_files))} into "
+                       f"{destination}/ by hand.")
         return False
 
     if not cal_file.exists():
@@ -297,28 +331,20 @@ def get_vlba_antab(exp) -> bool:
     else:
         logger.debug(f"{cal_file.name} already present in {destination}.")
 
-    if not gains_file.exists():
-        if GAINS_KEY.exists():
-            shutil.copy(GAINS_KEY, gains_file)
-            logger.debug(f"Copied the local {GAINS_KEY} into {destination}.")
+    for gains_key in GAINS_KEYS:
+        if (destination / gains_key.name).exists():
+            logger.debug(f"{gains_key.name} already present in {destination}.")
         else:
-            eee = config['eee']
-            host = f"{eee.user}@{eee.host}" if eee.user else eee.host
-            try:
-                utils.scp(f"{host}:{GAINS_KEY}", str(gains_file))
-            except (subprocess.TimeoutExpired, ValueError) as e:
-                logger.warning(f"Could not retrieve {GAINS_KEY} ({e}). The VLBA antab entries "
-                               f"will lack their GAIN headers; copy it into {destination}/ "
-                               "by hand before running antab_editor.py.")
+            _fetch_gains_key(gains_key, destination, config)
 
-    missing = [f.name for f in (cal_file, gains_file) if not f.exists()]
+    missing = [f.name for f in (cal_file, *gains_files) if not f.exists()]
     if missing:
         rprint(f"[bold yellow]Missing VLBA calibration file(s) in {destination}: "
                f"{', '.join(missing)}.[/bold yellow]")
         return False
 
     logger.info(f"VLBA calibration files ready in {destination}: "
-                f"{cal_file.name}, {gains_file.name}.")
+                f"{', '.join(f.name for f in (cal_file, *gains_files))}.")
     return True
 
 

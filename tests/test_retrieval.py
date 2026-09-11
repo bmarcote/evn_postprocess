@@ -287,9 +287,9 @@ def test_vlbeer_rerun_nothing_new_fetches_nothing(tmp_path, monkeypatch):
 class TestVlbaCalibrationFiles:
     """Global (EVN+VLBA) experiments need the VLBA calibration files for antab_editor.
 
-    `get_vlba_antab` must place `{exp}cal.vlba` and `gbt_gains.key` in antenna_files/,
-    and must never turn a missing file into a step failure (the operator can copy them
-    by hand and re-run the antab step).
+    `get_vlba_antab` must place `{exp}cal.vlba`, `gbt_gains.key` and `vlba_gains.key` in
+    antenna_files/, and must never turn a missing file into a step failure (the operator can
+    copy them by hand and re-run the antab step).
     """
 
     def _exp(self, tmp_path):
@@ -303,6 +303,13 @@ class TestVlbaCalibrationFiles:
                                             experiment.Antenna(name='Br')])
         return exp
 
+    def _servers(self):
+        """Fake computers.toml configuration: the two hosts get_vlba_antab reaches (ccs, eee)."""
+        return _servers_mod.Servers([
+            _servers_mod.Server('ccs', 'jops', 'ccs', Path('/ccs/expr/{expname}')),
+            _servers_mod.Server('eee', 'jops', 'eee', Path('/data/tsys')),
+        ])
+
     def test_detects_a_global_experiment(self, tmp_path):
         from evn_postprocess import experiment
         from evn_postprocess.retrieval import jive
@@ -312,13 +319,15 @@ class TestVlbaCalibrationFiles:
                                             experiment.Antenna(name='Wb')])
         assert jive.has_vlba_stations(exp) is False
 
-    def test_fetches_both_files(self, tmp_path, monkeypatch):
+    def test_fetches_the_cal_file_and_both_gains_keys(self, tmp_path, monkeypatch):
         from evn_postprocess.retrieval import jive
         exp = self._exp(tmp_path)
-        gains = tmp_path / 'gbt_gains.key'
-        gains.write_text('GAIN EF\n')
-        monkeypatch.setattr(jive, 'GAINS_KEY', gains)
+        gains_keys = (tmp_path / 'gbt_gains.key', tmp_path / 'vlba_gains.key')
+        for a_key in gains_keys:
+            a_key.write_text(f"GAIN {a_key.name}\n")
 
+        monkeypatch.setattr(jive, 'GAINS_KEYS', gains_keys)
+        monkeypatch.setattr(jive.servers, 'retrieve_servers', self._servers)
         copied = []
 
         def fake_scp(origin, destination, **kwargs):
@@ -329,14 +338,61 @@ class TestVlbaCalibrationFiles:
         monkeypatch.setattr(jive.utils, 'scp', fake_scp)
         assert jive.get_vlba_antab(exp) is True
         assert (exp.dirs.pipe_temp / 'gp052cal.vlba').exists()
-        assert (exp.dirs.pipe_temp / 'gbt_gains.key').exists()
-        # The cal file is looked for in the correlator's log2vex directory for this date.
-        assert copied and 'GP052_20260410/gp052cal.vlba' in copied[0]
+        assert (exp.dirs.pipe_temp / 'gbt_gains.key').exists()      # both gain curves, GBT...
+        assert (exp.dirs.pipe_temp / 'vlba_gains.key').exists()     # ...and VLBA
+        # The cal file is looked for in the correlator's log2vex directory for this date;
+        # both gains keys were local, so nothing else went over the network.
+        assert len(copied) == 1 and 'GP052_20260410/gp052cal.vlba' in copied[0]
+
+    def test_a_gains_key_absent_locally_is_fetched_from_eee(self, tmp_path, monkeypatch):
+        from evn_postprocess.retrieval import jive
+        exp = self._exp(tmp_path)
+        local_key = tmp_path / 'gbt_gains.key'
+        local_key.write_text('GAIN GBT\n')
+        remote_key = tmp_path / 'not-here' / 'vlba_gains.key'   # only on eee, must be scp'ed
+        monkeypatch.setattr(jive, 'GAINS_KEYS', (local_key, remote_key))
+        monkeypatch.setattr(jive.servers, 'retrieve_servers', self._servers)
+        copied = []
+
+        def fake_scp(origin, destination, **kwargs):
+            copied.append(origin)
+            Path(destination).write_text('remote\n')
+            return True
+
+        monkeypatch.setattr(jive.utils, 'scp', fake_scp)
+        assert jive.get_vlba_antab(exp) is True
+        assert (exp.dirs.pipe_temp / 'gbt_gains.key').read_text() == 'GAIN GBT\n'   # local copy
+        assert (exp.dirs.pipe_temp / 'vlba_gains.key').read_text() == 'remote\n'    # from eee
+        assert [o for o in copied if o == f"jops@eee:{remote_key}"]
+
+    def test_only_one_gains_key_obtained_is_reported(self, tmp_path, monkeypatch):
+        from evn_postprocess.retrieval import jive
+        exp = self._exp(tmp_path)
+        local_key = tmp_path / 'gbt_gains.key'
+        local_key.write_text('GAIN GBT\n')
+        remote_key = tmp_path / 'not-here' / 'vlba_gains.key'
+        monkeypatch.setattr(jive, 'GAINS_KEYS', (local_key, remote_key))
+        monkeypatch.setattr(jive.servers, 'retrieve_servers', self._servers)
+        printed = []
+        monkeypatch.setattr(jive, 'rprint', lambda message: printed.append(message))
+
+        def scp_without_the_vlba_key(origin, destination, **kwargs):
+            if origin.endswith('vlba_gains.key'):
+                raise ValueError("no such file on the remote host")
+            Path(destination).write_text('cal\n')
+            return True
+
+        monkeypatch.setattr(jive.utils, 'scp', scp_without_the_vlba_key)
+        assert jive.get_vlba_antab(exp) is False                    # one of the three is missing
+        assert (exp.dirs.pipe_temp / 'gbt_gains.key').exists()      # the obtainable one is kept
+        assert printed and 'vlba_gains.key' in printed[0] and 'gbt_gains.key' not in printed[0]
 
     def test_a_missing_file_is_reported_not_raised(self, tmp_path, monkeypatch):
         from evn_postprocess.retrieval import jive
         exp = self._exp(tmp_path)
-        monkeypatch.setattr(jive, 'GAINS_KEY', tmp_path / 'absent_gains.key')
+        monkeypatch.setattr(jive, 'GAINS_KEYS', (tmp_path / 'absent_gbt_gains.key',
+                                                 tmp_path / 'absent_vlba_gains.key'))
+        monkeypatch.setattr(jive.servers, 'retrieve_servers', self._servers)
 
         def failing_scp(*a, **k):
             raise ValueError("no such file on the remote host")

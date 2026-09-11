@@ -6,6 +6,55 @@ This is the change log for the different production (master) versions of the pro
 ## Unreleased
 
 Fixed:
+  - The operator was never told the pipeline had finished. The only chat notification for it
+    came from the review pause after `postpipe`, and that pause deliberately stays quiet when
+    the operator has just been held at the terminal — which `postpipe` itself always does, by
+    opening the pipeline dashboard and blocking on it until they stop it. So in an interactive
+    run the "results are ready" ping was suppressed every single time, and the run sat waiting
+    at a dashboard nobody knew was up. The end of the pipeline is now announced from where it
+    actually happens: `serve_dashboard` takes an `on_ready` callback, fired once the port is
+    bound and before it starts blocking, and the message carries the dashboard URL and the
+    ready-made `ssh -L` tunnel command (neither of which is known any earlier). The desktop
+    notification goes out with it, and the review pause keeps its existing behaviour.
+  - A chat message longer than Mattermost's `MaxPostSize` (16383 characters by default) was
+    refused by the API and lost in full — including its attachments, which had already been
+    uploaded and were left orphaned. This is why EM164B delivered its summary but never the
+    "the PI letter is ready" message: with 658 correlator passes the letter carries one bullet
+    per pass, about 130 000 characters. A message past `MM_MAX_POST_CHARS`
+    (`POSTPROCESS_MM_MAX_POST_CHARS`, 15000) is now posted as a head cut on a line boundary
+    plus the complete text attached as `full-message.md`, so nothing is lost. A post that
+    fails for any other reason is logged naming the message, its size and how many
+    attachments went with it, instead of a bare "Failed to send Mattermost message".
+
+  - The sources of a correlator pass were not the sources of that pass. On a
+    multi-phase-centre experiment `get_metadata_from_ms` takes a fast path that reads the
+    metadata of the first pass only and copies it onto all the others (setups are identical
+    and re-reading several hundred MSs would take hours) — but it copied the *source list*
+    too, so every pass of e.g. EM164B (658 passes) claimed pass 1's phase centre. That list
+    is what builds the EVN pipeline input files (`{target}`, `{bpass}`, `{phaseref}`,
+    `{all_sources}`) and the pipeline feedback pages, so both named the wrong sources and had
+    to be fixed by hand. The fast path now still shares antennas, frequency setup and scans,
+    but reads each pass's source list from its own MS. Only the `Source` objects (type,
+    protection flag, coordinates) are reused, and an unreadable MS falls back to the first
+    pass's list with a warning rather than aborting the step.
+  - A correlator pass listed every source in its MS FIELD table, whether or not it held any
+    visibility. The FIELD table of a phase-centre pass can name centres that were never
+    correlated into it, so the pipeline was told to process sources with no data. The pass
+    source list now comes from the MAIN table (new `mstools.source_names_with_data`, which
+    chunk-reads FIELD_ID only — never DATA), i.e. exactly the sources with data, no more and
+    no fewer. The names dropped this way are logged.
+  - `pipeline.pipeline_feedback` handed the same experiment-wide source list to every page it
+    generated (the in-tree port of `feedback.pl`). Each `{expname}_{p}.html` now shows the
+    sources of its own pass; the experiment-wide list survives only as a fallback, with a
+    warning, for a pass with no sources recorded.
+  - A global (EVN+VLBA) experiment retrieved only `gbt_gains.key`, so the VLBA antennas were
+    left without their GAIN curves in `antab_editor.py`. `vlba_gains.key` is now fetched
+    alongside it (both from `/data/tsys/`, copied locally or scp'ed from eee), next to the
+    `{exp}cal.vlba` already retrieved from ccs. A key that cannot be obtained stays a warning,
+    never a step failure.
+  - `pipeline.create_input_file` built `{all_sources}` through a `set`, so the source order in
+    the generated input file changed from run to run on otherwise identical input. It is now
+    an order-preserving dedupe (targets, fringe finders, calibrators).
   - `Ms.get_msmetadata()` read the SPECTRAL_WINDOW `TOTAL_BANDWIDTH` column, which is
     the bandwidth of a *single* subband, and stored it as `FreqSetup.bandwidth`, the
     *total* one. Everything downstream then divided it by the number of subbands, so
@@ -47,7 +96,47 @@ Removed:
     `process.antenna_feedback()`, the `station-feedback` stage of the `jive` delivery and
     the `issues` workflow step, whose only content it was.
 
+Added:
+  - A progress footer for the long-running per-pass steps. From more than
+    `utils.PASS_PROGRESS_MIN_PASSES` (5, `EVN_PASS_PROGRESS_MIN_PASSES`) correlator passes,
+    `getdata`, `j2ms2`, `tConvert`, `append antab` and PolConvert's `--apply` pin a Rich
+    progress bar under their output saying how many passes are done, with elapsed and
+    remaining time. The tools' messages are NOT replaced by it: while the bar is live Rich
+    swaps stdout/stderr for its own proxies, so everything they print keeps scrolling above
+    the bar with its colours, and every echoed line is tagged with the pass it came from
+    (`[es124_7_1] ...`) so the concurrent streams stay readable. `tConvert` in particular used
+    to go silent to its log from two passes up; past the threshold its output now comes back.
+    At or below the threshold nothing changes. PolConvert converts every FITS-IDI file in a
+    single child, so there its bar is driven by the `.PCONVERT` files appearing on disk, and
+    the child's output is streamed through this process instead of straight to the terminal
+    so it cannot draw over the bar. New: `utils.pass_progress`, `utils.show_pass_progress`,
+    `utils.PASS_PROGRESS_MIN_PASSES`, and a `line_prefix` argument on `utils.shell_command`.
+
 Changed:
+  - The `verification` step now checks the correlator passes concurrently instead of one
+    after the other, with the same progress footer as the other per-pass steps. Both
+    per-pass checks are covered: `check_antab` (reads the first FITS-IDI of every pass) and
+    `compare_ms_idi`, which is by far the longest — it runs `compare-ms-idi.py` per pass and
+    reads both the MS and the FITS-IDI in full. Each pass only ever touches its own files,
+    so they are independent; `compare_ms_idi` runs one subprocess per pass under
+    `utils.MAX_PASS_IO_WORKERS`, `check_antab` in-process under the CPU ceiling.
+    `check_multipart` is unchanged: it was already a single invocation covering every pass.
+    The problems are still reported in pass order, whatever order the passes finish in, so
+    the report does not change shape between runs, and the tool output of all the passes is
+    teed to `logs/verification.log` under a lock so their lines cannot interleave.
+    `compare-ms-idi.py` failing to start is now reported once with the number of passes
+    affected rather than once per pass.
+  - `process.append_antab` ran the correlator passes strictly one after the other
+    (`append_tsys.py` for every pass, then `append_gc.py` for every pass, each a bare
+    `Popen().wait()`). A unit of work only ever writes the FITS-IDI files of its own pass, so
+    they are now split one per (ANTAB file, pass) and run at once under the same ceiling as
+    every other subprocess-per-pass step (`utils.MAX_PASS_IO_WORKERS`) — on a
+    multi-phase-centre run, hundreds of sequential calls become a handful of batches. The
+    existing ANTAB-to-pass mapping is unchanged (one ANTAB file covers every pass; several of
+    them go one per pass). The calls also go through `utils.shell_command` now, so they are
+    recorded in `logs/commands.sh` and teed to `logs/append_antab.log`; as before their exit
+    codes are not the verdict, and the closing FITS-IDI consistency check still decides
+    whether the step worked.
   - The `checklis` step now says what is actually wrong with the .lis files, instead of the
     bare "Issues found in .lis files. Please check the files.". The operator always sees, in
     this order: what `checklis.py` returned for every .lis file, verbatim, one block per file
@@ -308,7 +397,34 @@ Added:
     but never read): the review pause after `postpipe` is now the default value of
     `pause_after`, not a hard-coded step name.
 
+Added:
+  - A progress footer for the long-running per-pass steps. From more than
+    `utils.PASS_PROGRESS_MIN_PASSES` (5, `EVN_PASS_PROGRESS_MIN_PASSES`) correlator passes,
+    `getdata`, `j2ms2`, `tConvert`, `append antab` and PolConvert's `--apply` pin a Rich
+    progress bar under their output saying how many passes are done, with elapsed and
+    remaining time. The tools' messages are NOT replaced by it: while the bar is live Rich
+    swaps stdout/stderr for its own proxies, so everything they print keeps scrolling above
+    the bar with its colours, and every echoed line is tagged with the pass it came from
+    (`[es124_7_1] ...`) so the concurrent streams stay readable. `tConvert` in particular used
+    to go silent to its log from two passes up; past the threshold its output now comes back.
+    At or below the threshold nothing changes. PolConvert converts every FITS-IDI file in a
+    single child, so there its bar is driven by the `.PCONVERT` files appearing on disk, and
+    the child's output is streamed through this process instead of straight to the terminal
+    so it cannot draw over the bar. New: `utils.pass_progress`, `utils.show_pass_progress`,
+    `utils.PASS_PROGRESS_MIN_PASSES`, and a `line_prefix` argument on `utils.shell_command`.
+
 Changed:
+  - `process.append_antab` ran the correlator passes strictly one after the other
+    (`append_tsys.py` for every pass, then `append_gc.py` for every pass, each a bare
+    `Popen().wait()`). A unit of work only ever writes the FITS-IDI files of its own pass, so
+    they are now split one per (ANTAB file, pass) and run at once under the same ceiling as
+    every other subprocess-per-pass step (`utils.MAX_PASS_IO_WORKERS`) — on a
+    multi-phase-centre run, hundreds of sequential calls become a handful of batches. The
+    existing ANTAB-to-pass mapping is unchanged (one ANTAB file covers every pass; several of
+    them go one per pass). The calls also go through `utils.shell_command` now, so they are
+    recorded in `logs/commands.sh` and teed to `logs/append_antab.log`; as before their exit
+    codes are not the verdict, and the closing FITS-IDI consistency check still decides
+    whether the step worked.
   - **The per-correlator-pass concurrency is one shared, tunable pair of knobs**
     (`utils.MAX_PASS_WORKERS` / `utils.MAX_PASS_IO_WORKERS`, applied through
     `utils.pass_workers()`) instead of a worker count hard-coded separately at every call
@@ -448,7 +564,34 @@ Added:
     dialog, batch workflow helpers, format_remote_path, tools resolution,
     plus regression tests for every Stage-B bug.
 
+Added:
+  - A progress footer for the long-running per-pass steps. From more than
+    `utils.PASS_PROGRESS_MIN_PASSES` (5, `EVN_PASS_PROGRESS_MIN_PASSES`) correlator passes,
+    `getdata`, `j2ms2`, `tConvert`, `append antab` and PolConvert's `--apply` pin a Rich
+    progress bar under their output saying how many passes are done, with elapsed and
+    remaining time. The tools' messages are NOT replaced by it: while the bar is live Rich
+    swaps stdout/stderr for its own proxies, so everything they print keeps scrolling above
+    the bar with its colours, and every echoed line is tagged with the pass it came from
+    (`[es124_7_1] ...`) so the concurrent streams stay readable. `tConvert` in particular used
+    to go silent to its log from two passes up; past the threshold its output now comes back.
+    At or below the threshold nothing changes. PolConvert converts every FITS-IDI file in a
+    single child, so there its bar is driven by the `.PCONVERT` files appearing on disk, and
+    the child's output is streamed through this process instead of straight to the terminal
+    so it cannot draw over the bar. New: `utils.pass_progress`, `utils.show_pass_progress`,
+    `utils.PASS_PROGRESS_MIN_PASSES`, and a `line_prefix` argument on `utils.shell_command`.
+
 Changed:
+  - `process.append_antab` ran the correlator passes strictly one after the other
+    (`append_tsys.py` for every pass, then `append_gc.py` for every pass, each a bare
+    `Popen().wait()`). A unit of work only ever writes the FITS-IDI files of its own pass, so
+    they are now split one per (ANTAB file, pass) and run at once under the same ceiling as
+    every other subprocess-per-pass step (`utils.MAX_PASS_IO_WORKERS`) — on a
+    multi-phase-centre run, hundreds of sequential calls become a handful of batches. The
+    existing ANTAB-to-pass mapping is unchanged (one ANTAB file covers every pass; several of
+    them go one per pass). The calls also go through `utils.shell_command` now, so they are
+    recorded in `logs/commands.sh` and teed to `logs/append_antab.log`; as before their exit
+    codes are not the verdict, and the closing FITS-IDI consistency check still decides
+    whether the step worked.
   - `Experiment.store()` is now atomic (`*.tmp` + `os.replace`).
   - `notify()` is a no-op when stderr is not a TTY (avoids polluting batch logs).
   - Dependencies: replaced the obsolete `pyrap` PyPI package with
@@ -527,7 +670,34 @@ Known errors:
 
 ## Version 0.3 -- 13 November 2019
 
+Added:
+  - A progress footer for the long-running per-pass steps. From more than
+    `utils.PASS_PROGRESS_MIN_PASSES` (5, `EVN_PASS_PROGRESS_MIN_PASSES`) correlator passes,
+    `getdata`, `j2ms2`, `tConvert`, `append antab` and PolConvert's `--apply` pin a Rich
+    progress bar under their output saying how many passes are done, with elapsed and
+    remaining time. The tools' messages are NOT replaced by it: while the bar is live Rich
+    swaps stdout/stderr for its own proxies, so everything they print keeps scrolling above
+    the bar with its colours, and every echoed line is tagged with the pass it came from
+    (`[es124_7_1] ...`) so the concurrent streams stay readable. `tConvert` in particular used
+    to go silent to its log from two passes up; past the threshold its output now comes back.
+    At or below the threshold nothing changes. PolConvert converts every FITS-IDI file in a
+    single child, so there its bar is driven by the `.PCONVERT` files appearing on disk, and
+    the child's output is streamed through this process instead of straight to the terminal
+    so it cannot draw over the bar. New: `utils.pass_progress`, `utils.show_pass_progress`,
+    `utils.PASS_PROGRESS_MIN_PASSES`, and a `line_prefix` argument on `utils.shell_command`.
+
 Changed:
+  - `process.append_antab` ran the correlator passes strictly one after the other
+    (`append_tsys.py` for every pass, then `append_gc.py` for every pass, each a bare
+    `Popen().wait()`). A unit of work only ever writes the FITS-IDI files of its own pass, so
+    they are now split one per (ANTAB file, pass) and run at once under the same ceiling as
+    every other subprocess-per-pass step (`utils.MAX_PASS_IO_WORKERS`) — on a
+    multi-phase-centre run, hundreds of sequential calls become a handful of batches. The
+    existing ANTAB-to-pass mapping is unchanged (one ANTAB file covers every pass; several of
+    them go one per pass). The calls also go through `utils.shell_command` now, so they are
+    recorded in `logs/commands.sh` and teed to `logs/append_antab.log`; as before their exit
+    codes are not the verdict, and the closing FITS-IDI consistency check still decides
+    whether the step worked.
     - Checklis is done after the manual modification of the .lis file. It repeats the check if user not happy.
 Fixed:
     - Output line 'j2sm2' -> 'j2ms2'.

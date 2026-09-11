@@ -12,7 +12,9 @@ import glob
 import shlex
 import string
 import random
-from typing import Optional
+import sys
+import threading
+from typing import Callable, Optional
 from pathlib import Path
 from itertools import product
 from datetime import datetime, timedelta
@@ -23,7 +25,6 @@ from loguru import logger
 from astropy import units as u
 from astropy.io import fits
 from rich import print as rprint
-from rich import progress
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from . import experiment, utils, mstools
 from . import lisfiles
@@ -56,11 +57,6 @@ _CROSS_POLS: frozenset[str] = frozenset({'RL', 'LR', 'XY', 'YX'})
 # labels itself (and ssh's "Warning: Permanently added ..."), plus the "Ignoring"/"Skipping"
 # notes for job-list lines and subdirectories it does not recognise.
 _GETDATA_WARN_RE = re.compile(r"warning|^(?:Ignoring|Skipping) ", re.IGNORECASE)
-
-# From more than this many correlator passes, tConvert shows a progress bar instead of
-# leaving the terminal silent: with the passes converting concurrently their own output is
-# muted, and a long multi-phase-centre run would otherwise give no sign of how far it is.
-_TCONVERT_PROGRESS_MIN_PASSES: int = 5
 
 # _TCONVERT_BIN = "tConvert"  # This will be the one to use once we certify the following one works
 _TCONVERT_BIN = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tConvert/tConvert"
@@ -134,6 +130,11 @@ def archive(exp: experiment.Experiment) -> bool:
 def getdata(exp: experiment.Experiment) -> bool:
     """Gets the data from all existing .lis files from the given experiment.
 
+    One getdata.pl subprocess per correlator pass, all running at once under the shared IO
+    ceiling. Past ``utils.PASS_PROGRESS_MIN_PASSES`` passes their messages scroll far too
+    fast to count, so a progress bar is pinned underneath saying how many passes are done;
+    the output keeps flowing above it, each line tagged with the pass it came from.
+
     Args:
         exp (experiment.Experiment): Experiment object with correlator passes.
 
@@ -141,6 +142,8 @@ def getdata(exp: experiment.Experiment) -> bool:
         bool: True if data was retrieved successfully.
     """
     try:
+        show_bar = utils.show_pass_progress(len(exp.correlator_passes))
+
         def _fetch_pass(a_pass):
             try:
                 if not a_pass.lisfile.exists():
@@ -161,7 +164,8 @@ def getdata(exp: experiment.Experiment) -> bool:
                 utils.shell_command("getdata.pl", cmd_args, shell=True,
                                     stdout=None, stderr=subprocess.STDOUT, bufsize=0,
                                     stderr_warn_re=_GETDATA_WARN_RE,
-                                    logfile=exp.dirs.logs / "getdata.log")
+                                    logfile=exp.dirs.logs / "getdata.log",
+                                    line_prefix=f"[{a_pass.lisfile.stem}] " if show_bar else '')
                 return True
             except Exception as e:
                 logger.opt(exception=True).error(f"Error fetching the data for "
@@ -172,9 +176,17 @@ def getdata(exp: experiment.Experiment) -> bool:
             rprint("[bold yellow]No correlator passes found to fetch[/bold yellow]")
             return True
 
-        with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes),
-                                                   utils.MAX_PASS_IO_WORKERS)) as pool:
-            results = list(pool.map(_fetch_pass, exp.correlator_passes))
+        # The bar wraps the pool so Rich has swapped sys.stdout for its proxy before the
+        # first subprocess writes: whatever is echoed then scrolls above the bar instead of
+        # over it. as_completed (rather than pool.map) is what makes it move as passes land.
+        with utils.pass_progress("[green]getdata", len(exp.correlator_passes)) as advance:
+            with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes),
+                                                       utils.MAX_PASS_IO_WORKERS)) as pool:
+                futures = [pool.submit(_fetch_pass, a_pass) for a_pass in exp.correlator_passes]
+                results: list[bool] = []
+                for future in as_completed(futures):
+                    results.append(future.result())
+                    advance()
 
         if not all(results):
             logger.error(f"Failed to fetch data for {(len(results) - sum(results))} passes")
@@ -189,6 +201,11 @@ def getdata(exp: experiment.Experiment) -> bool:
 def j2ms2(exp: experiment.Experiment) -> bool:
     """Runs j2ms2 on all existing .lis files from the given experiment.
     If the MS to produce already exists, then it will not generate it again.
+
+    One j2ms2 subprocess per correlator pass, all running at once under the shared IO
+    ceiling. Past ``utils.PASS_PROGRESS_MIN_PASSES`` passes their interleaved messages
+    scroll far too fast to count, so a progress bar is pinned underneath saying how many
+    passes are done, and each echoed line is tagged with the pass it came from.
 
     Args:
         exp (experiment.Experiment): Experiment object with correlator passes.
@@ -216,6 +233,8 @@ def j2ms2(exp: experiment.Experiment) -> bool:
             logger.error("No correlator passes found for j2ms2")
             return False
 
+        show_bar = utils.show_pass_progress(len(exp.correlator_passes))
+
         def _j2ms2_correlator_pass(args: tuple[experiment.Experiment, experiment.CorrelatorPass]) -> bool:
             exp, a_pass = args
             try:
@@ -232,53 +251,62 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                     j2ms2_args.append("fo:nosquash_source_table")
 
                 utils.shell_command("j2ms2", j2ms2_args, shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0,
-                                    logfile=exp.dirs.logs / "j2ms2.log")
+                                    logfile=exp.dirs.logs / "j2ms2.log",
+                                    line_prefix=f"[{a_pass.lisfile.stem}] " if show_bar else '')
                 return True
             except Exception as e:
                 logger.opt(exception=True).error(f"Error running j2ms2 for "
                                                  f"{a_pass.lisfile.name}: {e}")
                 return False
 
-        with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes),
-                                                   utils.MAX_PASS_IO_WORKERS)) as pool:
-            ms_futures = [pool.submit(_j2ms2_correlator_pass, (exp, p)) for p in exp.correlator_passes]
+        # The bar wraps the pool so Rich has swapped sys.stdout for its proxy before the
+        # first subprocess writes: what the passes echo then scrolls above the bar instead
+        # of over it. Its total counts only the correlator passes — the auxiliary lag-space
+        # MS below is deliberately not one of them.
+        with utils.pass_progress("[green]j2ms2", len(exp.correlator_passes)) as advance:
+            with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes),
+                                                       utils.MAX_PASS_IO_WORKERS)) as pool:
+                ms_futures = [pool.submit(_j2ms2_correlator_pass, (exp, p)) for p in exp.correlator_passes]
 
-            # Create lag-space MS from first pass in parallel (for signal detection).
-            # j2ms2 ignores '-o' when given an input .lis via '-v', so we build a dedicated
-            # '{expname}-lag.lis' that already names the lag MS, and restrict it to the
-            # calibrator sources via the 'fo:filter/source=...' directive.
-            lag_ms = Path(f"{exp.expname.lower()}-lag.ms")
-            lag_future = None
-            if exp.no_lag:
-                logger.info("--no-lag set: skipping creation of the lag-space MS.")
-            elif not lag_ms.exists() and exp.correlator_passes[0].lisfile.exists():
-                lag_lisfile = lisfiles.create_lag_lisfile(exp, exp.correlator_passes[0])
-                # Register the lag pass as a dedicated, separate product (NOT a correlator
-                # pass). It is kept out of exp.correlator_passes on purpose so it is never
-                # counted as a real pass (multi_phase_center, pipeline input, msops, ...);
-                # it exists solely for the per-scan antenna SNR computation (compute_lag_snr).
-                exp.lag_pass = experiment.CorrelatorPass(
-                    lisfile=lag_lisfile, msfile=lag_ms, fitsidifile="", pipeline=False)
-                cal_sources = exp.sources.fringefinder + exp.sources.calibrator
-                lag_args = ["-v", str(lag_lisfile), "-d", "frequency"]
-                if cal_sources:
-                    lag_args.append(f"fo:filter/source={','.join(cal_sources)}")
-                if not exp.eEVNname:
-                    lag_args.append("fo:nosquash_source_table")
-                # Quiet: the lag MS run goes only to its log file (echo=False), so its
-                # output does not garble the foreground pass's real-time terminal stream
-                # while both run in parallel (Issue 7).
-                lag_future = pool.submit(utils.shell_command, "j2ms2", lag_args,
-                    shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0,
-                    logfile=exp.dirs.logs / "j2ms2-lag.log", echo=False)
+                # Create lag-space MS from first pass in parallel (for signal detection).
+                # j2ms2 ignores '-o' when given an input .lis via '-v', so we build a dedicated
+                # '{expname}-lag.lis' that already names the lag MS, and restrict it to the
+                # calibrator sources via the 'fo:filter/source=...' directive.
+                lag_ms = Path(f"{exp.expname.lower()}-lag.ms")
+                lag_future = None
+                if exp.no_lag:
+                    logger.info("--no-lag set: skipping creation of the lag-space MS.")
+                elif not lag_ms.exists() and exp.correlator_passes[0].lisfile.exists():
+                    lag_lisfile = lisfiles.create_lag_lisfile(exp, exp.correlator_passes[0])
+                    # Register the lag pass as a dedicated, separate product (NOT a correlator
+                    # pass). It is kept out of exp.correlator_passes on purpose so it is never
+                    # counted as a real pass (multi_phase_center, pipeline input, msops, ...);
+                    # it exists solely for the per-scan antenna SNR computation (compute_lag_snr).
+                    exp.lag_pass = experiment.CorrelatorPass(
+                        lisfile=lag_lisfile, msfile=lag_ms, fitsidifile="", pipeline=False)
+                    cal_sources = exp.sources.fringefinder + exp.sources.calibrator
+                    lag_args = ["-v", str(lag_lisfile), "-d", "frequency"]
+                    if cal_sources:
+                        lag_args.append(f"fo:filter/source={','.join(cal_sources)}")
+                    if not exp.eEVNname:
+                        lag_args.append("fo:nosquash_source_table")
+                    # Quiet: the lag MS run goes only to its log file (echo=False), so its
+                    # output does not garble the foreground pass's real-time terminal stream
+                    # while both run in parallel (Issue 7).
+                    lag_future = pool.submit(utils.shell_command, "j2ms2", lag_args,
+                        shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0,
+                        logfile=exp.dirs.logs / "j2ms2-lag.log", echo=False)
 
-            ms_results = [f.result() for f in ms_futures]
-            if lag_future is not None:
-                try:
-                    lag_future.result()
-                    logger.info(f"Created lag-space MS: {lag_ms}")
-                except Exception as e:
-                    logger.warning(f"Lag-space MS creation failed (non-fatal): {e}")
+                ms_results: list[bool] = []
+                for future in as_completed(ms_futures):
+                    ms_results.append(future.result())
+                    advance()
+                if lag_future is not None:
+                    try:
+                        lag_future.result()
+                        logger.info(f"Created lag-space MS: {lag_ms}")
+                    except Exception as e:
+                        logger.warning(f"Lag-space MS creation failed (non-fatal): {e}")
 
         return all(ms_results)
     except Exception as e:
@@ -310,6 +338,11 @@ def update_ms_expname(exp: experiment.Experiment) -> bool:
 def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
     """Extracts metadata from MS files and populates the experiment object.
 
+    The source list is always per-pass, also in the multi-phase-centre fast path: a
+    correlator pass must list exactly the sources that have visibilities in its own MS
+    (see mstools.source_names_with_data), because that list feeds the pipeline input files
+    and the pipeline feedback pages.
+
     Args:
         exp (experiment.Experiment): Experiment object to populate with MS metadata.
 
@@ -337,9 +370,20 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
                                                    frequency=ms.freqsetup.meanfreq, bandwidth=ms.freqsetup.bandwidth,
                                                    polarizations=ms.freqsetup.polarizations)
 
-            # Copy sources from MS to correlator pass
+            # Copy sources from MS to correlator pass. Only the ones with actual
+            # visibilities in this MS: the FIELD table can list phase centres that were
+            # never correlated into this pass (typical in multi-phase-centre experiments).
+            names_with_data = mstools.source_names_with_data(a_pass.msfile)
+            dropped = [src.name for src in ms.sources if src.name not in names_with_data]
+            if dropped:
+                logger.info(f"{a_pass.msfile.name}: {len(dropped)} source(s) in the FIELD table have no "
+                            f"visibilities in this pass and are ignored: {', '.join(dropped)}")
+
             a_pass.sources = experiment.Sources()
             for src in ms.sources:
+                if src.name not in names_with_data:
+                    continue
+
                 if src.name in exp.sources.names:
                     existing_source = exp.sources[src.name]
                     exp_src = experiment.Source(name=src.name, coordinates=src.coordinates,
@@ -369,17 +413,58 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
                 logger.warning(f"MS scan {ms_scanno} in {a_pass.msfile.name} has no matching VEX scan")
 
     def _update_mpc_pass(a_pass: experiment.CorrelatorPass):
-        a_pass.antennas = exp.correlator_passes[0].antennas
-        a_pass.sources = exp.correlator_passes[0].sources
-        a_pass.freqsetup = exp.correlator_passes[0].freqsetup
-        a_pass.scans = exp.correlator_passes[0].scans
+        """Fills a multi-phase-centre pass from the first one, except for its source list.
+
+        Antennas, frequency setup and scans are identical in every pass of a
+        multi-phase-centre experiment, which is the whole point of this fast path (reading
+        them back from several hundred MSs would take hours). The sources are NOT identical:
+        each pass holds its own phase centre(s), so the source list is read from that pass's
+        own MS and only the Source objects (type, protected flag, coordinates) are reused.
+
+        Args:
+            a_pass (experiment.CorrelatorPass): Correlator pass to fill in place.
+        """
+        first_pass = exp.correlator_passes[0]
+        a_pass.antennas = first_pass.antennas
+        a_pass.freqsetup = first_pass.freqsetup
+        a_pass.scans = first_pass.scans
+        try:
+            pass_sources = experiment.Sources()
+            for src_name in mstools.source_names_with_data(a_pass.msfile):
+                if src_name in pass_sources:
+                    continue  # a FIELD table may repeat a name; Sources.append rejects duplicates
+
+                if src_name in first_pass.sources:
+                    pass_sources.append(first_pass.sources[src_name])
+                elif src_name in exp.sources:
+                    # A phase centre that has no data in pass 1: its type/protected flag come
+                    # from the experiment (VEX + toml), exactly as _get_ms_metadata does, so
+                    # the pass keeps its target and the pipeline input file is not left empty.
+                    pass_sources.append(experiment.Source(name=src_name,
+                                                          coordinates=exp.sources[src_name].coordinates,
+                                                          type=exp.sources[src_name].type,
+                                                          protected=exp.sources[src_name].protected,
+                                                          intent=exp.sources[src_name].intent))
+                else:
+                    logger.warning(f"Source {src_name} has data in {a_pass.msfile.name} but is unknown to "
+                                   f"the experiment. It is not added to the pass source list.")
+
+            a_pass.sources = pass_sources
+        except Exception as e:
+            # One unreadable MS must never abort the metadata step for the other passes.
+            logger.warning(f"Could not read the sources with data from {a_pass.msfile}: {e}. "
+                           f"Falling back to the source list of the first correlator pass.")
+            a_pass.sources = first_pass.sources
 
     logger.debug(f"get_metadata_from_ms: {len(exp.correlator_passes)} passes, spectral_line={exp.spectral_line}")
     if len(exp.correlator_passes) > 1 and not exp.spectral_line:
         # then this is just a multiphase center with all setups identical. Do not loop
-        # through all MSs.
+        # through all MSs for the setup, but still read the per-pass source list from each
+        # MS: every pass has its own phase centre and therefore its own sources.
         logger.debug("Using MPC path - extracting metadata from first pass only")
         _get_ms_metadata(exp, exp.correlator_passes[0])
+        logger.info(f"Reading the source list of each of the {len(exp.correlator_passes) - 1} remaining "
+                    f"correlator passes from its own MS (antennas/freq. setup/scans are taken from pass 1).")
         with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes) - 1)) as executor:
             for fut in [executor.submit(_update_mpc_pass, a_pass) for a_pass in exp.correlator_passes[1:]]:
                 fut.result()
@@ -767,7 +852,7 @@ def open_standardplot_files(exp) -> bool:
     return True
 
 
-def open_pipeline_dashboard(exp) -> bool:
+def open_pipeline_dashboard(exp, on_ready: Optional[Callable[[str, str], None]] = None) -> bool:
     """Launches the web dashboard after the pipeline has run, with the pipeline feedback
     page shown as a new "Pipeline" tab on top of the standard plots.
 
@@ -777,11 +862,16 @@ def open_pipeline_dashboard(exp) -> bool:
 
     Args:
         exp: experiment.Experiment object.
+        on_ready: Optional callback invoked with (url, ssh tunnel command) once the server
+            is up, before it starts blocking. It is what lets the caller tell an operator
+            who is not at the terminal that the pipeline has finished and the dashboard is
+            waiting for them (see :func:`plotting.serve_dashboard`).
 
     Returns:
         bool: True after the dashboard server is stopped by the user.
     """
-    plotting.serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out)
+    plotting.serve_dashboard(exp, exp.dirs.plots, pipeline_dir=exp.dirs.pipe_out,
+                             on_ready=on_ready)
     return True
 
 
@@ -1057,8 +1147,10 @@ def tconvert(exp: experiment.Experiment) -> bool:
     and several of those streams interleaved on one terminal are unreadable, so the live
     output is kept only while a single pass is converting; from two upwards each pass writes
     to its own ``logs/tconvert.log`` sibling instead (the log names the .lis file it ran).
-    Past ``_TCONVERT_PROGRESS_MIN_PASSES`` passes a Rich progress bar replaces that silence,
-    showing how many are done and how long the rest should take.
+    Past ``utils.PASS_PROGRESS_MIN_PASSES`` passes the output comes back: a Rich progress bar
+    is pinned under it saying how many passes are done and how long the rest should take, the
+    lines scroll above the bar rather than over it, and each one is tagged with the pass it
+    came from so the interleaved streams stay attributable.
 
     A pass that fails does not abandon the others: every failure is collected and they are
     all named together at the end, and the step then reports the failure.
@@ -1083,19 +1175,29 @@ def tconvert(exp: experiment.Experiment) -> bool:
     # fit on disk" check lives, and a pass that cannot fit has to stop the step outright
     # rather than raise out of a worker with the other conversions already running.
     chunk_args = [_tconvert_chunk_arg(a_pass) for a_pass in passes]
-    echo = len(passes) == 1
-    show_bar = len(passes) > _TCONVERT_PROGRESS_MIN_PASSES
+    show_bar = utils.show_pass_progress(len(passes))
+    # Two to a handful of passes stay quiet, because their interleaved streams would be
+    # unreadable with nothing to tell them apart. Above the threshold the bar and the
+    # per-pass line prefix give them that structure back, so the output is worth having.
+    echo = (len(passes) == 1) or show_bar
 
     def _tconvert_pass(a_pass: experiment.CorrelatorPass, chunk_arg: str) -> None:
-        # With the bar up this line is the one thing that would scroll it away, and the bar
-        # already says how many passes are done; it stays in the debug log either way.
+        # With the bar up the echoed output already names its pass on every line and the bar
+        # already says how many are done, so this announcement is redundant noise; it stays
+        # in the debug log either way.
         logger.log('DEBUG' if show_bar else 'INFO',
                    f"tConvert: {a_pass.lisfile.name} -> {a_pass.fitsidifile}*")
         utils.shell_command(_TCONVERT_BIN, ["-v", a_pass.lisfile.name, "-o", chunk_arg],
                             stdout=None, stderr=subprocess.STDOUT,
-                            logfile=exp.dirs.logs / "tconvert.log", echo=echo)
+                            logfile=exp.dirs.logs / "tconvert.log", echo=echo,
+                            line_prefix=f"[{a_pass.lisfile.stem}] " if show_bar else '')
 
-    if not echo:
+    if show_bar:
+        logger.info(f"Converting {len(passes)} correlator passes at once; their output stays "
+                    f"on the terminal above the progress bar, each line tagged with the pass "
+                    f"it came from, and is also written to {exp.dirs.logs / 'tconvert.log'} "
+                    "(one file per pass).")
+    elif not echo:
         logger.info(f"Converting {len(passes)} correlator passes at once; their output goes "
                     f"to {exp.dirs.logs / 'tconvert.log'} (one file per pass) instead of the "
                     "terminal, where the streams would be interleaved.")
@@ -1103,23 +1205,19 @@ def tconvert(exp: experiment.Experiment) -> bool:
     # One pass failing must not hide the others: every failure is collected and they are all
     # reported together once the conversions that did work have finished.
     errors: list[str] = []
-    with ThreadPoolExecutor(utils.pass_workers(len(passes), utils.MAX_PASS_IO_WORKERS)) as pool:
-        futures = {pool.submit(_tconvert_pass, a_pass, chunk): a_pass
-                   for a_pass, chunk in zip(passes, chunk_args)}
-        with progress.Progress(progress.SpinnerColumn(),
-                               progress.TextColumn("[progress.description]{task.description}"),
-                               progress.BarColumn(), progress.MofNCompleteColumn(),
-                               progress.TextColumn("passes"), progress.TimeElapsedColumn(),
-                               progress.TimeRemainingColumn(),
-                               disable=not show_bar) as bar:
-            task = bar.add_task("[green]tConvert", total=len(passes))
+    # The bar wraps the pool so Rich has swapped sys.stdout for its proxy before the first
+    # tConvert writes: what the passes echo then scrolls above the bar instead of over it.
+    with utils.pass_progress("[green]tConvert", len(passes)) as advance:
+        with ThreadPoolExecutor(utils.pass_workers(len(passes), utils.MAX_PASS_IO_WORKERS)) as pool:
+            futures = {pool.submit(_tconvert_pass, a_pass, chunk): a_pass
+                       for a_pass, chunk in zip(passes, chunk_args)}
             for future in as_completed(futures):
                 a_pass = futures[future]
                 try:
                     future.result()
                 except Exception as e:
                     errors.append(f"{a_pass.lisfile.name} -> {a_pass.fitsidifile}*: {e}")
-                bar.advance(task)
+                advance()
 
     if errors:
         logger.error(f"tConvert failed on {len(errors)} of the {len(passes)} correlator "
@@ -1507,7 +1605,7 @@ def _fringe_peak_ratios(logdir: str, n_ifs: int) -> list[float]:
 _POLCONVERT_ENV: dict[str, str] = {'MPLBACKEND': 'Agg'}
 
 
-def _run_polconvert_cli(template_file: Path, mode: str) -> int:
+def _run_polconvert_cli(template_file: Path, mode: str, stream: bool = False) -> int:
     """Run ``polconvert.py <template> <mode>`` once, in a child process.
 
     Deliberately a child process rather than an in-process import. PolConvert corrupts its own
@@ -1519,16 +1617,37 @@ def _run_polconvert_cli(template_file: Path, mode: str) -> int:
     follows a completed run, so it marks good solutions as failures. What the run left on disk
     is the verdict (:func:`_fringe_peak_ratios`, :func:`_polconvert_apply`).
 
-    The child's stdout/stderr are inherited rather than captured, so its progress — and the
-    fringe-SNR table it prints when it finishes — is visible as it runs instead of surfacing
-    (or not) at the end. polconvert.py keeps its own detailed ``PolConvert-{mode}.log`` in the
-    log directory regardless.
+    Either way the child's output is visible as it runs — its progress, and the fringe-SNR
+    table it prints when it finishes — rather than surfacing (or not) at the end: by default
+    it inherits this process's stdout/stderr, and under *stream* it is captured and re-printed
+    line by line. polconvert.py keeps its own detailed ``PolConvert-{mode}.log`` in the log
+    directory regardless.
+
+    Args:
+        template_file: The input TOML the child reads.
+        mode: ``--compute`` or ``--apply``.
+        stream: When True the child's combined output is captured and re-printed line by
+            line to ``sys.stdout``, resolved at write time. That is what a live Rich progress
+            bar needs: writes to its proxy scroll above the bar, while the inherited file
+            descriptor of the default path would draw straight over it. When False (the
+            default) the child inherits this process's stdout/stderr, untouched.
 
     Returns:
         The child's exit code, for logging only (negative when a signal killed it).
     """
-    return subprocess.run(['polconvert.py', str(template_file), mode],
-                          env={**os.environ, **_POLCONVERT_ENV}).returncode
+    command = ['polconvert.py', str(template_file), mode]
+    env = {**os.environ, **_POLCONVERT_ENV}
+    if not stream:
+        return subprocess.run(command, env=env).returncode
+
+    child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    assert child.stdout is not None  # stdout=PIPE always gives one; narrows the type
+    with child.stdout:
+        for raw in child.stdout:
+            # Resolved per line, not once: while the bar is live sys.stdout is Rich's proxy.
+            sys.stdout.write(raw.decode('utf-8', errors='replace'))
+            sys.stdout.flush()
+    return child.wait()
 
 
 def _record_polconvert_command(template_file: Path, mode: str) -> None:
@@ -1572,8 +1691,40 @@ def _polconvert_compute(template_file: Path, logdir: str, n_ifs: int) -> list[fl
     return []
 
 
+def _poll_pconvert_progress(idi_files: list[str], advance: Callable[[], None],
+                            stop: threading.Event, interval: float = 0.3) -> None:
+    """Advances a progress bar as PolConvert writes the ``.PCONVERT`` files, one by one.
+
+    The single ``--apply`` child converts every file itself, so there is no per-pass future
+    to count: the files appearing on disk are the only progress signal there is.
+
+    Args:
+        idi_files: FITS-IDI files being converted; each gets one ``.PCONVERT`` counterpart.
+        advance: Zero-argument callable moving the bar on by one file.
+        stop: Set by the caller once the child has exited; ends the loop (one last count is
+            taken first, so the files written just before it exited are still counted).
+        interval: Seconds between two counts of the files on disk.
+
+    Returns:
+        None.
+    """
+    counted = 0
+    while not stop.is_set():
+        stop.wait(interval)
+        done = sum(1 for f in idi_files if Path(f + '.PCONVERT').exists())
+        for _ in range(done - counted):
+            advance()
+        counted = done
+
+
 def _polconvert_apply(template_file: Path, idi_files: list[str]) -> bool:
     """Apply an accepted solution to every FITS-IDI file, judged by the files it produces.
+
+    One child converts every file at once, so past ``utils.PASS_PROGRESS_MIN_PASSES`` files
+    (one per correlator pass) a progress bar is pinned under the child's output and driven by
+    :func:`_poll_pconvert_progress` watching the ``.PCONVERT`` files appear. The child's
+    output is then streamed through this process so Rich can scroll it above the bar; without
+    the bar it keeps writing straight to the terminal as before.
 
     Args:
         template_file: The input TOML of the accepted combination.
@@ -1582,8 +1733,22 @@ def _polconvert_apply(template_file: Path, idi_files: list[str]) -> bool:
     Returns:
         True once every file has its ``.PCONVERT`` counterpart, False if some never appear.
     """
+    show_bar = utils.show_pass_progress(len(idi_files))
     for attempt in range(1, _POLCONVERT_RETRIES + 2):
-        rc = _run_polconvert_cli(template_file, '--apply')
+        with utils.pass_progress("[green]PolConvert", len(idi_files)) as advance:
+            stop = threading.Event()
+            poller = threading.Thread(target=_poll_pconvert_progress,
+                                      args=(idi_files, advance, stop), daemon=True)
+            if show_bar:
+                poller.start()
+            try:
+                rc = _run_polconvert_cli(template_file, '--apply', stream=show_bar)
+            finally:
+                # The poller must never outlive the call: it is stopped and joined whatever
+                # the child did, including when the run raises.
+                stop.set()
+                if show_bar:
+                    poller.join()
         missing = [f for f in idi_files if not Path(f + '.PCONVERT').exists()]
         if not missing:
             return True
@@ -1986,6 +2151,20 @@ def append_antab(exp: experiment.Experiment) -> bool:
     Reads ANTAB files from exp.dirs.pipe_in and applies them to the FITS-IDI files
     in the current working directory by calling append_tsys.py and append_gc.py.
 
+    The work is split into one unit per (ANTAB file, correlator pass) and the units run
+    concurrently under the same ceiling as every other subprocess-per-pass step
+    (``utils.MAX_PASS_IO_WORKERS``): a unit only ever writes the FITS-IDI files of its own
+    pass, so no two units touch the same file. On a multi-phase-centre run this is the
+    difference between hundreds of sequential append_tsys.py calls and a handful of
+    batches. Past ``utils.PASS_PROGRESS_MIN_PASSES`` units a progress bar is pinned under
+    the tools' output saying how many passes are done; with more than one unit every
+    echoed line is tagged with the pass it came from, so the interleaved streams stay
+    readable.
+
+    Neither append_tsys.py nor append_gc.py is trusted to report failure through its exit
+    code: a non-zero one is logged and the run carries on, and the closing consistency
+    check on the FITS-IDI files is the only verdict on whether the step worked.
+
     Args:
         exp: Experiment object.
 
@@ -2014,29 +2193,75 @@ def append_antab(exp: experiment.Experiment) -> bool:
         logger.error("No FITS-IDI files found.")
         return False
 
-    def _parse_pass(filename):
+    def _parse_pass(filename: str) -> int:
+        """The correlator-pass number of a FITS-IDI file, i.e. the N of ``{exp}_N_1.IDI*``."""
         i0 = filename.index('_')
         return int(filename[i0+1:(i0 + 1 + filename[i0+1:].index('_'))])
 
-    def _run_append(antabfile, idi_list):
-        antabfile = str(antabfile)
-        for pc in sorted(set(_parse_pass(idi) for idi in idi_list)):
-            pc_files = [idi for idi in idi_list if _parse_pass(idi) == pc]
-            logger.debug(f"Running append_tsys.py {antabfile} {' '.join(pc_files)}")
-            proc = subprocess.Popen(["append_tsys.py", "--replace", antabfile, *pc_files],
-                                    stdout=None, stderr=subprocess.STDOUT)
-            proc.wait()
-        for idifile in [idi for idi in idi_list if idi.endswith('.IDI1') or idi.endswith('IDI')]:
-            logger.debug(f"Running append_gc.py {antabfile} {idifile}")
-            proc = subprocess.Popen(["append_gc.py", "--replace", antabfile, idifile],
-                                    stdout=None, stderr=subprocess.STDOUT)
-            proc.wait()
+    # One unit of work per (ANTAB file, correlator pass). A single ANTAB file covers every
+    # pass; several of them are per-pass, and ANTAB i belongs to the files of pass i
+    # ({exp}_i_1.IDI*), which is the mapping this step has always used.
+    units: list[tuple[str, int, list[str]]] = []
+    for i, antabfile in enumerate(antabfiles, start=1):
+        covered = idifiles if len(antabfiles) == 1 else [f for f in idifiles if f"_{i}_1.IDI" in f]
+        for pass_number in sorted({_parse_pass(f) for f in covered}):
+            units.append((str(antabfile), pass_number,
+                          [f for f in covered if _parse_pass(f) == pass_number]))
 
-    if len(antabfiles) == 1:
-        _run_append(antabfiles[0], idifiles)
-    else:
-        for i, antabfile in enumerate(antabfiles):
-            _run_append(antabfile, [idi for idi in idifiles if f"_{i+1}_1.IDI" in idi])
+    if not units:
+        logger.error("No FITS-IDI file matches any of the ANTAB files; nothing to append.")
+        return False
+
+    show_bar = utils.show_pass_progress(len(units))
+    # The prefix is what keeps the concurrent streams attributable; with a single unit
+    # there is nothing to tell apart and it would only add noise.
+    tag_lines = len(units) > 1
+
+    def _append_pass(antabfile: str, pass_number: int, pass_files: list[str]) -> None:
+        """Appends the Tsys and gain-curve tables of one ANTAB file into one correlator pass.
+
+        A tool exiting non-zero is logged as a warning and does not raise: the caller's
+        consistency check on the FITS-IDI files is what decides whether the step worked.
+
+        Args:
+            antabfile: Path of the ANTAB file to read, as a string.
+            pass_number: Correlator pass these files belong to (for the log messages).
+            pass_files: The FITS-IDI files of that pass, in chunk order.
+
+        Returns:
+            None.
+        """
+        prefix = f"[{exp.expname.lower()}_{pass_number}_1] " if tag_lines else ''
+        logfile = exp.dirs.logs / "append_antab.log"
+        try:
+            utils.shell_command("append_tsys.py", ["--replace", antabfile, *pass_files],
+                                stdout=None, stderr=subprocess.STDOUT,
+                                logfile=logfile, line_prefix=prefix)
+        except ValueError as e:
+            logger.warning(f"append_tsys.py did not complete for pass {pass_number} ({e}); "
+                           "the consistency check below decides whether it mattered.")
+
+        # Only the first chunk of a pass carries the tables, which is where append_gc.py
+        # writes them (an unsplit pass has a single, unnumbered .IDI).
+        for idifile in [f for f in pass_files if f.endswith('.IDI1') or f.endswith('IDI')]:
+            try:
+                utils.shell_command("append_gc.py", ["--replace", antabfile, idifile],
+                                    stdout=None, stderr=subprocess.STDOUT,
+                                    logfile=logfile, line_prefix=prefix)
+            except ValueError as e:
+                logger.warning(f"append_gc.py did not complete for {idifile} ({e}); the "
+                               "consistency check below decides whether it mattered.")
+
+    logger.info(f"Appending the ANTAB information into {len(units)} correlator pass(es) at "
+                f"once, from {len(antabfiles)} ANTAB file(s).")
+    # The bar wraps the pool so Rich has swapped sys.stdout for its proxy before the first
+    # tool writes: what they echo then scrolls above the bar instead of over it.
+    with utils.pass_progress("[green]append antab", len(units)) as advance:
+        with ThreadPoolExecutor(utils.pass_workers(len(units), utils.MAX_PASS_IO_WORKERS)) as pool:
+            futures = [pool.submit(_append_pass, *unit) for unit in units]
+            for future in as_completed(futures):
+                future.result()   # _append_pass swallows the tool failures; this re-raises ours
+                advance()
 
     if not all(check_consistency(f) for f in fits2check):
         logger.error("The Tsys/GC could not be imported into the FITS-IDI files.")
