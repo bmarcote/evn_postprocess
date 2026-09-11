@@ -28,7 +28,9 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import smtplib
+import tempfile
 import time
 import tomllib
 import urllib.error
@@ -43,6 +45,46 @@ from pathlib import Path
 from loguru import logger
 from astropy import units as u
 from . import experiment
+
+
+# Mattermost refuses a post whose message exceeds its server-side limit (MaxPostSize,
+# 16383 characters by default) — the API answers 400 and the whole post is lost, attachments
+# included. A letter for a multi-phase-centre experiment reaches well past that: EM164B has
+# 658 correlator passes and the PI letter carries one bullet per pass, ~130 000 characters.
+# Anything longer than this is posted as a short head plus the full text as an attached .md.
+MM_MAX_POST_CHARS: int = int(os.environ.get("POSTPROCESS_MM_MAX_POST_CHARS", "15000"))
+
+
+# Name of the attachment carrying a message that did not fit in a post (see _shorten_for_post).
+_FULL_MESSAGE_NAME = "full-message.md"
+
+
+def _shorten_for_post(body: str, limit: int | None = None) -> tuple[str, str | None]:
+    """Splits a chat message too long to be posted into a head and the full text.
+
+    Cutting happens on a line boundary so the Markdown that is posted still renders, and the
+    complete message is returned separately so the caller can attach it as a file: nothing the
+    operator was meant to read is lost, it just arrives as a download.
+
+    Args:
+        body: The message that was going to be posted.
+        limit: Maximum number of characters a post may carry. None (the default) reads
+            :data:`MM_MAX_POST_CHARS` at call time, so the ceiling can be overridden while
+            the process runs rather than being frozen at import.
+
+    Returns:
+        (message to post, full text to attach). The second item is None when *body* already
+        fits, in which case the first is *body* unchanged.
+    """
+    limit = MM_MAX_POST_CHARS if limit is None else limit
+    if len(body) <= limit:
+        return body, None
+
+    notice = ("\n\n---\n\n*This message was too long for the chat "
+              "(%d characters). It is attached in full as `%s`.*")
+    head = body[:max(0, limit - len(notice % (len(body), _FULL_MESSAGE_NAME)))]
+    head = head[:head.rfind("\n")] if "\n" in head else head
+    return head + notice % (len(body), _FULL_MESSAGE_NAME), body
 
 
 def _mime_type(filepath: Path) -> str:
@@ -354,12 +396,24 @@ class MattermostNotifier(Notifier):
         Returns:
             True on success, False on failure.
         """
+        overflow_dir: str | None = None
         try:
             self._ensure_channel()
-            message = body
+            # A message past the server's MaxPostSize is refused outright and the whole post
+            # is lost, attachments and all; it travels as an attachment instead.
+            message, full_text = _shorten_for_post(body)
+            files = list(attachments or [])
+            if full_text is not None:
+                logger.warning(f"The '{subject}' message is {len(body)} characters, more than the "
+                               f"{MM_MAX_POST_CHARS} a Mattermost post takes; posting the "
+                               f"beginning and attaching the rest as {_FULL_MESSAGE_NAME}.")
+                overflow_dir = tempfile.mkdtemp(prefix="evn-postprocess-")
+                overflow = Path(overflow_dir) / _FULL_MESSAGE_NAME
+                overflow.write_text(full_text, encoding="utf-8")
+                files.append(overflow)
 
             file_ids: list[str] = []
-            for path in (attachments or []):
+            for path in files:
                 if path.exists():
                     try:
                         file_ids.append(self._upload_file(path))
@@ -375,8 +429,14 @@ class MattermostNotifier(Notifier):
             logger.info(f"Mattermost message sent: {subject}")
             return True
         except Exception as exc:
-            logger.error(f"Failed to send Mattermost message: {exc}")
+            # Named explicitly: the uploads above may well have succeeded, so the files exist
+            # in Mattermost but no post references them and the operator sees nothing at all.
+            logger.error(f"Failed to send the Mattermost message '{subject}' "
+                         f"({len(body)} characters, {len(attachments or [])} attachment(s)): {exc}")
             return False
+        finally:
+            if overflow_dir is not None:
+                shutil.rmtree(overflow_dir, ignore_errors=True)
 
     def supports_interactive(self) -> bool:
         """Mattermost supports receiving replies."""

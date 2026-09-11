@@ -18,7 +18,7 @@ from functools import reduce, partial
 from urllib.parse import unquote
 from pathlib import Path
 from rich import print as rprint
-from typing import List, Optional, Generator
+from typing import Callable, List, Optional, Generator
 from loguru import logger
 import numpy as np
 from astropy import units as u
@@ -990,7 +990,35 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         logger.error(f"Dashboard HTTP error: {format % args}")
 
 
-def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -> None:
+def _announce_ready(on_ready: Optional[Callable[[str, str], None]], url: str, tunnel: str,
+                    expname: str) -> None:
+    """Tells *on_ready* the dashboard is up, without ever letting that stop the dashboard.
+
+    Called between binding the port and serving: it is the moment the URL and the tunnel
+    command are known, and the last one before :func:`serve_dashboard` blocks. Whoever it
+    notifies (the chat, a desktop notification) is plumbing around the dashboard, so a
+    failure there is a warning and nothing more.
+
+    Args:
+        on_ready: The callback, or None when the caller wants no announcement.
+        url: Where the dashboard is listening.
+        tunnel: The ssh command that reaches it from the operator's machine.
+        expname: Experiment name, for the warning message.
+
+    Returns:
+        None.
+    """
+    if on_ready is None:
+        return
+    try:
+        on_ready(url, tunnel)
+    except Exception as e:
+        logger.warning(f"Could not announce the dashboard of {expname} ({e}); it is running "
+                       "and reachable all the same.")
+
+
+def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None,
+                    on_ready: Optional[Callable[[str, str], None]] = None) -> None:
     """Start an HTTP dashboard server showing experiment summary and standard plots.
 
     Converts any .ps files to PNG (if not already done), then serves a web dashboard
@@ -1008,6 +1036,11 @@ def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -
             ``Dirs.pipe_out``). When given and at least one feedback page is found, the
             dashboard shows a "Pipeline" tab (selected by default, on top of the standard
             plots). When None or no page exists, only the standard plots are shown.
+        on_ready: Optional callback invoked with (url, ssh tunnel command) once the server is
+            bound and about to start serving, i.e. once the port is known. This call blocks
+            until the operator stops the server, so it is the only chance to tell anyone who
+            is not at the terminal that the dashboard is up. Never lets a failing callback
+            stop the dashboard.
     """
     # Ensure PNGs exist
     if not list(plots_dir.glob(f"{exp.expname.lower()}*.png")):
@@ -1043,10 +1076,12 @@ def serve_dashboard(exp, plots_dir: Path, pipeline_dir: Optional[Path] = None) -
     rprint(f"[green]\n{'=' * 60}[/green]")
     rprint(f"[green]  EVN Dashboard for {exp.expname} running at:[/green]")
     rprint(f"[bold green]  {url}[/bold green]")
-    rprint("[bold green]Create a tunnel to open it in your browser with "
-           f"'ssh -L {port}:localhost:{port} {exp.supsci.lower()}@eee2'[/bold green]")
+    tunnel = f"ssh -L {port}:localhost:{port} {exp.supsci.lower()}@eee2"
+    rprint(f"[bold green]Create a tunnel to open it in your browser with '{tunnel}'[/bold green]")
     rprint("[green]  Press Ctrl+C to stop the server.\n[/green]")
     rprint(f"[green]{'=' * 60}[/green]")
+
+    _announce_ready(on_ready, url, tunnel, exp.expname)
 
     # Handle Ctrl+C gracefully
     original_sigint = signal.getsignal(signal.SIGINT)

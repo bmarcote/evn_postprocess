@@ -1137,12 +1137,45 @@ def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
     # their browser via the SSH tunnel the server prints. In batch mode the dashboard
     # would block forever, so we skip it (the page is on disk for async review).
     if result and not _BATCH_MODE:
-        process.open_pipeline_dashboard(exp)
+        process.open_pipeline_dashboard(exp, on_ready=_announce_pipeline_dashboard(exp))
         # It only returns once the operator stops the server themselves (Ctrl-C), so they are
         # at the terminal and the review pause below must not ping them in the chat.
         _note_operator_interaction()
 
     return result
+
+
+def _announce_pipeline_dashboard(exp: experiment.Experiment):
+    """Builds the callback that tells the operator the pipeline is done and the dashboard up.
+
+    This is the notification for the end of the pipeline, and it has to be sent from here:
+    serving the dashboard blocks until the operator stops it themselves, so by the time the
+    review pause is reached they are demonstrably at the terminal and that pause deliberately
+    stays quiet (see :func:`_review_pause`). Sent while the server is starting, it reaches
+    them wherever they are — with the tunnel command already in it, which is only known once
+    the port has been picked.
+
+    Args:
+        exp: Experiment object.
+
+    Returns:
+        A callable taking (url, ssh tunnel command), to hand to
+        :func:`process.open_pipeline_dashboard`.
+    """
+    def announce(url: str, tunnel: str) -> None:
+        utils.notify(f"{exp.expname} post-processing",
+                     "The pipeline finished — the dashboard is waiting for your review")
+        _comms.notify_operator(
+            exp, "the pipeline results are ready",
+            "The EVN pipeline finished and the dashboard is up, showing the standard plots "
+            "and the pipeline feedback page. The run waits at it until you close it.",
+            f"1. Open a tunnel to the dashboard: `{tunnel}`\n"
+            f"2. Open {url} in your browser and review the plots, the **Pipeline** tab and "
+            f"the **Comments** tab (one per station).\n"
+            "3. Stop the dashboard with Ctrl-C in the terminal running it; the run then asks "
+            "you how to continue.", _NOTIFIER)
+
+    return announce
 
 
 def pre_archive(exp: experiment.Experiment) -> bool:

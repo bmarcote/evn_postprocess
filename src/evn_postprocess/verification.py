@@ -22,8 +22,10 @@ import glob
 import re
 import shlex
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 from astropy.io import fits
 from loguru import logger
@@ -31,6 +33,7 @@ from loguru import logger
 from . import experiment
 from . import reporting
 from . import tools
+from . import utils
 
 # check-multipart-fits.py reports the time lost between consecutive FITS-IDI chunks. Up to
 # about one integration is the normal rounding of the chunk boundary; from here on the
@@ -42,6 +45,12 @@ MAX_LOSS_SECONDS: float = 10.0
 MAX_WEIGHT_DIFF: float = 0.05
 
 _LOGFILE: str = 'verification.log'
+# The passes are verified concurrently and every one of them tees its tool output to the same
+# log; without this their writes would interleave mid-line and the log become unreadable.
+_LOG_LOCK = threading.Lock()
+# compare-ms-idi.py failing to start is one fact about the run, not one per pass: with a
+# multi-phase-centre experiment it would otherwise be repeated several hundred times.
+_COMPARE_TOOL_FAILED: str = "compare-ms-idi.py could not be run (see logs/verification.log)."
 
 # 'es124_1_1 loss=1.9999891519546509s gain=0.0s nZero=0' — only printed for the FITS-IDI
 # sets where something is off, so a silent run means every set is contiguous.
@@ -106,7 +115,7 @@ def _run(exp: experiment.Experiment, tool: str, args: list[str]) -> subprocess.C
         return None
 
     try:
-        with open(exp.dirs.logs / _LOGFILE, 'a') as log:
+        with _LOG_LOCK, open(exp.dirs.logs / _LOGFILE, 'a') as log:
             log.write(f"\n# {shlex.join([tool, *args])}\n{result.stdout}{result.stderr}")
     except OSError as e:
         logger.warning(f"Could not write {exp.dirs.logs / _LOGFILE} (continuing): {e}")
@@ -127,11 +136,68 @@ def _missing_antab_tables(fitsfile: str) -> list[str]:
         return ['SYSTEM_TEMPERATURE', 'GAIN_CURVE']
 
 
+def _over_passes(exp: experiment.Experiment, passes: list[experiment.CorrelatorPass],
+                 worker: Callable[[experiment.Experiment, experiment.CorrelatorPass], list[str]],
+                 description: str, cap: int | None = None) -> list[str]:
+    """Runs *worker* on every correlator pass at once and returns what they all reported.
+
+    Each pass reads only its own MS and its own FITS-IDI files, so they are independent and
+    there is no reason to verify them one after the other; on a multi-phase-centre experiment
+    that is the difference between hours and minutes. Past
+    ``utils.PASS_PROGRESS_MIN_PASSES`` passes a progress bar is pinned under the tools'
+    output saying how many are done.
+
+    The problems come back in pass order, not in the order the passes happened to finish, so
+    the report reads the same whatever the scheduling did.
+
+    Args:
+        exp: Experiment object.
+        passes: The correlator passes to check.
+        worker: Called as ``worker(exp, a_pass)``; returns that pass's problems (empty when
+            it is fine).
+        description: Label for the progress bar.
+        cap: Concurrency ceiling handed to :func:`utils.pass_workers`. None means the
+            in-process ceiling; pass ``utils.MAX_PASS_IO_WORKERS`` for a subprocess per pass.
+
+    Returns:
+        Every problem found, in pass order.
+    """
+    found: dict[int, list[str]] = {}
+    with utils.pass_progress(description, len(passes)) as advance:
+        with ThreadPoolExecutor(utils.pass_workers(len(passes), cap)) as pool:
+            futures = {pool.submit(worker, exp, a_pass): i for i, a_pass in enumerate(passes)}
+            for future in as_completed(futures):
+                found[futures[future]] = future.result()
+                advance()
+    return [problem for i in range(len(passes)) for problem in found[i]]
+
+
+def _check_antab_pass(exp: experiment.Experiment,
+                      a_pass: experiment.CorrelatorPass) -> list[str]:
+    """The ANTAB problems of a single correlator pass (empty when its tables are there).
+
+    Args:
+        exp: Experiment object (unused; the signature is the one :func:`_over_passes` calls).
+        a_pass: The correlator pass to check.
+
+    Returns:
+        One message per problem found in this pass.
+    """
+    del exp   # the check is entirely per-pass; the signature is shared with the other workers
+    if not (files := _idi_files(a_pass)):
+        return [f"{a_pass.fitsidifile}*: no FITS-IDI file found."]
+    if missing := _missing_antab_tables(files[0]):
+        return [f"{files[0]}: {' and '.join(missing)} table missing — the ANTAB "
+                "information was not appended (re-run the prearchive step)."]
+    return []
+
+
 def check_antab(exp: experiment.Experiment) -> Check:
     """Verifies the ANTAB Tsys and gain-curve values reached every FITS-IDI set.
 
     Only the first file of a correlator pass carries the tables — that is where
-    ``append_tsys.py``/``append_gc.py`` write them — so that is the one checked.
+    ``append_tsys.py``/``append_gc.py`` write them — so that is the one checked. The passes
+    are checked concurrently (see :func:`_over_passes`).
 
     Args:
         exp: Experiment object.
@@ -139,13 +205,8 @@ def check_antab(exp: experiment.Experiment) -> Check:
     Returns:
         A :class:`Check` naming every pass whose tables are missing.
     """
-    details = []
-    for a_pass in exp.correlator_passes:
-        if not (files := _idi_files(a_pass)):
-            details.append(f"{a_pass.fitsidifile}*: no FITS-IDI file found.")
-        elif missing := _missing_antab_tables(files[0]):
-            details.append(f"{files[0]}: {' and '.join(missing)} table missing — the ANTAB "
-                           "information was not appended (re-run the prearchive step).")
+    details = _over_passes(exp, exp.correlator_passes, _check_antab_pass,
+                           "[green]ANTAB tables")
     return Check('ANTAB tables in the FITS-IDI', not details, details)
 
 
@@ -262,6 +323,32 @@ def _compare_problems(output: str, label: str) -> list[str]:
     return problems
 
 
+def _compare_ms_idi_pass(exp: experiment.Experiment,
+                         a_pass: experiment.CorrelatorPass) -> list[str]:
+    """Compares the MS of one correlator pass against the FITS-IDI files made from it.
+
+    Args:
+        exp: Experiment object (for the log file the tool output is teed to).
+        a_pass: The correlator pass to compare.
+
+    Returns:
+        One message per disagreement that matters, or the single
+        :data:`_COMPARE_TOOL_FAILED` marker when the tool could not be run at all.
+    """
+    label = f"{a_pass.msfile} vs {a_pass.fitsidifile}*"
+    if not (files := _idi_files(a_pass)):
+        return [f"{label}: no FITS-IDI file found to compare against the MS."]
+    if not a_pass.msfile.exists():
+        return [f"{label}: the MS is gone, so the FITS-IDI files cannot be compared "
+                "against it (re-run j2ms2, or verify this pass by hand)."]
+    logger.info(f"Comparing {a_pass.msfile} against its {len(files)} FITS-IDI file(s); "
+                "this reads both in full and takes a while.")
+    if (result := _run(exp, 'compare-ms-idi.py',
+                       ['--ms', str(a_pass.msfile), '--idi', *files])) is None:
+        return [_COMPARE_TOOL_FAILED]
+    return _compare_problems(result.stdout, label)
+
+
 def compare_ms_idi(exp: experiment.Experiment) -> Check:
     """Verifies that each FITS-IDI set still holds everything its MS had.
 
@@ -270,29 +357,23 @@ def compare_ms_idi(exp: experiment.Experiment) -> Check:
     and reports the pairs that disagree; :func:`_compare_problems` sorts the expected
     weight noise from an actual loss of data.
 
+    This is by far the longest check — it reads both data sets in full — and the passes are
+    independent, so they run concurrently, one subprocess each, under the usual
+    ``utils.MAX_PASS_IO_WORKERS`` ceiling (see :func:`_over_passes`).
+
     Args:
         exp: Experiment object.
 
     Returns:
         A :class:`Check` naming every (baseline, source) whose data do not add up.
     """
-    details = []
-    for a_pass in exp.correlator_passes:
-        label = f"{a_pass.msfile} vs {a_pass.fitsidifile}*"
-        if not (files := _idi_files(a_pass)):
-            details.append(f"{label}: no FITS-IDI file found to compare against the MS.")
-            continue
-        if not a_pass.msfile.exists():
-            details.append(f"{label}: the MS is gone, so the FITS-IDI files cannot be compared "
-                           "against it (re-run j2ms2, or verify this pass by hand).")
-            continue
-        logger.info(f"Comparing {a_pass.msfile} against its {len(files)} FITS-IDI file(s); "
-                    "this reads both in full and takes a while.")
-        if (result := _run(exp, 'compare-ms-idi.py',
-                           ['--ms', str(a_pass.msfile), '--idi', *files])) is None:
-            return Check('MS vs FITS-IDI content', False,
-                         ["compare-ms-idi.py could not be run (see the log)."])
-        details.extend(_compare_problems(result.stdout, label))
+    details = _over_passes(exp, exp.correlator_passes, _compare_ms_idi_pass,
+                           "[green]MS vs FITS-IDI", utils.MAX_PASS_IO_WORKERS)
+    # The tool not starting is one fact about the run; said once, with how many passes hit it.
+    if (failed := details.count(_COMPARE_TOOL_FAILED)) > 1:
+        details = [d for d in details if d != _COMPARE_TOOL_FAILED]
+        details.insert(0, f"{_COMPARE_TOOL_FAILED} It failed on {failed} of the "
+                          f"{len(exp.correlator_passes)} correlator passes.")
     return Check('MS vs FITS-IDI content', not details, details)
 
 

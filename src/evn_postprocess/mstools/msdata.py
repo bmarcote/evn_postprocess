@@ -856,3 +856,37 @@ class Ms:
         # obj._datastats = None
 
         return obj
+
+
+def source_names_with_data(msfile: str | Path, chunk_rows: int = 1_000_000) -> list[str]:
+    """Returns the names of the sources that actually have visibilities in the given MS.
+
+    The FIELD subtable lists every phase centre that was defined when the MS was created,
+    whether or not any visibility ended up in it. In a multi-phase-centre experiment each
+    correlator pass holds a single phase centre (a single target) while its FIELD table may
+    still list all of them, so the FIELD table alone is not a valid source list for the pass.
+    This function answers what the MAIN table really contains, which is the list that must
+    reach the pipeline input files and the pipeline feedback pages.
+
+    Only the FIELD_ID column of the MAIN table is read, and it is read in chunks: a
+    multi-phase-centre MS can hold a hundred million rows, so neither the whole column nor
+    the (much larger) DATA column can be loaded in one go.
+
+    Args:
+        msfile (str | Path): Path to the Measurement Set file.
+        chunk_rows (int): Number of MAIN-table rows read per chunk. Default 1 000 000.
+
+    Returns:
+        list[str]: Names of the FIELD-table sources with at least one row in the MAIN table,
+        kept in FIELD-table order.
+    """
+    with misc.table(msfile, readonly=True, ack=False) as msdata:
+        with misc.table(msdata.getkeyword('FIELD')) as field_table:
+            field_names = list(field_table.getcol('NAME'))
+
+        field_ids_with_data: set[int] = set()
+        for (start, nrow) in misc.chunkert(0, len(msdata), chunk_rows):
+            field_ids_with_data.update(int(field_id)
+                                       for field_id in msdata.getcol('FIELD_ID', startrow=start, nrow=nrow))
+
+    return [name for field_id, name in enumerate(field_names) if field_id in field_ids_with_data]

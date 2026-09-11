@@ -5,9 +5,11 @@ import time
 import datetime as _dt
 import subprocess
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, TextIO, Union
+from typing import Callable, Iterator, Optional, TextIO, Union
 from loguru import logger
+from rich import progress
 import astropy.units as u
 from . import reporting
 
@@ -94,6 +96,62 @@ def pass_workers(n_passes: int, cap: Optional[int] = None) -> int:
         reached with no passes set up (it then simply has nothing to submit).
     """
     return max(1, min(n_passes, MAX_PASS_WORKERS if cap is None else cap))
+
+
+# From more than this many correlator passes, the per-pass steps (j2ms2, tConvert, append
+# antab, PolConvert) pin a progress bar under their own output. Below the threshold the
+# tools' messages ARE the progress report — each pass can be seen going by — while above it
+# they scroll past far too fast to count, so a bar saying how many passes are done is the
+# only way to tell how far a run has got. Overridable per run through the environment, like
+# the worker ceilings above.
+PASS_PROGRESS_MIN_PASSES: int = int(os.environ.get("EVN_PASS_PROGRESS_MIN_PASSES", "5"))
+
+
+def show_pass_progress(n_passes: int, minimum: Optional[int] = None) -> bool:
+    """Whether a per-pass progress bar is worth showing for this many passes.
+
+    Args:
+        n_passes: Number of correlator passes the step has to get through.
+        minimum: Threshold to compare against. None (the default) reads
+            :data:`PASS_PROGRESS_MIN_PASSES` at call time, so it can equally be overridden
+            while the process is running (as :func:`pass_workers` does with its ceiling).
+
+    Returns:
+        True when there are strictly more passes than the threshold, False at or below it.
+    """
+    return n_passes > (PASS_PROGRESS_MIN_PASSES if minimum is None else minimum)
+
+
+@contextmanager
+def pass_progress(description: str, total: int,
+                  minimum: Optional[int] = None) -> Iterator[Callable[[], None]]:
+    """A progress bar pinned under the scrolling output of a per-pass step.
+
+    While the bar is live Rich replaces ``sys.stdout``/``sys.stderr`` with its own proxies,
+    so anything the tools print keeps scrolling *above* the bar (colours intact) instead of
+    overwriting it — provided those writes resolve ``sys.stdout``/``sys.stderr`` at write
+    time, which is what :func:`shell_command` does.
+
+    At or below the threshold the bar is built disabled, which makes both it and the
+    yielded callable a no-op: callers can use this unconditionally.
+
+    Args:
+        description: Label shown next to the bar, e.g. ``"[green]tConvert"``.
+        total: Number of passes; also the number of advances that fill the bar.
+        minimum: Threshold handed to :func:`show_pass_progress`. None reads the module
+            default at call time.
+
+    Yields:
+        A zero-argument callable that advances the bar by one pass.
+    """
+    columns = (progress.SpinnerColumn(),
+               progress.TextColumn("[progress.description]{task.description}"),
+               progress.BarColumn(), progress.MofNCompleteColumn(),
+               progress.TextColumn("passes"), progress.TimeElapsedColumn(),
+               progress.TimeRemainingColumn())
+    with progress.Progress(*columns, disable=not show_pass_progress(total, minimum)) as bar:
+        task = bar.add_task(description, total=total)
+        yield lambda: bar.advance(task)
 
 
 # OpenSSH connect-time options to avoid host-key prompts in non-interactive runs
@@ -328,7 +386,7 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
                   stderr: Optional[int] = subprocess.PIPE,
                   stderr_warn_re: Optional[re.Pattern] = None,
                   logfile: Optional[Union[str, Path]] = None,
-                  echo: bool = True,
+                  echo: bool = True, line_prefix: str = '',
                   ok_returncodes: tuple[int, ...] = ()) -> str:
     """Runs the provided command in the shell and streams its output live.
 
@@ -363,6 +421,11 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
             echoed to stdout/stderr. Use for background/parallel runs (e.g. the auxiliary
             lag-space MS, or the correlator passes behind a progress bar) so they do not
             garble the foreground output.
+        line_prefix (str): When non-empty, every echoed line is prefixed with it (e.g.
+            ``"[es124_3_1] "``). Several correlator passes stream to the same terminal at
+            once behind a progress bar, and this prefix is what keeps the interleaved lines
+            attributable to a pass. It is only added to what the terminal sees: neither the
+            returned string nor the log file carry it.
 
     Returns:
         str: Concatenated stdout from the command (UTF-8).
@@ -411,12 +474,18 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
 
-    def _pump(stream, chunks, out_stream, red: bool, warn_re: Optional[re.Pattern] = None):
-        """Read lines from stream, append to chunks, echo to out_stream.
+    def _pump(stream, chunks, get_out_stream, red: bool, warn_re: Optional[re.Pattern] = None):
+        """Read lines from stream, append to chunks, echo to the stream *get_out_stream* returns.
 
         stdout is echoed plain. stderr is echoed red, except lines matching *warn_re*
-        (when provided), which are echoed yellow (warnings). The plain text (no colour
-        codes) is also appended to the log file when one is open.
+        (when provided), which are echoed yellow (warnings). *line_prefix* is prepended to
+        the echoed line only. The plain text (no prefix, no colour codes) is also appended
+        to the log file when one is open, and is what the caller gets back.
+
+        The output stream is resolved through *get_out_stream* on every line rather than
+        once at thread start: a Rich progress bar started after this command swaps
+        ``sys.stdout``/``sys.stderr`` for its own proxies, and writing to the pre-swap
+        stream would garble its live region.
         """
         try:
             for raw in iter(stream.readline, b''):
@@ -428,18 +497,22 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
                         log_fh.flush()
                 if not echo:
                     continue  # quiet run: captured + logged above, but not streamed to terminal
+                out_stream = get_out_stream()
                 if red and warn_re is not None and warn_re.search(text):
-                    out_stream.write(f"\033[33m{text}\033[0m")  # yellow: recognised warning
+                    out_stream.write(f"{line_prefix}\033[33m{text}\033[0m")  # yellow: recognised warning
                 elif red:
-                    out_stream.write(f"\033[31m{text}\033[0m")  # red: error / unclassified
+                    out_stream.write(f"{line_prefix}\033[31m{text}\033[0m")  # red: error / unclassified
                 else:
-                    out_stream.write(text)
+                    out_stream.write(f"{line_prefix}{text}")
                 out_stream.flush()
         finally:
             stream.close()
 
-    t_out = threading.Thread(target=_pump, args=(process.stdout, stdout_chunks, sys.stdout, False))
-    t_err = threading.Thread(target=_pump, args=(process.stderr, stderr_chunks, sys.stderr, True, stderr_warn_re))
+    t_out = threading.Thread(target=_pump,
+                             args=(process.stdout, stdout_chunks, lambda: sys.stdout, False))
+    t_err = threading.Thread(target=_pump,
+                             args=(process.stderr, stderr_chunks, lambda: sys.stderr, True,
+                                   stderr_warn_re))
     t_out.start()
     t_err.start()
     try:
