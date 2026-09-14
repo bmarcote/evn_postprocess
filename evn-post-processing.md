@@ -691,8 +691,10 @@ archive.pl -stnd  -e {EXP}_{YYMMDD} *ps.gz
 archive.pl -stnd  -e {EXP}_{YYMMDD} {exp}.piletter
 archive.pl -fits  -e {EXP}_{YYMMDD} *IDI*
 
-(cd pipeline/in  && archive.pl -pipe -e {EXP}_{YYMMDD})
-(cd pipeline/out && archive.pl -pipe -e {EXP}_{YYMMDD})
+cd pipeline/in
+archive.pl -pipe -e {EXP}_{YYMMDD}
+cd pipeline/out
+archive.pl -pipe -e {EXP}_{YYMMDD}
 
 # Only if the experiment was not submitted through NorthStar (Bob usually does this):
 archive.pl -abstract {abstract.txt} -e {EXP}_{YYMMDD}
@@ -700,7 +702,7 @@ archive.pl -abstract {abstract.txt} -e {EXP}_{YYMMDD}
 
 `archive` (no `.pl`) prints the full list of options and the file-name conventions. `auth_pipe.py -h` lists the fields that can be protected or released, per experiment and per source. You can also set the authentication from <http://archive.jive.nl/scripts/pipe/admin.php>.
 
-> **No password protection is needed** for NMEs, tests, or for experiments where the PI has waived the proprietary period. `postprocess` skips the credentials for NMEs automatically.
+> **No password protection is needed for NMEs**, tests, or for experiments where the PI has waived the proprietary period. `postprocess` skips the credentials for NMEs automatically.
 
 For the PI letter, run:
 
@@ -716,60 +718,42 @@ To build the credentials letter by hand. It takes the credentials from the `{use
 
 ---
 
-## 6. After delivery
+## 5. After delivery
 
 ### 6.1 Station feedback and issue tracking
 
-Add the important station issues to the **Feedback experiment pages**
-(<http://old.evlbi.org/session/feedback.html>, or directly from the experiment's Archive
-page). This is the operations-facing record, so it can be more technical than the PI letter.
-Only add what the stations have not reported themselves.
+Add the important station issues to the [**Feedback experiment pages** ](<http://old.evlbi.org/session/feedback.html>, or directly from the experiment's Archive page). This is the operations-facing record, so it can be more technical than the PI letter. Only add what the stations have not reported themselves.
 
-Then report the major issues on the JIVE RedMine news page,
-<https://jrm.jive.nl/projects/science-support/news>, where problems are tracked per session
-and per station (create the news item if the session does not exist yet). Use *Issues* for
-anything that needs investigating inside JIVE.
+Then report the major issues on the JIVE RedMine news page, <https://jrm.jive.nl/projects/science-support/news>, where problems are tracked per session and per station (create the news item if the session does not exist yet). Use *Issues* for anything that needs investigating inside JIVE.
 
-> `parsePIletter.py` used to do the first of these from the PI letter. It is no longer
-> installed; the pages are filled in by hand.
+
 
 ### 6.2 Gain corrections into the database
 
 ```bash
 cd /data/exp/{EXP}/pipeline/out
-ampcal.sh [-e {eEVN_name}] [{source}]
+ampcal.sh [-e {EXP}] [{source}]
 ```
 
-With no argument it uses the BPASS and PHASEREF source lists from the pipeline input file.
-For an e-EVN run, pass the official name of the run (the first experiment observed). This is
-one of the few steps with no automated equivalent — run it by hand.
+With no argument it uses the BPASS and PHASEREF source lists from the pipeline input file. For an e-EVN run, pass the official name of the run (the first experiment observed). This is one of the few steps with no automated equivalent — run it by hand.
 
 ### 6.3 House-keeping
 
-Once the experiment has been delivered and the usual two weeks of waiting for PI feedback have
-passed, you can free the disk: the AIPS files and the FITS-IDI files can go (a copy of the
-latter is in the EVN Data Archive). The `-lag.ms` file is a diagnostic and can go at any time.
-Keep the Measurement Sets until they have been backed up to tape.
+Once the experiment has been delivered and the usual two weeks of waiting for PI feedback have passed, you can free the disk: the AIPS files and the FITS-IDI files can go (a copy of the latter is in the EVN Data Archive). Keep the Measurement Sets until they have been backed up to tape.
 
 ---
 
 ## 7. NME reports
 
-For a Network Monitoring Experiment you also write the NME report. The reports live on the
-wiki: <http://www.jive.eu/jivewiki/doku.php?id=evntog:nme_reports>, where there is a LaTeX
-template.
+For a Network Monitoring Experiment you also write the NME report. The reports live on the wiki: <http://www.jive.eu/jivewiki/doku.php?id=evntog:nme_reports>, where there is a LaTeX template.
 
-`postprocess` reminds you about it at the end of the delivery (`postprocess exec nme`). The
-helper that generated a pre-filled LaTeX template with the participating stations
-(`create_nme_report_template.py`) is not installed on eee at the moment; get it from the Gitea
-repository <https://code.jive.eu/marcote/science_support_doc> if you want it.
+`postprocess` reminds you about it at the end of the delivery (`postprocess exec nme`). The helper that generated a pre-filled LaTeX template with the participating stations (`create_nme_report_template.py`) is not installed on eee at the moment; get it from the [Gitea repository](<https://code.jive.eu/marcote/science_support_doc>) if you want it.
 
 When the report is uploaded, email EVNTech (<evntech@jive.eu>) to say so.
 
 ### Retrieving the clocks used in correlation
 
-A `klx{band}` file with the history of clocks used during correlation is usually in the
-experiment folder on ccs. If it is not:
+A `klx{band}` file with the history of clocks used during correlation is usually in the experiment folder on ccs. If it is not:
 
 ```bash
 ssh jops@ccs
@@ -778,16 +762,15 @@ ssh jops@ccs
 
 ---
 
-## Appendix A — driving `jplotter` by hand
+## Appendix A — using `jplotter` by hand
 
-If `standardplots` does not give you what you need, these are the commands `postprocess`
-itself issues, so the plots come out identical. Start with:
+If `standardplots` does not give you what you need, these are the commands `postprocess` itself issues, so the plots come out identical. Start with:
 
 ```bash
-jplotter
+> jplotter
 ```
 
-```
+```sh
 ms {exp}.ms
 indexr
 r                 # frequency setup, stations, sources, times
@@ -795,7 +778,7 @@ r                 # frequency setup, stations, sources, times
 
 **Weights vs time**
 
-```
+```sh
 bl auto; fq */p
 src none
 time none
@@ -865,16 +848,13 @@ refile {exp}-ampphase-0.ps/cps
 pl
 ```
 
-Then `exit`. The polarization colour scheme
-(`ckey p[rr]=2 p[ll]=3 p[rl]=4 p[lr]=5 p[none]=1`) is the JIVE standard: single-polarization
-data comes out black.
+Then `exit`. The polarization colour scheme (`ckey p[rr]=2 p[ll]=3 p[rl]=4 p[lr]=5 p[none]=1`) is the JIVE standard: single-polarization data comes out black.
 
 ---
 
-## Appendix B — tools, and what happened to the old ones
+## Appendix B — other tools that may be useful
 
-**Available on eee** (`/home/jops/opt/evn_support`, `/home/jops/opt/bin`, `/usr/local/bin`,
-and the `pyjops` environment):
+**Available on eee** (under `/home/jops/opt/evn_support`, `/home/jops/opt/bin`, `/usr/local/bin`, and the `pyjops` Python environment):
 
 `postprocess`, `mstools`, `getdata.pl`, `j2ms2`, `tConvert`, `checklis.py`, `expname.py`,
 `standardplots`, `jplotter`, `ysfocus.py`, `flag_weights.py`, `polswap.py`, `scale1bit.py`,
@@ -885,7 +865,7 @@ and the `pyjops` environment):
 `pipelet.py`, `gscale2avg.py`, `create_processing_log.py`, `casa`, `gv`.
 
 **On ccs**, in `/ccs/bin` (not in a non-interactive `PATH` — use the full path over ssh):
-`showlog`, `showlog_new`, `make_lis`, `checklis`, `clocks`, `log2vex`.
+`showlog_new`, `make_lis`, `checklis`, `clocks`, `log2vex`.
 
 **No longer available, and what replaced them:**
 

@@ -1,6 +1,6 @@
 [project]
 name = "evn-postprocess"
-version = "3.1.2"
+version = "3.1.3"
 description = "Suite to run internal processing of EVN observations (from correlation to data distribution)"
 readme = "README.md"
 authors = [
