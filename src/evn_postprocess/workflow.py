@@ -837,38 +837,48 @@ def _record_msops_in_toml(exp: experiment.Experiment) -> None:
 
 
 def _auto_msops_available(exp: experiment.Experiment) -> bool:
-    """Whether the MS operations can be decided automatically from the lag-MS diagnostics.
+    """Return whether lag-MS diagnostics contain at least one determined polarization decision.
 
-    Requires that the lag-MS polarization analysis ran and classified at least one antenna
-    with a detected fringe. It is disabled when the vex shows 1-bit data, because the
-    affected stations cannot be inferred from the lag analysis and must be entered manually
-    (otherwise process.onebit would fail).
+    One-bit stations are derived independently from the VEX and therefore do not disable
+    automatic MS operations.
     """
     pd = getattr(exp, 'pol_diagnostics', None) or {}
     if not pd.get('analyzed'):
         return False
-    determined = any(a.get('decision') in ('normal', 'polswap', 'polconvert')
-                     for a in pd.get('antennas', {}).values())
-    if not determined:
-        return False
-    if utils.station_1bit_in_vix(exp.vixfile):
-        logger.info("1-bit data present in the vex: msops needs manual review to set the "
-                    "1-bit stations; skipping automatic MS operations.")
-        return False
-    return True
+    return any(a.get('decision') in ('normal', 'polswap', 'polconvert')
+               for a in pd.get('antennas', {}).values())
 
 
 def _auto_weight_threshold(exp: experiment.Experiment) -> float:
-    """Pick the weight-flag threshold automatically (matching the dialog's default of 0.9).
+    """Derive a deterministic flag threshold from the aggregate antenna weight histogram.
 
-    Logs a warning listing antennas whose weights look unexpectedly low (>5% outside the
-    first/last histogram bin, or nothing in the last bin) so the operator can double-check.
+    The first bin contains zero or near-zero weights and is excluded. Starting from the
+    highest remaining bin, the first bin containing at least one percent of valid samples
+    supplies its lower edge. Sparse high-weight outliers therefore cannot hide a lower main
+    distribution. Missing statistics use the historical 0.9 default.
     """
+    histograms = [a.weights for a in exp.antennas if len(a.weights) >= 7 and sum(a.weights) > 0]
+    if not histograms:
+        logger.warning("No antenna weight statistics are available; using flag threshold 0.9.")
+        return 0.9
+
+    aggregate = [sum(histogram[index] for histogram in histograms) for index in range(7)]
+    valid_total = sum(aggregate[1:])
+    if valid_total <= 0:
+        logger.warning("Weight statistics contain only zero or near-zero samples; using flag threshold 0.9.")
+        threshold = 0.9
+    else:
+        lower_edges = (0.001, 0.2, 0.4, 0.6, 0.8, 0.9)
+        significant_bins = [index for index in range(1, 7) if aggregate[index] / valid_total >= 0.01]
+        selected_bin = max(significant_bins) if significant_bins else max(index for index in range(1, 7)
+                                                                           if aggregate[index] > 0)
+        threshold = float(lower_edges[selected_bin - 1])
+
     low_weight_antennas = exp.antennas.low_weights
     if low_weight_antennas:
         logger.warning(f"Antennas with unexpectedly low weights: {', '.join(low_weight_antennas)}. "
-                       "Using the default flag threshold 0.9; review the weight plots if needed.")
-    return 0.9
+                       f"Using derived flag threshold {threshold}; review the weight plots if needed.")
+    return threshold
 
 
 def _apply_auto_msops(exp: experiment.Experiment) -> None:
@@ -894,8 +904,14 @@ def _apply_auto_msops(exp: experiment.Experiment) -> None:
         if ant in exp.antennas:
             exp.antennas[ant].polconvert = True
 
+    onebit_stations = utils.onebit_stations_in_vix(exp.vixfile)
+    for ant in onebit_stations:
+        if ant in exp.antennas:
+            exp.antennas[ant].onebit = True
+
     logger.info(f"Automatic MS operations applied: weight threshold={threshold}, "
-                f"polswap={pd.get('polswap') or 'none'}, polconvert={pd.get('polconvert') or 'none'}.")
+                f"polswap={pd.get('polswap') or 'none'}, polconvert={pd.get('polconvert') or 'none'}, "
+                f"onebit={onebit_stations or 'none'}.")
 
 
 def polconvert(exp: experiment.Experiment) -> bool:

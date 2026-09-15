@@ -395,6 +395,60 @@ class TestAntennasLowWeightsProperty:
         assert ants.low_weights == ["Wb", "Tr"]
 
 
+class TestAutomaticWeightThreshold:
+    """The automatic MS-ops threshold follows the aggregate seven-bin histogram."""
+
+    @staticmethod
+    def _exp(*weights):
+        exp = Mock()
+        exp.antennas = experiment.Antennas([
+            experiment.Antenna(name=f"A{index}", weights=histogram)
+            for index, histogram in enumerate(weights)
+        ])
+        return exp
+
+    def test_normal_distribution_uses_point_nine(self):
+        assert workflow._auto_weight_threshold(self._exp((10, 0, 0, 0, 0, 0, 990))) == 0.9
+
+    def test_lower_cluster_uses_point_eight(self):
+        assert workflow._auto_weight_threshold(self._exp((10, 0, 0, 0, 0, 990, 0))) == 0.8
+
+    def test_sparse_high_outliers_do_not_control_threshold(self):
+        exp = self._exp((0, 0, 0, 0, 700, 295, 5), (0, 0, 0, 0, 300, 0, 0))
+        assert workflow._auto_weight_threshold(exp) == 0.8
+
+    def test_missing_statistics_falls_back_to_point_nine(self):
+        assert workflow._auto_weight_threshold(self._exp((), (0, 0, 0, 0, 0, 0, 0))) == 0.9
+
+
+class TestOnebitVexDetection:
+    """Only scheduled stations tied to the active 1-bit mode definition are returned."""
+
+    def test_follows_scheduled_mode_and_station_qualifier(self, tmp_path: Path):
+        vex = tmp_path / "test.vix"
+        vex.write_text("""$TRACKS;
+def two_bit; track_frame_format = Mark5B; enddef;
+def one_bit; track_frame_format = Mark5B 1bit; enddef;
+$MODE;
+def active; ref $TRACKS = one_bit : Ef; ref $TRACKS = two_bit : Mc; enddef;
+def unused; ref $TRACKS = one_bit : Tr; enddef;
+$SCHED;
+scan no0001; mode = active; station = Ef : 0 sec : 10 sec; station = Mc : 0 sec : 10 sec; endscan;
+""")
+        assert utils.onebit_stations_in_vix(vex) == ["Ef"]
+
+    def test_ignores_unused_onebit_capability(self, tmp_path: Path):
+        vex = tmp_path / "test.vix"
+        vex.write_text("""$TRACKS;
+def capable; track_frame_format = 1bit; enddef;
+$MODE;
+def active; ref $TRACKS = normal : Ef; enddef;
+$SCHED;
+scan no0001; mode = active; station = Ef : 0 sec : 10 sec; endscan;
+""")
+        assert utils.onebit_stations_in_vix(vex) == []
+
+
 class TestLowWeightWarningBeforeDashboard:
     """The unexpectedly-low-weight warning must be emitted *before* the standardplot
     dashboard is opened, so the operator knows to inspect the weight plots while the
