@@ -179,6 +179,20 @@ def create_uvflg(exp) -> bool:
     return True
 
 
+def _select_bandpass_sources(sources) -> list[str]:
+    """Return the best available source list for bandpass calibration.
+
+    The EVN pipeline normally derives the bandpass from fringe-finder sources.
+    When none exist, fall back to phase calibrators, then to the target sources
+    themselves. This keeps NME-style observations (targets only) able to run
+    the pipeline with the sources that are actually present.
+    """
+    for source_list in (sources.fringefinder, sources.calibrator, sources.target, sources.names):
+        if source_list:
+            return list(source_list)
+    return []
+
+
 def create_input_file(exp) -> bool:
     """Copies the template of an input file for the EVN Pipeline
     and modifies the standard parameters.
@@ -238,7 +252,7 @@ def create_input_file(exp) -> bool:
                                        capture_output=True, text=True).stdout.strip() or '100',
             '{refant}': exp.refant[0] if len(exp.refant) > 0 else '',
             '{plotref}': exp.refant[0],
-            '{bpass}': ', '.join(apass.sources.fringefinder),
+            '{bpass}': ', '.join(_select_bandpass_sources(apass.sources)),
             '{dophaseref}': '' if apass.sources.calibrator else '#',
             # '{phaseref}': ', '.join(apass.sources.calibrator),
             # '{target}': ', '.join(apass.sources.target),

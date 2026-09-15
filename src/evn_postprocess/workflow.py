@@ -451,8 +451,12 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
         logger.error("No pipelinable correlator passes found.")
         return False
 
-    if not (any((p.sources and p.sources.fringefinder) for p in pipelinable) or bool(exp.sources.fringefinder)):
-        logger.error("No fringe-finder sources found in any correlator pass or experiment.")
+    def _has_any_source_for_plots(p: experiment.CorrelatorPass) -> bool:
+        return p.sources is not None and any((p.sources.fringefinder, p.sources.calibrator, p.sources.target))
+
+    if not (any(_has_any_source_for_plots(p) for p in pipelinable) or
+            bool(exp.sources.fringefinder or exp.sources.calibrator or exp.sources.target)):
+        logger.error("No sources found to plot in any correlator pass or experiment.")
         return False
 
     # Show scan overview before opening standardplots
