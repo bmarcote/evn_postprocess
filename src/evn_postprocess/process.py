@@ -763,6 +763,22 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
     return True
 
 
+def _select_plot_sources(sources: experiment.Sources | None) -> list[str]:
+    """Pick the best available source list for standardplots.
+
+    Standardplots are primarily meant to be run on fringe finders, but NMEs
+    and similar observations may only have targets. Fall back through
+    fringe finder, calibrator, and target lists in that order, returning the
+    first non-empty list (or an empty list when no source is available).
+    """
+    if sources is None:
+        return []
+    for source_list in (sources.fringefinder, sources.calibrator, sources.target):
+        if source_list:
+            return list(source_list)
+    return []
+
+
 def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
     """Runs the standardplots on the specified experiment using Jplot.
 
@@ -789,11 +805,11 @@ def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
             if not a_pass.pipeline:
                 continue
 
-            calsources = a_pass.sources.fringefinder if a_pass.sources else exp.sources.fringefinder
+            calsources = _select_plot_sources(a_pass.sources if a_pass.sources else exp.sources)
 
             if not calsources:
-                logger.error(f"No fringe-finder sources found for {a_pass.msfile.name}. "
-                       "Set them with 'postprocess edit fringefinder <SRC>'.")
+                logger.error(f"No sources found to plot for {a_pass.msfile.name}. "
+                       "Set at least one source with 'postprocess edit <type> <SRC>'.")
                 return False
 
             counter += 1
