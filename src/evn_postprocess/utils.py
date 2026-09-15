@@ -579,6 +579,58 @@ def remote_file_exists(host: str, path: str | Path,
     raise ConnectionError(f"SSH connection to {host} failed (exit code {status}).")
 
 
+def onebit_stations_in_vix(vexfile: str | Path) -> list[str]:
+    """Return scheduled stations whose active VEX mode references a 1-bit definition.
+
+    The parser follows mode references only for modes and stations present in ``$SCHED``.
+    A stray 1-bit capability definition that is not used by a scheduled mode is ignored.
+    Ambiguous unqualified 1-bit definitions are conservatively applied to all stations using
+    that mode; files with no clear scheduled association return an empty list.
+    """
+    path = Path(vexfile)
+    if not path.is_file():
+        raise FileNotFoundError(f"{vexfile} file not found.")
+    text = re.sub(r"\*[^\n]*", "", path.read_text(errors="replace"))
+
+    sections: dict[str, str] = {}
+    for match in re.finditer(r"(?ms)^\s*\$(\w+)\s*;(?P<body>.*?)(?=^\s*\$\w+\s*;|\Z)", text):
+        sections[match.group(1).upper()] = match.group("body")
+
+    scheduled_modes: dict[str, set[str]] = {}
+    for scan in re.finditer(r"(?is)\bscan\b[^;]*;(?P<body>.*?)\bendscan\s*;", sections.get("SCHED", "")):
+        body = scan.group("body")
+        mode_match = re.search(r"(?i)(?:^|;)\s*mode\s*=\s*([^;\s]+)", body)
+        if not mode_match:
+            continue
+        stations = set(re.findall(r"(?i)(?:^|;)\s*station\s*=\s*([^:;\s]+)", body))
+        scheduled_modes.setdefault(mode_match.group(1), set()).update(stations)
+
+    mode_defs = {match.group(1): match.group("body") for match in
+                 re.finditer(r"(?is)\bdef\s+([^;\s]+)\s*;(?P<body>.*?)\benddef\s*;", sections.get("MODE", ""))}
+    other_defs: dict[tuple[str, str], str] = {}
+    for section_name, section_body in sections.items():
+        if section_name in ("MODE", "SCHED"):
+            continue
+        for match in re.finditer(r"(?is)\bdef\s+([^;\s]+)\s*;(?P<body>.*?)\benddef\s*;", section_body):
+            other_defs[(section_name, match.group(1))] = match.group("body")
+
+    detected: set[str] = set()
+    for mode_name, scheduled_stations in scheduled_modes.items():
+        mode_body = mode_defs.get(mode_name, "")
+        for statement in mode_body.split(";"):
+            reference = re.search(r"(?i)ref\s+\$(\w+)\s*=\s*([^:\s]+)(?P<stations>.*)", statement)
+            if not reference:
+                if "1bit" in statement.lower():
+                    detected.update(scheduled_stations)
+                continue
+            definition = other_defs.get((reference.group(1).upper(), reference.group(2)), "")
+            if "1bit" not in definition.lower() and "1bit" not in statement.lower():
+                continue
+            qualifiers = set(re.findall(r":\s*([^:\s]+)", reference.group("stations")))
+            detected.update(scheduled_stations & qualifiers if qualifiers else scheduled_stations)
+    return sorted(detected)
+
+
 def station_1bit_in_vix(vexfile: str | Path) -> bool:
     """Checks if there is any station in the vex file that recorded at 1 bit.
     Note that this/these station(s) may or may not have recorded at 1 bit in this experiment,
