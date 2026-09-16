@@ -95,10 +95,10 @@
          Standard Plots is the default; loadPipeline() switches to Pipeline once its
          feedback page exists. -->
     <div class="tabs">
+      <button class="tab active" id="tab-progress" onclick="showTab('progress')">Progress</button>
       <button class="tab" id="tab-comments" onclick="showTab('comments')">Comments</button>
-      <button class="tab active" id="tab-plots" onclick="showTab('plots')">Standard Plots</button>
+      <button class="tab" id="tab-plots" onclick="showTab('plots')">Standard Plots</button>
       <button class="tab" id="tab-pipeline" onclick="showTab('pipeline')">Pipeline</button>
-      <button class="tab" id="tab-progress" onclick="showTab('progress')">Progress</button>
     </div>
     <!-- Comments tab: general experiment note + per-station notes and status,
          persisted into the experiment toml [comments] section. -->
