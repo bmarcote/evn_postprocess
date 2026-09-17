@@ -562,7 +562,8 @@ The `tmask` parameter selects which parts run:
 
 ```bash
 cd /data/exp/{EXP}/pipeline/in
-EVN.py {exp}.inp.txt    # or {exp}_1.inp.txt, {exp}_2.inp.txt … for multiple passes
+EVN.py {exp}.inp.txt [TMUX]   # or {exp}_1.inp.txt, {exp}_2.inp.txt … for multiple passes
+# Now it accepts one or two numbers (e.g. 4 or 4,6) setting the `tmux` variable directly
 ```
 
 **Note that for spectral line or multiple passes to pipeline** experiments, the experiments name should be “{exp}_n”, where _n_ is the correlator pass to pipeline. This should also be extrapolated to the experiment name defined inside the input file, and to the names of the antab and uvflg tables, and the vix file (if copied, which is required for multi-phase center observations).
