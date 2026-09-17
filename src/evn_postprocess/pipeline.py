@@ -6,6 +6,7 @@ perform required changes in intermediate files.
 """
 import os
 import re
+import shlex
 import glob
 import shutil
 import subprocess
@@ -105,15 +106,21 @@ def run_antab_editor(exp) -> bool:
 
         assoc_args = ["-a", *other_exps] if other_exps else []
         assoc_paths = [f"../../{e}/" for e in other_exps]
+        base_cmd = ["antab_editor.py", "-e", exp.expname.lower(), *assoc_args, "-f", ".."]
 
         if '_line' in ''.join(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")):
-            utils.shell_command("antab_editor.py",
-                                ["-e", exp.expname.lower(), *assoc_args, "-f", "..", "-l", *assoc_paths],
-                                shell=True, stdout=None, ok_returncodes=ANTAB_EDITOR_OK_RETURNCODES)
+            cmd = [*base_cmd, "-l", *assoc_paths]
         else:
-            utils.shell_command("antab_editor.py",
-                                ["-e", exp.expname.lower(), *assoc_args, "-p", "1", "-f", "..", *assoc_paths],
+            cmd = [*base_cmd, "-p", "1", *assoc_paths]
+
+        try:
+            utils.shell_command("antab_editor.py", cmd[1:],
                                 shell=True, stdout=None, ok_returncodes=ANTAB_EDITOR_OK_RETURNCODES)
+        except ValueError as exc:
+            manual = ' '.join(shlex.quote(str(p)) for p in cmd)
+            raise ValueError(
+                f"{exc}\nTo re-run manually: cd {shlex.quote(str(exp.dirs.pipe_temp))} && {manual}"
+            ) from exc
 
         if len(missing_antabs := [a.name for a in exp.antennas if not a.antabfsfile]) > 0:
             rprint(f"[red]Note that you are missing ANTAB files from: {', '.join(missing_antabs)}[/red]")
@@ -446,18 +453,42 @@ def pipeline_feedback(exp) -> bool:
     return True
 
 
+def _write_pipeline_readme(exp, folder) -> None:
+    """Write a README.txt describing the source(s) of each correlator pass into *folder*.
+
+    The README lists the MS-file suffix for each pass and the source names recorded in
+    that pass, so the archived pipeline products can be traced back to their data.
+    """
+    header = f"Correlator pass source summary for {exp.expname} ({exp.obsdate.strftime('%Y-%m-%d')})\n\n"
+    lines: list[str] = []
+    passes = exp.correlator_passes
+    for a_pass in passes[:5]:
+        stem = a_pass.msfile.stem
+        parts = stem.split('_')
+        suffix = '_'.join(parts[-2:]) if len(parts) >= 2 else stem
+        source_names = list(a_pass.sources.names)
+        sources = ', '.join(source_names) if source_names else '(unknown)'
+        lines.append(f"- {suffix} : {sources}")
+    if len(passes) > 5:
+        lines.append(f"... (+{len(passes) - 5} more)")
+    Path(folder / "README.txt").write_text(header + '\n'.join(lines) + '\n', encoding='utf-8')
+
+
 def archive(exp) -> bool:
     """Archives the EVN Pipeline results.
-    """
-    original_cwd = os.getcwd()
-    try:
-        for folder in (exp.dirs.pipe_in, exp.dirs.pipe_out):
-            os.chdir(folder)
-            utils.shell_command("archive.pl", ["-pipe", "-e", f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}"], stdout=None)
-            os.chdir(original_cwd)
-    finally:
-        os.chdir(original_cwd)
 
+    Runs ``archive.pl -pipe`` inside ``pipeline/in`` and ``pipeline/out`` without
+    changing the Python working directory, so the command is logged to the
+    experiment root ``logs/commands.sh`` rather than the per-folder log.
+    """
+    archive_arg = f"{exp.expname.upper()}_{exp.obsdate.strftime('%y%m%d')}"
+    for folder in (exp.dirs.pipe_in, exp.dirs.pipe_out):
+        _write_pipeline_readme(exp, folder)
+        utils.shell_command(
+            "cd",
+            f"{shlex.quote(str(folder))} && archive.pl -pipe -e {archive_arg}",
+            shell=True, stdout=None,
+        )
     return True
 
 

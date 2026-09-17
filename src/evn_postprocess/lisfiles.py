@@ -26,6 +26,24 @@ def _pass_lisfiles(pattern: str) -> list[str]:
     return sorted(f for f in glob.glob(pattern) if LAG_TAG not in f)
 
 
+def _disable_calibrator_scans(a_pass: experiment.CorrelatorPass, source_names: list[str]) -> None:
+    """Disable active scan lines containing any of the supplied source names."""
+    with open(a_pass.lisfile, 'r') as lisfile:
+        lines = lisfile.readlines()
+
+    changed = False
+    for i, line in enumerate(lines):
+        if line.startswith('+ ') and any(source_name in line for source_name in source_names):
+            lines[i] = '- ' + line[2:]
+            changed = True
+
+    if changed:
+        with open(a_pass.lisfile, 'w') as lisfile:
+            lisfile.writelines(lines)
+        logger.info(f"Disabled calibrator scan lines in {a_pass.lisfile.name} for sources: "
+                    f"{', '.join(source_names)}")
+
+
 def update_lis_file(lisfilename: str | Path, oldexp: str, newexp: str) -> None:
     """Updates the lis file (the header lines) referring to an experiment named oldexp
     to newexp. Note that it does not replace all references to oldexp as some of them
@@ -224,6 +242,17 @@ def get_passes_from_lisfiles(exp: experiment.Experiment) -> bool:
             a_pass.sources = old.sources
             a_pass.scans = old.scans
             a_pass.flagged_weights = old.flagged_weights
+
+    if getattr(exp, 'eEVNname', None) is None and exp.multi_phase_center:
+        calibrator_names = exp.sources.calibrator + exp.sources.fringefinder
+        if calibrator_names:
+            for a_pass in new_passes:
+                if a_pass.fitsidifile.endswith('_1_1.IDI'):
+                    continue
+                _disable_calibrator_scans(a_pass, calibrator_names)
+        else:
+            logger.warning(f"{exp.expname}: multi-phase-center run but no calibrator/fringe-finder source types "
+                           "known; not disabling calibrator scan lines.")
 
     exp.correlator_passes = new_passes
 
