@@ -67,7 +67,7 @@ _INLINE_RE = re.compile(r"\[(?P<ltext>[^\]]+)\]\((?P<lurl>[^)\s]+)\)"
 # Inline styles (not a <style> block): they are what survives a copy-paste from the browser
 # into a mail client, which is exactly how this letter is meant to travel.
 _CSS = {'body': "font-family:Helvetica,Arial,sans-serif; font-size:11pt; line-height:1.5; "
-                "color:#1f2328; max-width:46em;",
+                "color:#1f2328;",
         'h2': "font-family:Helvetica,Arial,sans-serif; font-size:11.5pt; color:#0b3d6b; "
               "margin:1.6em 0 0.5em; padding-bottom:0.2em; border-bottom:1px solid #d8dee6;",
         'p': "margin:0.8em 0;",
@@ -173,10 +173,20 @@ def _pass_line(a_pass: experiment.CorrelatorPass, index: int, total: int) -> str
     Returns:
         A Markdown bullet, without the leading '- '.
     """
+    def _ms_suffix(stem: str) -> str:
+        """Last two underscore-separated parts of *stem*, or *stem* itself."""
+        parts = stem.split('_')
+        return f"_{'_'.join(parts[-2:])}" if len(parts) >= 2 else stem
+
     label = f"**Correlator pass #{index + 1}**: " if total > 1 else ''
     fitsidi = f" FITS-IDI files: `{a_pass.fitsidifile}`." if total > 1 else ''
+    source_clause = ''
+    if a_pass.sources and a_pass.sources.names:
+        suffix = _ms_suffix(a_pass.msfile.stem)
+        source_clause = (f" Source: {', '.join(a_pass.sources.names)} "
+                         f"(MS suffix {suffix}).")
     if a_pass.freqsetup is None:
-        return f"{label}Correlation setup not available.{fitsidi}"
+        return f"{label}Correlation setup not available.{fitsidi}{source_clause}"
     setup = a_pass.freqsetup
     per_subband = (setup.bandwidth / setup.subbands).to(u.MHz).value
     pols = ', '.join(getattr(p, 'name', str(p)) for p in setup.polarizations)
@@ -184,7 +194,7 @@ def _pass_line(a_pass: experiment.CorrelatorPass, index: int, total: int) -> str
     return (f"{label}Central frequency {setup.frequency.to(u.GHz):0.04}, "
             f"{setup.subbands} x {per_subband:g}-MHz subbands "
             f"({setup.bandwidth.to(u.MHz):g} in total), {setup.channels} spectral channels "
-            f"per subband, {polabel} polarization ({pols}).{fitsidi}")
+            f"per subband, {polabel} polarization ({pols}).{fitsidi}{source_clause}")
 
 
 def _passes_block(exp: experiment.Experiment) -> str:
