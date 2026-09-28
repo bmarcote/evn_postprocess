@@ -67,12 +67,16 @@ REVIEW_FLAG_FILENAME = "REVIEW_REQUIRED"
 # with its own pause_after list (see _pause_steps).
 DEFAULT_PAUSE_AFTER = "postpipe"
 
-# Set by a step that has just held the operator at the terminal — the pipeline dashboard,
-# which only returns once they close it themselves. A review pause *immediately* after such
-# a step then skips the chat notification: pinging someone who is demonstrably sitting in
-# front of the run, about a prompt already on their screen, is pure noise. Cleared at the
-# start of every step and when the pause consumes it, so it never outlives the step that set it.
-_OPERATOR_JUST_INTERACTED = False
+# Errors and prompts are announced outside the terminal (chat and desktop) only once the run
+# has gone on for this long without the operator. A break shortly after they started the
+# command, answered a prompt or closed a dashboard happens in front of them: pinging someone
+# who is demonstrably sitting at the run, about something already on their screen, is noise.
+OPERATOR_AWAY_SECONDS = 300
+
+# time.monotonic() of the last moment the operator was demonstrably at the terminal: the start
+# of the command (module import, then run_workflow) and every answered prompt or closed
+# dashboard. Updated by _note_operator_interaction, read by _operator_away.
+_OPERATOR_LAST_SEEN = time.monotonic()
 
 # Module-level notifier for sending messages at key interaction points.
 # Set via :func:`set_notifier` from the CLI entry point.
@@ -158,6 +162,8 @@ def _notify_step_failure(exp: experiment.Experiment, step: str, reason: str,
     A failure is deliberately distinct from the clean review-pause (which writes a marker
     and exits 0): the step is NOT marked done, so re-running `postprocess run` resumes from
     it, and the caller returns False so the process exits non-zero (PRD stories 35-36).
+    The desktop and chat notifications only go out when the operator is away (see
+    :func:`_operator_away`); the terminal always gets the resume instructions.
 
     Args:
         exp: Experiment object.
@@ -169,6 +175,8 @@ def _notify_step_failure(exp: experiment.Experiment, step: str, reason: str,
     logger.error(f"Step '{step}' FAILED{duration}: {reason}.")
     resume = f"Fix the cause and re-run `postprocess run` in {Path.cwd()} to resume from '{step}'."
     reporting.announce(resume, style='bold red')
+    if not _operator_away(f"the failure at '{step}'"):
+        return
     utils.notify(f"{exp.expname} post-processing", f"FAILED at step {step}: {reason}")
     _comms.notify_operator(exp, f"failed at '{step}'",
                            f"The post-processing **stopped at the `{step}` step**{duration}:\n\n"
@@ -505,10 +513,12 @@ def msops(exp: experiment.Experiment) -> bool:
         # can be reviewed asynchronously via `postprocess info --serve`.
         if not _BATCH_MODE:
             process.open_standardplot_files(exp)
+            _note_operator_interaction()  # the dashboard returns once they stop it themselves
 
         # --- Comms: send dashboard notification and optionally get interactive feedback ---
+        # Only when the operator is away: at the terminal they answer the dialog below instead.
         msops_feedback: dict | None = None
-        if _NOTIFIER is not None:
+        if _NOTIFIER is not None and _operator_away("the MS operations question"):
             msops_feedback = _comms.notify_dashboard_review(exp, _NOTIFIER)
 
         if msops_feedback is not None:
@@ -517,7 +527,9 @@ def msops(exp: experiment.Experiment) -> bool:
         else:
             gui = dialog.make_dialog(batch=_BATCH_MODE)
             try:
-                if not gui.askMSoperations(exp):
+                msops_answered = gui.askMSoperations(exp)
+                _note_operator_interaction()
+                if not msops_answered:
                     return False
             except dialog.BatchInteractionError as exc:
                 _write_review_flag(exp, "msops", str(exc))
@@ -637,6 +649,7 @@ def _ask_review_confirmation(step: str = DEFAULT_PAUSE_AFTER) -> str | None:
     while True:
         try:
             answer = input("Your answer [Enter to finalize / a step name / quit]: ").strip()
+            _note_operator_interaction()
         except EOFError:  # no interactive stdin after all: behave like quit
             logger.warning("No interactive stdin available for the review confirmation; "
                            "stopping here (resume with `postprocess run`).")
@@ -686,6 +699,7 @@ def _ask_continue_after_antab(exp: experiment.Experiment) -> bool:
     while True:
         try:
             answer = input("Continue to the pipeline? [Enter to continue / stop]: ").strip().lower()
+            _note_operator_interaction()
         except EOFError:   # no interactive stdin: continuing is the unattended behaviour
             logger.warning("No interactive stdin to ask whether to continue after "
                            "antab_editor.py; continuing with the pipeline.")
@@ -1012,7 +1026,8 @@ def antfiles(exp: experiment.Experiment) -> bool:
                           f"experiments: {', '.join(missing)} (markers in ../EXPn). "
                           f"Re-run `postprocess run` once they are processed.")
                 _write_review_flag(exp, 'antab', reason)
-                _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
+                if _operator_away("the e-EVN FITS-IDI wait"):
+                    _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
                 raise StepPaused(reason)
 
         # Station .log/.antabfs files come from the mode's retrieval backend
@@ -1033,9 +1048,12 @@ def antfiles(exp: experiment.Experiment) -> bool:
         # Show the operator what to fix (stations that did not observe, missed time
         # ranges, reduced bandwidths) right before the manual antab_editor session,
         # in the terminal and via the notifier (PRD stories 10-11).
-        review.announce_antab_summary(exp, _NOTIFIER)
+        review.announce_antab_summary(
+            exp, _NOTIFIER if _operator_away("the antab_editor.py start") else None)
 
-        if not pipeline.run_antab_editor(exp):  # TODO: use the correct codes if eEVN or line
+        antab_edited = pipeline.run_antab_editor(exp)  # TODO: use the correct codes if eEVN or line
+        _note_operator_interaction()  # the editor is interactive: it returns when they close it
+        if not antab_edited:
             raise StepFailed(f"`antab_editor.py` needs to be run by hand in "
                              f"`{exp.dirs.pipe_temp}` (check the station summary above for "
                              f"what to fix), and then run the step again.")
@@ -1064,7 +1082,8 @@ def antfiles(exp: experiment.Experiment) -> bool:
                       f"{exp.eEVNname} (expected in ../{exp.eEVNname.upper()}/pipeline/in/). "
                       f"Re-run `postprocess run` once they exist.")
             _write_review_flag(exp, 'antab', reason)
-            _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
+            if _operator_away("the e-EVN final .antab wait"):
+                _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
             raise StepPaused(reason)
 
         eEVNpath = eevn.leader_antab_dir(exp)
@@ -1159,7 +1178,7 @@ def pipeline_diagnostics(exp: experiment.Experiment) -> bool:
     if result and not _BATCH_MODE:
         process.open_pipeline_dashboard(exp, on_ready=_announce_pipeline_dashboard(exp))
         # It only returns once the operator stops the server themselves (Ctrl-C), so they are
-        # at the terminal and the review pause below must not ping them in the chat.
+        # at the terminal and a review pause right after it must not ping them in the chat.
         _note_operator_interaction()
 
     return result
@@ -1173,7 +1192,8 @@ def _announce_pipeline_dashboard(exp: experiment.Experiment):
     review pause is reached they are demonstrably at the terminal and that pause deliberately
     stays quiet (see :func:`_review_pause`). Sent while the server is starting, it reaches
     them wherever they are — with the tunnel command already in it, which is only known once
-    the port has been picked.
+    the port has been picked. Like every prompt, it only goes out when the operator has been
+    away from the terminal for OPERATOR_AWAY_SECONDS (see :func:`_operator_away`).
 
     Args:
         exp: Experiment object.
@@ -1183,6 +1203,8 @@ def _announce_pipeline_dashboard(exp: experiment.Experiment):
         :func:`process.open_pipeline_dashboard`.
     """
     def announce(url: str, tunnel: str) -> None:
+        if not _operator_away("the pipeline dashboard"):
+            return
         utils.notify(f"{exp.expname} post-processing",
                      "The pipeline finished — the dashboard is waiting for your review")
         _comms.notify_operator(
@@ -1744,16 +1766,32 @@ def _setup_loguru(exp: experiment.Experiment, debug: bool = False):
 
 
 def _note_operator_interaction() -> None:
-    """Records that the operator has just been at the terminal (see _OPERATOR_JUST_INTERACTED)."""
-    global _OPERATOR_JUST_INTERACTED
-    _OPERATOR_JUST_INTERACTED = True
+    """Records that the operator is at the terminal right now (see _OPERATOR_LAST_SEEN)."""
+    global _OPERATOR_LAST_SEEN
+    _OPERATOR_LAST_SEEN = time.monotonic()
 
 
-def _consume_operator_interaction() -> bool:
-    """True (once) when the operator has just interacted with the run, clearing the flag."""
-    global _OPERATOR_JUST_INTERACTED
-    was_there, _OPERATOR_JUST_INTERACTED = _OPERATOR_JUST_INTERACTED, False
-    return was_there
+def _operator_away(what: str) -> bool:
+    """Whether *what* (an error or a prompt) has to be announced outside the terminal.
+
+    True in batch mode (nobody is at the terminal: the chat and desktop notifications are the
+    only signal) and once OPERATOR_AWAY_SECONDS have passed since the operator was last seen
+    at the terminal. Otherwise False, logging that the announcement stays in the terminal.
+
+    Args:
+        what: Short description of the announcement, for the log.
+
+    Returns:
+        True when the chat/desktop notification must be sent.
+    """
+    if _BATCH_MODE:
+        return True
+    idle = time.monotonic() - _OPERATOR_LAST_SEEN
+    if idle >= OPERATOR_AWAY_SECONDS:
+        return True
+    logger.debug(f"Not announcing {what} outside the terminal: the operator was at it "
+                 f"{_format_duration(idle)} ago (< {OPERATOR_AWAY_SECONDS} s).")
+    return False
 
 
 def _pause_steps(exp: experiment.Experiment) -> tuple[str, ...]:
@@ -1817,12 +1855,8 @@ def _review_pause(exp: experiment.Experiment, step: str) -> str | None:
     console.rule(style="yellow")
     console.print()
     # Announced outside the terminal (desktop notification + chat) only when the operator is
-    # not already looking at it. In batch mode nobody is at the terminal, whatever the flag
-    # says: there those notifications are the only signal, so they always go out.
-    if _consume_operator_interaction() and not _BATCH_MODE:
-        logger.debug(f"Not announcing the pause after '{step}' outside the terminal: the "
-                     "operator just closed the dashboard, so they are in front of it.")
-    else:
+    # not already looking at it (always in batch mode, see _operator_away).
+    if _operator_away(f"the pause after '{step}'"):
         utils.notify(f"{exp.expname} post-processing",
                      f"Paused after '{step}' — review the results")
         _comms.notify_operator(exp, f"paused after '{step}'",
@@ -1952,9 +1986,6 @@ def _run_step(exp: experiment.Experiment, step: Task) -> bool:
     """
     reporting.set_current_step(step.name)
     logger.info(f"[bold]Step '{step.name}' started[/bold] ({step.command}).")
-    # Cleared per step, so it only ever describes the step that just ran: a pause one or
-    # more steps after the dashboard still notifies the chat (the operator has left by then).
-    _consume_operator_interaction()
     started = time.monotonic()
 
     command = globals().get(step.command)
@@ -2012,6 +2043,8 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
     """
     _setup_loguru(exp, debug)
     logger.info(exp.log_header())
+    # The command was just launched (or a re-run just requested) from the terminal.
+    _note_operator_interaction()
     if exp.policy is not None and exp.policy.skip_archive:
         archive = False
     if not archive:
@@ -2035,7 +2068,8 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
             # "paused" so failure notifications stay trustworthy, and exit cleanly (True ->
             # exit code 0) for the scheduler. The step stays pending and re-runs on resume.
             logger.info(f"Step '{step.name}' paused: {pause}")
-            utils.notify(f"{exp.expname} post-processing", f"Paused at {step.name}: {pause}")
+            if _operator_away(f"the pause at '{step.name}'"):
+                utils.notify(f"{exp.expname} post-processing", f"Paused at {step.name}: {pause}")
             return True
         except Exception as e:
             logger.opt(exception=True).error(f"Step '{step.name}' raised an unexpected error.")
