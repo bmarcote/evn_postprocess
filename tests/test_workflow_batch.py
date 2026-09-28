@@ -8,6 +8,7 @@ Covers:
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -21,10 +22,10 @@ from evn_postprocess.policy import Policy
 def _reset_batch_mode():
     """Make sure the global flags do not leak between tests."""
     workflow.set_batch_mode(False)
-    workflow._consume_operator_interaction()
+    workflow._note_operator_interaction()
     yield
     workflow.set_batch_mode(False)
-    workflow._consume_operator_interaction()
+    workflow._note_operator_interaction()
 
 
 def _fake_exp(name: str = "TEST01") -> Mock:
@@ -96,10 +97,16 @@ class TestReviewPause:
         assert out.count("re-run the EVN Pipeline") == 1
 
 
-class TestOperatorInteractionSuppressesTheOutsideAnnouncements:
-    """After `postpipe` the operator closes the pipeline dashboard themselves, so the review
-    pause that follows must not tell them — in Mattermost or on the desktop — that the run
-    wants their input: the prompt is already on the screen in front of them."""
+def _operator_left(monkeypatch, seconds: float = 0) -> None:
+    """Pretends the operator was last at the terminal OPERATOR_AWAY_SECONDS + *seconds* ago."""
+    monkeypatch.setattr(workflow, '_OPERATOR_LAST_SEEN',
+                        time.monotonic() - workflow.OPERATOR_AWAY_SECONDS - seconds)
+
+
+class TestOperatorPresenceSuppressesTheOutsideAnnouncements:
+    """Errors and prompts reach Mattermost and the desktop only once the run has gone on for
+    OPERATOR_AWAY_SECONDS without the operator. Right after they launched the command,
+    answered a prompt or closed a dashboard, they are in front of the terminal already."""
 
     @staticmethod
     def _record(monkeypatch) -> tuple[list, list]:
@@ -122,10 +129,11 @@ class TestOperatorInteractionSuppressesTheOutsideAnnouncements:
         # The terminal still says everything: only the outside announcements are dropped.
         assert "THE RUN IS WAITING FOR YOU" in capsys.readouterr().out
 
-    def test_both_are_still_sent_otherwise(self, tmp_path: Path, monkeypatch):
+    def test_both_are_sent_once_the_operator_has_been_away(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         chat, desktop = self._record(monkeypatch)
         monkeypatch.setattr('builtins.input', lambda prompt='': '')
+        _operator_left(monkeypatch)
         assert workflow._review_pause(_fake_exp(), "postpipe") is None
         assert len(chat) == 1 and "paused after 'postpipe'" in chat[0][1]
         assert len(desktop) == 1
@@ -139,11 +147,33 @@ class TestOperatorInteractionSuppressesTheOutsideAnnouncements:
         assert workflow._review_pause(_fake_exp(), "postpipe") == 'quit'
         assert len(chat) == 1 and len(desktop) == 1
 
-    def test_the_flag_does_not_outlive_the_step_that_set_it(self, monkeypatch):
-        """A pause one or more steps later still pings: the operator has walked away by then."""
-        workflow._note_operator_interaction()
-        assert workflow._consume_operator_interaction() is True
-        assert workflow._consume_operator_interaction() is False   # one-shot
+    def test_a_failure_right_after_the_start_stays_in_the_terminal(self, monkeypatch):
+        chat, desktop = self._record(monkeypatch)
+        workflow._note_operator_interaction()             # what run_workflow does at start
+        workflow._notify_step_failure(_fake_exp(), 'j2ms2', 'it broke', 12.0)
+        assert chat == [] and desktop == []
+
+    def test_a_failure_after_a_long_unattended_run_is_announced(self, monkeypatch):
+        chat, desktop = self._record(monkeypatch)
+        _operator_left(monkeypatch)
+        workflow._notify_step_failure(_fake_exp(), 'pipeline', 'it broke', 3600.0)
+        assert len(chat) == 1 and "failed at 'pipeline'" in chat[0][1]
+        assert len(desktop) == 1
+
+    def test_the_timer_starts_again_at_each_answer(self, monkeypatch):
+        """Answering a prompt puts the operator back at the terminal."""
+        _operator_left(monkeypatch)
+        assert workflow._operator_away("x") is True
+        monkeypatch.setattr('builtins.input', lambda prompt='': '')
+        assert workflow._ask_review_confirmation("postpipe") is None
+        assert workflow._operator_away("x") is False
+
+    def test_the_threshold_is_five_minutes(self, monkeypatch):
+        assert workflow.OPERATOR_AWAY_SECONDS == 300
+        _operator_left(monkeypatch, seconds=-10)          # 4 min 50 s
+        assert workflow._operator_away("x") is False
+        _operator_left(monkeypatch, seconds=10)           # 5 min 10 s
+        assert workflow._operator_away("x") is True
 
 
 class TestPauseSteps:

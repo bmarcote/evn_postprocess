@@ -7,6 +7,7 @@ send one whenever it stops and waits for a human: a failure, a manual step, a pa
 from __future__ import annotations
 
 import datetime as dt
+import time
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,15 @@ def _exp(tmp_path):
                            pipeline=tmp_path / 'p', pipe_in=tmp_path / 'p/in',
                            pipe_out=tmp_path / 'p/out', pipe_temp=tmp_path / 'p/tmp')
     return experiment.Experiment('EB101', dt.date(2026, 4, 10), 'marcote', dirs)
+
+
+@pytest.fixture(autouse=True)
+def _operator_away(monkeypatch):
+    """These tests are about what is sent once the operator has left the terminal: the
+    announcements are only made after OPERATOR_AWAY_SECONDS without them (see
+    test_workflow_batch.py for the timer itself)."""
+    monkeypatch.setattr(workflow, '_OPERATOR_LAST_SEEN',
+                        time.monotonic() - workflow.OPERATOR_AWAY_SECONDS - 1)
 
 
 class Recorder(comms.Notifier):
