@@ -5,6 +5,12 @@ This is the change log for the different production (master) versions of the pro
 
 ## Unreleased
 
+Added:
+  - `.uvflg` creation now falls back to the a-priori `{exp}.flag` file (downloaded with the antenna files)
+    for every observed antenna whose `.uvflgfs` is missing or has no flagging line (previously only missing
+    files were covered): its `antenna='{ANT}'` lines are written to `{exp}{ant}.uvflgfs`. Real `.log`-derived
+    files are kept, and a run with a `.flag` file but no `.log` files no longer aborts.
+
 Fixed:
   - The operator was never told the pipeline had finished. The only chat notification for it
     came from the review pause after `postpipe`, and that pause deliberately stays quiet when

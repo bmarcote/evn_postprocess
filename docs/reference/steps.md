@@ -265,6 +265,10 @@ The most interactive automated step. In order:
    ```bash
    uvflgall.sh
    ```
+   The `{exp}.flag` file (a-priori flagging of slewing antennas) is fetched too. Observed antennas
+   whose `.uvflgfs` is missing or has no flagging line take their `antenna='{ANT}'` lines from it
+   (written to `{exp}{ant}.uvflgfs`); real `.log`-derived ones are never replaced. All `.uvflgfs` are
+   then concatenated into `{exp}.uvflg`.
 4. The **station summary** (did-not-observe, missed time ranges, reduced bandwidth)
    is printed as a terminal panel and sent via the configured notifier — see
    [Communications](../guide/comms.md).
