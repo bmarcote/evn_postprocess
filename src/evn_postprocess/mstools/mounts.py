@@ -57,7 +57,7 @@ def modify_mounts(msfile: str, antenna: str, mount: str, verbose: bool = True) -
 
             # In case no station has been found in the MS
             if len([ant for ant in stations if ant == antenna]) == 0:
-                rprint(r"[yellow]{antenna} was found in the MS, no ysfocus.py required.[/yellow]")
+                rprint(r"[yellow]{antenna} was found in the MS, no mount fix required.[/yellow]")
             else:
                 ant_table.putcol('MOUNT', mounts)
                 ant_table.flush()

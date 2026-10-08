@@ -26,7 +26,7 @@ from astropy import units as u
 from astropy.io import fits
 from rich import print as rprint
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from . import experiment, utils, mstools
+from . import experiment, utils, mstools, tools
 from . import lisfiles
 from . import reporting
 from . import plotting
@@ -1629,6 +1629,15 @@ def _fringe_peak_ratios(logdir: str, n_ifs: int) -> list[float]:
 _POLCONVERT_ENV: dict[str, str] = {'MPLBACKEND': 'Agg'}
 
 
+def _polconvert_command(template_file: Path, mode: str) -> list[str]:
+    """The command that runs this package's own ``scripts/polconvert.py`` on *template_file*.
+
+    Run with the interpreter of this process, so the child sees the same environment
+    (PolConvert, casacore, this package) whatever ``python3`` is first in ``$PATH``.
+    """
+    return [sys.executable, str(tools.script_path('polconvert.py')), str(template_file), mode]
+
+
 def _run_polconvert_cli(template_file: Path, mode: str, stream: bool = False) -> int:
     """Run ``polconvert.py <template> <mode>`` once, in a child process.
 
@@ -1659,7 +1668,7 @@ def _run_polconvert_cli(template_file: Path, mode: str, stream: bool = False) ->
     Returns:
         The child's exit code, for logging only (negative when a signal killed it).
     """
-    command = ['polconvert.py', str(template_file), mode]
+    command = _polconvert_command(template_file, mode)
     env = {**os.environ, **_POLCONVERT_ENV}
     if not stream:
         return subprocess.run(command, env=env).returncode
@@ -1683,7 +1692,7 @@ def _record_polconvert_command(template_file: Path, mode: str) -> None:
     combination is accepted, and once when the search gives up — in both cases the file left
     on disk is the one the recorded command would read.
     """
-    reporting.record_command(shlex.join(['polconvert.py', str(template_file), mode]))
+    reporting.record_command(shlex.join(_polconvert_command(template_file, mode)))
 
 
 def _polconvert_compute(template_file: Path, logdir: str, n_ifs: int) -> list[float]:
@@ -1794,7 +1803,7 @@ def _log_fringe_snr_table(logdir: str) -> None:
     Never raises: a summary that cannot be built must not be what ends an attempt.
     """
     try:
-        from evn_support.polconvert import print_fringe_snr_table
+        from .scripts.polconvert import print_fringe_snr_table
         print_fringe_snr_table(logdir)
     except Exception as e:  # ImportError, or anything the summary itself trips over
         logger.debug(f"No fringe-SNR summary for this attempt ({e}); the raw values, if any, "

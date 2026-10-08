@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-#!/local/bin/perl -w
-=======
 #!/usr/bin/env perl
->>>>>>> pipe2
 # Cormac Reynolds: February 2001 - original program
 # Simple program to produce the NME feedback pages and provide links to the evn
 # pipeline output postscript files
@@ -315,17 +311,10 @@ $nmaps = 0;
 while ($nmaps < @sources) {
   # do the amplitude calibration summary
   $link = ($wwwdir . $expname . "_" . $sources[$nmaps] . '_' . $name . ".TXT" );
-<<<<<<< HEAD
-  if (-d "/aps3/Pypeline/reynolds"){
-    #system "~reynolds/progs/perl/ampcalstats.pl $link" ;
-    system "/aps3/Pypeline/reynolds/perl/ampcalstats.pl $link" ;
-  }
-=======
   #if (-d "/aps3/Pypeline/reynolds"){
     #system "~reynolds/progs/perl/ampcalstats.pl $link" ;
-  system "/home/jops/opt/evn_support/ampcalstats.pl $link" ;
+  # system "/home/jops/opt/evn_support/ampcalstats.pl $link" ;
   #}
->>>>>>> pipe2
   @suffix = ('pdf', 'TXT', 'ampcal');
   @text = ('pdf', 'text file', 'statistical summary');
   print OUTFILE "$sources[$nmaps]:";
