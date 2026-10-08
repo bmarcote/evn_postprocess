@@ -1570,6 +1570,10 @@ def _polconvert_exclude_ants(exp: experiment.Experiment, lin_ants: list[str], re
             exclude.append(ant.name)
         elif snr_key is not None and _ant_scan_snr(exp, ant.name, snr_key) < _POLCONVERT_SOLVE_MIN_SNR:
             exclude.append(ant.name)
+        # Let's take them out as they seem to often fail the solutions
+        elif ant.name.lower() in ('tr', 'ir', 'ib'):
+            exclude.append(ant.name)
+
     return sorted(set(exclude))
 
 
