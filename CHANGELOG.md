@@ -12,6 +12,24 @@ Added:
     files are kept, and a run with a `.flag` file but no `.log` files no longer aborts.
 
 Fixed:
+  - The dashboard scan overview marked every station as "scheduled but missing" in every scan
+    whenever the correlation did not start at the first scheduled scan. The stations with data
+    were copied from the correlator pass to the experiment scans by position, and the two lists
+    are then offset, so no scan ever matched (and the lag SNR colours, which only apply to
+    stations with data, never showed). They are now matched by scan number, across all passes,
+    and the dashboard reads them from the correlator passes too, so an experiment already
+    past `msops` shows the right overview without re-running anything.
+  - After PolConvert, the dashboard showed the cross-correlation plots from before and after
+    it side by side. The PolConverted MS (imported from FITS-IDI) numbers its scans from 1,
+    so its plots got other scan numbers than the original ones and did not replace them. The
+    previous cross-correlation plots are now removed and the new ones are named after the
+    VEX scan they belong to. That MS also names the antennas in upper case, so the reference
+    antenna was never found in it and the plots fell back to another one: antenna names are
+    now matched ignoring case.
+  - Opening the dashboard logged several `Dashboard HTTP error: code 404` lines, caused by
+    the files browsers request on their own (`/favicon.ico`, the Apple touch icons, the
+    Chrome DevTools metadata). Those get an empty answer now, and any other HTTP error
+    names the request that caused it.
   - The operator was never told the pipeline had finished. The only chat notification for it
     came from the review pause after `postpipe`, and that pause deliberately stays quiet when
     the operator has just been held at the terminal — which `postpipe` itself always does, by

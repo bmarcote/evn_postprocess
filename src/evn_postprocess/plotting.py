@@ -233,11 +233,14 @@ class Jplot:
         Raises:
             ValueError: If no suitable reference antenna can be found.
         """
-        if self.refant in scan_info['antennas']:
-            return self.refant
+        # Antenna names are compared ignoring case, and returned as spelled in this MS: a MS
+        # imported from FITS-IDI (the PolConverted one) names them 'EF', not 'Ef'.
+        in_scan = {a.upper(): a for a in scan_info['antennas']}
+        if self.refant.upper() in in_scan:
+            return in_scan[self.refant.upper()]
 
         # Build candidates from the priority list that are present in this scan
-        candidates = [a for a in self.refant_priority if a in scan_info['antennas']]
+        candidates = [in_scan[a.upper()] for a in self.refant_priority if a.upper() in in_scan]
         if not candidates:
             # Fall back to any antenna present, sorted by subband count descending
             candidates = list(scan_info['antennas'])
@@ -459,6 +462,23 @@ class Jplot:
         yield "r"
 
 
+def scan_midtimes(ms: str) -> dict[int, dt.datetime]:
+    """Returns the mid time (UTC) of every scan in the Measurement Set.
+
+    Args:
+        ms: Path to the Measurement Set.
+
+    Returns:
+        dict mapping scan number -> naive UTC datetime halfway through the scan's data.
+    """
+    mjd_epoch = dt.datetime(1858, 11, 17)
+    with pt.table(ms, readonly=True, ack=False) as mstable:
+        with pt.taql("select SCAN_NUMBER as scan, gmin(TIME) as tmin, gmax(TIME) as tmax "
+                     "from $mstable group by SCAN_NUMBER") as per_scan:
+            return {int(row['scan']): mjd_epoch + dt.timedelta(seconds=(row['tmin'] + row['tmax']) / 2)
+                    for row in per_scan}
+
+
 def convert_ps_to_png(plots_dir: Path, expname: str, resolution: int = 150) -> list[Path]:
     """Convert all PostScript (.ps) plot files to PNG format using Ghostscript.
 
@@ -628,9 +648,13 @@ def _build_experiment_summary(exp) -> dict:
     # Scans overview
     all_antennas = sorted(exp.antennas.names)
     scans_overview: list[dict] = []
+    # The correlator passes are the source of truth for which stations have data in a scan.
+    # They are merged in here (rather than trusting scan.stations_observed alone) so that an
+    # experiment whose stored scans were never filled still shows the right overview.
+    observed_in_passes = experiment.stations_observed_by_scan(exp.correlator_passes)
     for scan in exp.scans:
         scheduled = set(scan.stations_scheduled)
-        observed = set(scan.stations_observed)
+        observed = set(scan.stations_observed) | observed_in_passes.get(scan.scanno, set())
         row: dict = {"scanno": scan.scanno, "source": scan.source, "antennas": {},
                      "timerange": _format_scan_timerange(scan)}
         for ant in all_antennas:
@@ -650,6 +674,9 @@ def _build_experiment_summary(exp) -> dict:
 # without touching Python; see _build_dashboard_html for the placeholder contract.
 _DASHBOARD_TEMPLATE = "dashboard.html.template"
 _DASHBOARD_PLACEHOLDER_RE = re.compile(r"\{\{[A-Z_]+\}\}")
+# Paths every browser asks for on its own (site icons, DevTools metadata). The dashboard has
+# none of them: they get an empty answer instead of a 404 logged as an error on each load.
+_BROWSER_PROBE_PATHS = ("/favicon.ico", "/apple-touch-icon", "/.well-known/")
 
 
 def _build_dashboard_html(exp) -> str:
@@ -733,6 +760,8 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         try:
             if self.path == "/" or self.path == "/index.html":
                 self._serve_html()
+            elif self.path.startswith(_BROWSER_PROBE_PATHS):
+                self._serve_no_content()
             elif self.path == "/api/summary":
                 self._serve_json(self.experiment_summary)
             elif self.path == "/api/plots":
@@ -920,6 +949,12 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
+    def _serve_no_content(self):
+        """Answer a request the dashboard has nothing for with an empty 204 response."""
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _serve_json(self, data: dict | list):
         """Serve a JSON response."""
         body = json.dumps(data, default=str).encode("utf-8")
@@ -987,7 +1022,8 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def log_error(self, format, *args):
         """Forward HTTP errors to loguru so they are visible in the terminal."""
-        logger.error(f"Dashboard HTTP error: {format % args}")
+        request = f"{getattr(self, 'command', None) or '?'} {getattr(self, 'path', None) or '?'}"
+        logger.error(f"Dashboard HTTP error on {request}: {format % args}")
 
 
 def _announce_ready(on_ready: Optional[Callable[[str, str], None]], url: str, tunnel: str,

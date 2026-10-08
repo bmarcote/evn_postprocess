@@ -473,9 +473,13 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
         for a_pass in exp.correlator_passes:
             _get_ms_metadata(exp, a_pass)
 
-    for exp_scan, ps in zip(exp.scans, exp.correlator_passes[0].scans):
-        if ps.scanno == exp_scan.scanno:
-            exp_scan.stations_observed = tuple(sorted(ps.stations_observed))
+    # exp.scans holds every scheduled (VEX) scan while a pass holds only the correlated
+    # ones, so the two lists are matched by scan number, never by position: as soon as the
+    # correlation does not start at the first scheduled scan they are offset from each other.
+    observed_by_scan = experiment.stations_observed_by_scan(exp.correlator_passes)
+    for exp_scan in exp.scans:
+        if exp_scan.scanno in observed_by_scan:
+            exp_scan.stations_observed = tuple(sorted(observed_by_scan[exp_scan.scanno]))
 
     # Antennas scheduled (from VEX) but absent from every MS get observed=False.
     for ant_name in exp.antennas.names:
@@ -1938,12 +1942,94 @@ def polconvert(exp: experiment.Experiment) -> bool:
     return False
 
 
+def _vex_scan_numbers(exp: experiment.Experiment, ms: str) -> dict[int, int]:
+    """Maps the scan numbers of *ms* to the scan numbers of the experiment (VEX).
+
+    A MS imported from FITS-IDI (the PolConverted one) numbers its scans from 1 in the order
+    they appear, so they do not match the VEX ones as soon as the correlation does not start
+    at the first scheduled scan. Each MS scan is matched to the scheduled scan that was
+    running at its mid time.
+
+    Args:
+        exp: Experiment object (reads ``exp.scans``).
+        ms: Path to the Measurement Set.
+
+    Returns:
+        dict mapping MS scan number -> VEX scan number (e.g. 144 for 'No0144'). A MS scan
+        that falls in no scheduled scan is left out.
+    """
+    vex_scans: dict[int, int] = {}
+    for ms_scan, midtime in plotting.scan_midtimes(ms).items():
+        for scan in exp.scans:
+            if scan.starttime is None or (scanno := _scan_number(scan)) is None:
+                continue
+            if scan.starttime <= midtime <= scan.starttime + timedelta(seconds=max(scan.duration_s, 1)):
+                vex_scans[ms_scan] = scanno
+                break
+    return vex_scans
+
+
+def polconvert_verification_plots(exp: experiment.Experiment, pconv_ms: str, calsources: list[str]) -> bool:
+    """Replaces the cross-correlation standard plots by the ones from the PolConverted MS.
+
+    The plots made from the original MS before PolConvert are removed (both the .ps files
+    and their images in the plots directory), so from here on the dashboard only shows the
+    PolConverted data. The new plots take the standard names, with the VEX scan number: the
+    PolConverted MS numbers its scans differently (see :func:`_vex_scan_numbers`), and under
+    its own numbers they would sit next to the previous plots instead of replacing them.
+
+    Nothing is removed when the new plots could not be created.
+
+    Args:
+        exp: Experiment object.
+        pconv_ms: Name of the PolConverted MS (``{exp}-pconv.ms``).
+        calsources: Sources to plot.
+
+    Returns:
+        True if the plots were created and are the only cross-correlation ones left.
+    """
+    pconv_base = plotting.mk_basenm(pconv_ms)
+    std_base = pconv_base.replace('-pconv', '')
+    for leftover in glob.glob(f"{pconv_base}-cross-scan*.ps"):
+        Path(leftover).unlink()
+
+    plotter = plotting.Jplot(ms=pconv_ms, refant=exp.refant[0], calsrc=','.join(calsources))
+    created = plotter.create_plot(sources=calsources, plots=['cross'])
+    new_plots = sorted(glob.glob(f"{pconv_base}-cross-scan*.ps"))
+    if not created or not new_plots:
+        logger.error(f"Could not create the PolConvert verification plots from {pconv_ms}. The "
+                     "cross-correlation plots shown are still the ones from before PolConvert.")
+        return False
+
+    for old_plot in glob.glob(f"{std_base}-cross-scan*.ps"):
+        stem = Path(old_plot).stem
+        for image in [exp.dirs.plots / f"{stem}.png", *exp.dirs.plots.glob(f"{stem}-page*.png")]:
+            image.unlink(missing_ok=True)
+        Path(old_plot).unlink()
+
+    vex_scans = _vex_scan_numbers(exp, pconv_ms)
+    for new_plot in new_plots:
+        ms_scan = int(re.search(r'-cross-scan(\d+)\.ps$', new_plot).group(1))
+        if ms_scan not in vex_scans:
+            logger.warning(f"Scan {ms_scan} of {pconv_ms} matches no scheduled scan; its plot keeps "
+                           "the scan number of that MS.")
+        target = Path(f"{std_base}-cross-scan{vex_scans.get(ms_scan, ms_scan)}.ps")
+        if target.exists():
+            logger.warning(f"{target} already exists; keeping {new_plot} under its own name.")
+            continue
+        Path(new_plot).rename(target)
+
+    # Convert PS plots to PNG images
+    plotting.convert_ps_to_png(exp.dirs.plots, exp.expname.lower())
+    return True
+
+
 def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
     """Converts PCONVERTed FITS-IDI files to MS and creates verification plots.
 
     Imports the .PCONVERT FITS-IDI files into a new MS using casatasks, then
     runs standardplots (cross) on it and converts the resulting PS files to PNG,
-    overriding any previous plot images.
+    replacing the cross-correlation plots made before PolConvert.
 
     Args:
         exp: Experiment object.
@@ -1986,16 +2072,8 @@ def post_polconvert(exp: experiment.Experiment) -> Optional[bool]:
             logger.error("No fringe-finder sources found for polconvert verification.")
             return False
 
-        plotter = plotting.Jplot(ms=pconv_ms, refant=exp.refant[0], calsrc=','.join(calsources))
-        plotter.create_plot(sources=calsources, plots=['cross'])
-
-        # Rename pconv plot files to standard names so they override the previous ones
-        for stdplot_file in glob.glob('*-pconv*.ps'):
-            Path(stdplot_file).rename(stdplot_file.replace('-pconv', ''))
-
-        # Convert PS plots to PNG images, overriding previous ones
-        plotting.convert_ps_to_png(exp.dirs.plots, exp.expname.lower())
-        logger.info("PolConvert verification plots created and converted to images.")
+        if polconvert_verification_plots(exp, pconv_ms, calsources):
+            logger.info("PolConvert verification plots created and converted to images.")
 
     logger.info("PolConvert post-processing complete.")
     exp.store()
