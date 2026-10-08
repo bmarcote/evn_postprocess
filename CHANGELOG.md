@@ -5,6 +5,14 @@ This is the change log for the different production (master) versions of the pro
 
 ## Unreleased
 
+Changed:
+  - The scripts that are shipped in `evn_postprocess/scripts` are now the ones that run, instead of
+    the copies of the same name in `evn_support` found through `$PATH` or imported from that module:
+    `polconvert.py` (run with the interpreter of `postprocess` itself, and its fringe-SNR table),
+    `find_idi_with_time`, `uvflgall.sh` (and the `uvflg.pl` it calls) and `ampcal.sh` (and its
+    `ampcal-db.py`). `tools.script_path()` locates them. `scripts/feedback.pl` no longer carries
+    unresolved merge-conflict markers nor a hardcoded path into `evn_support`.
+
 Added:
   - `.uvflg` creation now falls back to the a-priori `{exp}.flag` file (downloaded with the antenna files)
     for every observed antenna whose `.uvflgfs` is missing or has no flagging line (previously only missing

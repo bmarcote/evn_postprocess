@@ -18,12 +18,13 @@ correlated (absent from lag_snr) while scan No0018 is the one with real fringes.
 from __future__ import annotations
 
 import datetime as dt
+import sys
 from pathlib import Path
 
 import astropy.units as u
 from astropy import coordinates as coord
 
-from evn_postprocess import experiment, process
+from evn_postprocess import experiment, process, tools
 
 
 IFS = list(range(8))
@@ -406,8 +407,9 @@ class TestPolconvertIntegration:
         monkeypatch.setattr(exp, "store", lambda: None)
 
         assert process.polconvert(exp) is True
-        assert recorded == ['polconvert.py polconvert_inputs.toml --compute',
-                            'polconvert.py polconvert_inputs.toml --apply']
+        polconvert_py = f"{sys.executable} {tools.script_path('polconvert.py')}"
+        assert recorded == [f'{polconvert_py} polconvert_inputs.toml --compute',
+                            f'{polconvert_py} polconvert_inputs.toml --apply']
 
     def test_search_space_is_bounded_and_ordered(self, tmp_path, monkeypatch):
         """A search that never converges stays inside the declared, capped parameter space.
@@ -575,15 +577,12 @@ class TestFringeSnrSummary:
     """The table is rendered in-process from the FRINGE.PEAKS files, and can never raise."""
 
     def _fake_polconvert_module(self, monkeypatch, func):
-        """Puts a stub 'evn_support.polconvert' in sys.modules for the local import to find."""
+        """Puts a stub 'scripts.polconvert' in sys.modules for the local import to find."""
         import sys
         import types
-        pkg = types.ModuleType('evn_support')
-        pkg.__path__ = []
-        mod = types.ModuleType('evn_support.polconvert')
+        mod = types.ModuleType('evn_postprocess.scripts.polconvert')
         mod.print_fringe_snr_table = func
-        monkeypatch.setitem(sys.modules, 'evn_support', pkg)
-        monkeypatch.setitem(sys.modules, 'evn_support.polconvert', mod)
+        monkeypatch.setitem(sys.modules, 'evn_postprocess.scripts.polconvert', mod)
 
     def test_calls_the_printer_with_the_log_directory(self, monkeypatch):
         called: list[str] = []
@@ -593,7 +592,7 @@ class TestFringeSnrSummary:
 
     def test_a_missing_module_is_not_an_error(self, monkeypatch):
         import sys
-        monkeypatch.setitem(sys.modules, 'evn_support.polconvert', None)   # forces ImportError
+        monkeypatch.setitem(sys.modules, 'evn_postprocess.scripts.polconvert', None)   # forces ImportError
         process._log_fringe_snr_table('polconvert_logs')                   # must not raise
 
     def test_a_printer_that_blows_up_is_not_an_error(self, monkeypatch):

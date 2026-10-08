@@ -19,7 +19,7 @@ from concurrent import futures
 from collections import defaultdict
 import numpy as np
 from astropy.io import fits
-from evn_support import find_idi_with_time as find_idi
+from evn_postprocess.scripts import find_idi_with_time as find_idi
 # tomli was introduced in the standard library as tomllib in Python 3.11
 try:
     import tomllib

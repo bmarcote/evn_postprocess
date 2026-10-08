@@ -18,6 +18,7 @@ from concurrent.futures import ProcessPoolExecutor
 from rich import print as rprint
 from . import experiment
 from . import utils
+from . import tools
 from . import lisfiles
 from . import comment_tasav
 from . import feedback
@@ -217,7 +218,7 @@ def create_uvflg(exp) -> bool:
     os.chdir(exp.dirs.pipe_temp)
     try:
         if has_logs:
-            utils.shell_command("uvflgall.sh")
+            utils.shell_command(str(tools.script_path("uvflgall.sh")))
         else:
             logger.warning("No log files found: building the flagging only from the .flag file.")
             rprint("[yellow]No log files found: using only the a-priori .flag file for the flagging.[/yellow]")
@@ -546,7 +547,7 @@ def ampcal(exp) -> bool:
     original_cwd = os.getcwd()  # must be read before the chdir so the finally can restore it
     try:
         os.chdir(exp.dirs.pipe_out)
-        utils.shell_command("ampcal.sh")
+        utils.shell_command(str(tools.script_path("ampcal.sh")))
     finally:
         os.chdir(original_cwd)
     return True

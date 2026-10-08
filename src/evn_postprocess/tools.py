@@ -82,6 +82,28 @@ def resolve(name: str, *, env_var: str | None = None, default: str | None = None
     )
 
 
+def script_path(name: str) -> Path:
+    """Returns the path of a script shipped with this package (``evn_postprocess/scripts``).
+
+    The scripts the post-processing runs as child processes are the copies kept in this
+    package, never whichever one of the same name happens to come first in ``$PATH``.
+
+    Args:
+        name: File name of the script (e.g. ``"polconvert.py"``).
+
+    Returns:
+        Absolute path of the script.
+
+    Raises:
+        ToolMissingError: if the package ships no script with that name.
+    """
+    path = Path(__file__).resolve().parent / 'scripts' / name
+    if not path.is_file():
+        raise ToolMissingError(f"The script {name!r} is not shipped with evn_postprocess "
+                               f"(expected at {path}).")
+    return path
+
+
 def run(name: str, args: Sequence[str], *, cwd: Path | str | None = None,
         timeout: float | int | None = None,
         env: Optional[dict[str, str]] = None,

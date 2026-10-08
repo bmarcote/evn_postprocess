@@ -10,6 +10,9 @@
 ## - also changed that if nothing is specified, used sources from both the bpass and phaseref list in the inp file.
 ## - added a help file. call it with -h.
 
+# Directory of this script: the scripts it calls live next to it.
+SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 ################################################################################
 # Help                                                                         #
 ################################################################################
@@ -81,7 +84,7 @@ if [[ -f "${amp_file}" ]]; then
     ampcaldb.pl "${amp_file}"
     cat "ampcal.dat" >> "ampcal.all.dat"
     #insert into database:
-    ampcal-db.py
+    "$SCRIPTS_DIR/ampcal-db.py"
     #have to return to where we were...
     cd "-" 1>/dev/null
 fi
