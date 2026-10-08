@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{EXPNAME}} — EVN Post-Processing Dashboard</title>
+<link rel="icon" href="data:,">
 <style>
   :root { --bg: #1e1e2e; --surface: #2a2a3c; --border: #3a3a4c; --text: #e0e0e8;
            --accent: #7c8dff; --green: #50c878; --red: #ff6b6b; --dim: #888; --header-bg: #252538; }

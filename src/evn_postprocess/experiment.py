@@ -549,6 +549,26 @@ class CorrelatorPass:
                    freqsetup=Subbands.from_dict(data['freqsetup']) if data.get('freqsetup') else None)
 
 
+def stations_observed_by_scan(correlator_passes: list[CorrelatorPass] | None) -> dict[str, set[str]]:
+    """Returns the stations with data in each correlated scan, across all correlator passes.
+
+    The correlator passes are the ones that know which stations have data (read from each
+    MS), and they only hold the scans that were correlated. Keying by scan number is what
+    allows matching them to ``Experiment.scans``, which lists every scheduled scan.
+
+    Args:
+        correlator_passes: The correlator passes of the experiment (None or empty is fine).
+
+    Returns:
+        dict mapping scan number (e.g. "No0015") -> names of the stations with data in it.
+    """
+    observed: dict[str, set[str]] = {}
+    for a_pass in correlator_passes or []:
+        for scan in a_pass.scans or []:
+            observed.setdefault(scan.scanno, set()).update(scan.stations_observed)
+    return observed
+
+
 def _migrate_experiment_dict(data: dict) -> dict:
     """Migrates an Experiment-shaped dict from an older schema to the current one.
 
