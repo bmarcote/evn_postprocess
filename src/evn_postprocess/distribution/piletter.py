@@ -161,9 +161,9 @@ def _credentials_block(exp: experiment.Experiment) -> str:
 def _pass_line(a_pass: experiment.CorrelatorPass, index: int, total: int) -> str:
     """One bullet describing the correlation setup of a single correlator pass.
 
-    The FITS-IDI file name is only named when the experiment has more than one pass: it is
-    what tells the passes apart. With a single pass there is nothing to tell apart, and the
-    PI already sees the file names in the archive.
+    Only the FITS-IDI file name is ever named (never sources nor the MS suffix), and only when
+    the experiment has more than one pass: it is what tells the passes apart. With a single
+    pass there is nothing to tell apart, and the PI already sees the file names in the archive.
 
     Args:
         a_pass: The correlator pass.
@@ -173,20 +173,10 @@ def _pass_line(a_pass: experiment.CorrelatorPass, index: int, total: int) -> str
     Returns:
         A Markdown bullet, without the leading '- '.
     """
-    def _ms_suffix(stem: str) -> str:
-        """Last two underscore-separated parts of *stem*, or *stem* itself."""
-        parts = stem.split('_')
-        return f"_{'_'.join(parts[-2:])}" if len(parts) >= 2 else stem
-
     label = f"**Correlator pass #{index + 1}**: " if total > 1 else ''
     fitsidi = f" FITS-IDI files: `{a_pass.fitsidifile}`." if total > 1 else ''
-    source_clause = ''
-    if a_pass.sources and a_pass.sources.names:
-        suffix = _ms_suffix(a_pass.msfile.stem)
-        source_clause = (f" Source: {', '.join(a_pass.sources.names)} "
-                         f"(MS suffix {suffix}).")
     if a_pass.freqsetup is None:
-        return f"{label}Correlation setup not available.{fitsidi}{source_clause}"
+        return f"{label}Correlation setup not available.{fitsidi}"
     setup = a_pass.freqsetup
     per_subband = (setup.bandwidth / setup.subbands).to(u.MHz).value
     pols = ', '.join(getattr(p, 'name', str(p)) for p in setup.polarizations)
@@ -194,7 +184,7 @@ def _pass_line(a_pass: experiment.CorrelatorPass, index: int, total: int) -> str
     return (f"{label}Central frequency {setup.frequency.to(u.GHz):0.04}, "
             f"{setup.subbands} x {per_subband:g}-MHz subbands "
             f"({setup.bandwidth.to(u.MHz):g} in total), {setup.channels} spectral channels "
-            f"per subband, {polabel} polarization ({pols}).{fitsidi}{source_clause}")
+            f"per subband, {polabel} polarization ({pols}).{fitsidi}")
 
 
 def _passes_block(exp: experiment.Experiment) -> str:
