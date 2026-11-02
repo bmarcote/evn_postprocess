@@ -130,28 +130,81 @@ def run_antab_editor(exp) -> bool:
     return True
 
 
+# A flagging command names its antenna as ant_name='XX' (uvflg.pl, vlbeer .flag) or antenna='XX'.
+# The name is matched case-insensitively: uvflg.pl writes 'EF' while vlbeer writes 'Ef'.
+_FLAG_ANT_RE = re.compile(r"\b(?:ant_name|antenna)\s*=\s*'?([A-Za-z0-9]+)'?", re.IGNORECASE)
+# Every .uvflgfs starts with these settings so its lines never depend on the file before it in
+# the combined .uvflg (same lines uvflg.pl writes).
+_UVFLGFS_HEADER = "opcode='FLAG'\ndtimrang = 1   timeoff=0\n"
+
+
+def _flag_line_antenna(line: str) -> str | None:
+    """Antenna named by one flagging command line, in capitals.
+
+    Args:
+        line (str): A line of a .flag or .uvflgfs file.
+
+    Returns:
+        str | None: The antenna codename (e.g. 'CM'), or None for comments, settings
+            (opcode/dtimrang) and any line that names no antenna.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith('!'):
+        return None
+    match = _FLAG_ANT_RE.search(stripped)
+    return match.group(1).upper() if match else None
+
+
 def _has_flag_commands(uvflgfs_file: Path) -> bool:
     """Tells whether a .uvflgfs file holds at least one real flagging command.
+
+    Only lines naming an antenna count: comments and the opcode/dtimrang settings that
+    uvflg.pl writes at the top of every file are not flagging commands.
 
     Args:
         uvflgfs_file (Path): The .uvflgfs file to inspect.
 
     Returns:
-        bool: True if any line is non-blank and not a '!' comment; False for missing/empty files.
+        bool: True if any line flags an antenna; False for missing, empty or header-only files.
     """
     if not uvflgfs_file.exists():
         return False
     with open(uvflgfs_file, 'r') as fh:
-        return any(line.strip() and not line.strip().startswith('!') for line in fh)
+        return any(_flag_line_antenna(line) is not None for line in fh)
+
+
+def find_flag_file(directory: Path, expname: str) -> Path | None:
+    """Returns the a-priori (vlbeer) flag file of the experiment in *directory*.
+
+    The exact name {exp}.flag is preferred; otherwise the first (sorted) {exp}*.flag is used,
+    e.g. a file carrying a session or pass suffix.
+
+    Args:
+        directory (Path): Directory to search (the pipeline temp dir).
+        expname (str): Experiment name (any case).
+
+    Returns:
+        Path | None: The flag file, or None if there is none.
+    """
+    exact = directory / f"{expname.lower()}.flag"
+    if exact.exists():
+        return exact
+    candidates = sorted(directory.glob(f"{expname.lower()}*.flag"))
+    if len(candidates) > 1:
+        logger.warning(f"Several flag files found ({', '.join(c.name for c in candidates)}); "
+                       f"using {candidates[0].name}.")
+    return candidates[0] if candidates else None
 
 
 def supplement_uvflgfs_from_flag(exp, directory: Path) -> dict[str, list[str]]:
-    """Fills in the .uvflgfs of observed antennas that have no real one, from the {exp}.flag file.
+    """Fills in the .uvflgfs of observed antennas that have no real one, from the a-priori .flag file.
 
     The .uvflgfs made from a station's .log (by uvflgall.sh) is the real flagging and is never
     touched. For every observed antenna whose {exp}{ant}.uvflgfs is missing or has no flagging
-    command, the lines of the a-priori {exp}.flag file (vlbeer) containing antenna='{ANT}' are
-    written to {exp}{ant}.uvflgfs (overwriting an empty one).
+    command, the lines of the a-priori flag file (vlbeer, see find_flag_file) that flag that
+    antenna (ant_name='Xx' or antenna='Xx', any case) are written to {exp}{ant}.uvflgfs
+    (overwriting an empty one), after the opcode/dtimrang header. The antenna name in those
+    lines is written in capitals, as uvflg.pl does and as the FITS-IDI antenna table has it.
 
     Args:
         exp (experiment.Experiment): Experiment (uses expname and antennas.observed).
@@ -162,40 +215,73 @@ def supplement_uvflgfs_from_flag(exp, directory: Path) -> dict[str, list[str]]:
             'flag' (written from .flag) and 'none' (no flagging available for them).
     """
     expname = exp.expname.lower()
-    flag_file = directory / f"{expname}.flag"
-    flag_lines = flag_file.read_text().splitlines(keepends=True) if flag_file.exists() else []
+    flag_file = find_flag_file(directory, expname)
+    flag_lines = flag_file.read_text().splitlines() if flag_file is not None else []
+    lines_by_ant: dict[str, list[str]] = {}
+    for line in flag_lines:
+        if (ant := _flag_line_antenna(line)) is not None:
+            upper_line = _FLAG_ANT_RE.sub(lambda m: m.group(0).replace(m.group(1), ant), line, count=1)
+            lines_by_ant.setdefault(ant, []).append(upper_line.rstrip() + '\n')
+
     result: dict[str, list[str]] = {'log': [], 'flag': [], 'none': []}
     for ant in sorted({a.upper() for a in exp.antennas.observed}):
         uvflgfs_file = directory / f"{expname}{ant.lower()}.uvflgfs"
         if _has_flag_commands(uvflgfs_file):
             result['log'].append(ant)
             continue
-        ant_lines = [line if line.endswith('\n') else line + '\n' for line in flag_lines
-                     if f"antenna='{ant}'" in line]
-        if not ant_lines:
+        if not (ant_lines := lines_by_ant.get(ant)):
             result['none'].append(ant)
             continue
         with open(uvflgfs_file, 'w') as fh:
             fh.write(f"! A-priori flagging for {ant} from {flag_file.name}\n")
+            fh.write(_UVFLGFS_HEADER)
             fh.writelines(ant_lines)
         result['flag'].append(ant)
         logger.info(f"Created {uvflgfs_file.name} from {flag_file.name} for {ant} ({len(ant_lines)} lines)")
 
+    flag_name = flag_file.name if flag_file is not None else f"{expname}*.flag"
     logger.info(f"uvflgfs sources: from .log: {', '.join(result['log']) or '-'}; "
-                f"from {flag_file.name}: {', '.join(result['flag']) or '-'}; "
+                f"from {flag_name}: {', '.join(result['flag']) or '-'}; "
                 f"no flagging: {', '.join(result['none']) or '-'}")
     if result['none']:
-        why = "no lines in the .flag file" if flag_lines else f"{flag_file.name} not found"
+        why = f"no lines for them in {flag_name}" if flag_file is not None else f"{flag_name} not found"
         rprint(f"[yellow]No flagging commands for {', '.join(result['none'])} ({why}).[/yellow]")
     return result
+
+
+def concatenate_uvflgfs(directory: Path, output: Path) -> list[Path]:
+    """Writes all the {directory}/*.uvflgfs files, in sorted order, into *output*.
+
+    Each file ends with a newline in the output even if its last line has none, so two files
+    never merge into one line.
+
+    Args:
+        directory (Path): Directory holding the .uvflgfs files.
+        output (Path): The combined .uvflg file to write (overwritten).
+
+    Returns:
+        list[Path]: The .uvflgfs files written, in order. Empty (and *output* not written) if none.
+    """
+    uvflgfs_files = sorted(directory.glob("*.uvflgfs"))
+    if not uvflgfs_files:
+        return []
+    with open(output, 'w') as out:
+        for uvflgfs_file in uvflgfs_files:
+            text = uvflgfs_file.read_text()
+            out.write(text if text.endswith('\n') or not text else text + '\n')
+    logger.info(f"Wrote {output.name} from {len(uvflgfs_files)} .uvflgfs files: "
+                f"{', '.join(f.name for f in uvflgfs_files)}")
+    return uvflgfs_files
 
 
 def create_uvflg(exp) -> bool:
     """Produces the combined uvflg file containing the full flagging from all telescopes.
 
     The per-antenna .uvflgfs come from the station .log files (uvflgall.sh); antennas without
-    a real one fall back to their lines in the {exp}.flag file (see supplement_uvflgfs_from_flag).
-    Without any .log file it still proceeds if a .flag file is available, and fails otherwise.
+    a real one fall back to their lines in the a-priori flag file (see supplement_uvflgfs_from_flag).
+    Without any .log file it still proceeds if a flag file is available, and fails otherwise.
+    Every failure (no input, uvflgall.sh failing, no .uvflgfs produced) is reported and returns
+    False; it never raises.
 
     Args:
         exp (experiment.Experiment): Experiment (uses expname, dirs.pipe_temp, antennas, correlator_passes).
@@ -207,27 +293,40 @@ def create_uvflg(exp) -> bool:
         logger.info("uvflg files already created. Skipping.")
         return True
 
+    expname = exp.expname.lower()
     has_logs = len(glob.glob(str(exp.dirs.pipe_temp / "*.log"))) > 0
-    has_flag = (exp.dirs.pipe_temp / f"{exp.expname.lower()}.flag").exists()
-    if not has_logs and not has_flag:
-        logger.error("No log files nor .flag file found in the temp directory.")
-        rprint("[bold red]ERROR:[/bold red] [red]No log files found in the temp directory.[/red]")
+    flag_file = find_flag_file(exp.dirs.pipe_temp, expname)
+    if not has_logs and flag_file is None:
+        logger.error(f"Neither station .log files nor a {expname}*.flag file found in {exp.dirs.pipe_temp}.")
+        rprint(f"[bold red]ERROR:[/bold red] [red]Neither station .log files nor a {expname}*.flag file "
+               f"found in {exp.dirs.pipe_temp}.[/red]")
         return False
 
     original_cwd = os.getcwd()
     os.chdir(exp.dirs.pipe_temp)
     try:
         if has_logs:
-            utils.shell_command(str(tools.script_path("uvflgall.sh")))
+            try:
+                utils.shell_command(str(tools.script_path("uvflgall.sh")))
+            except ValueError as exc:
+                logger.error(f"uvflgall.sh failed in {exp.dirs.pipe_temp}: {exc}")
+                rprint(f"[bold red]ERROR:[/bold red] [red]uvflgall.sh failed: {exc}[/red]")
+                return False
         else:
-            logger.warning("No log files found: building the flagging only from the .flag file.")
-            rprint("[yellow]No log files found: using only the a-priori .flag file for the flagging.[/yellow]")
+            logger.warning(f"No log files found: building the flagging only from {flag_file.name}.")
+            rprint(f"[yellow]No log files found: using only the a-priori {flag_file.name} for the flagging.[/yellow]")
 
         supplement_uvflgfs_from_flag(exp, exp.dirs.pipe_temp)
-        utils.shell_command("cat", ["*uvflgfs", ">", f"{exp.expname.lower()}.uvflg"])
+        uvflg_file = exp.dirs.pipe_temp / f"{expname}.uvflg"
+        if not concatenate_uvflgfs(exp.dirs.pipe_temp, uvflg_file):
+            logger.error(f"No .uvflgfs file was produced in {exp.dirs.pipe_temp}; {uvflg_file.name} not created.")
+            rprint(f"[bold red]ERROR:[/bold red] [red]No .uvflgfs files were produced, so {uvflg_file.name} "
+                   "could not be created.[/red]")
+            return False
+
         if len(pipepass := [apass.pipeline for apass in exp.correlator_passes if apass.pipeline]) > 1:
             for p in range(1, len(pipepass) + 1):
-                shutil.copy(f"{exp.expname.lower()}.uvflg", f"{exp.expname.lower()}_{p}.uvflg")
+                shutil.copy(uvflg_file, exp.dirs.pipe_temp / f"{expname}_{p}.uvflg")
     finally:
         os.chdir(original_cwd)
     return True

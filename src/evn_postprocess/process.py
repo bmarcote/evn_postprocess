@@ -398,19 +398,26 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
             logger.error(f"Error reading MS metadata from {a_pass.msfile}: {e}")
             raise
 
-        # Populate a_pass.scans from exp.scans (VEX) + ms.scans (observed antennas).
-        # exp.scans has scanno as str like "No0001"; ms.scans keys are ints like 1.
-        vex_scanno_map = {int(s.scanno.replace('No', '')): s for s in exp.scans}
-        a_pass.scans = experiment.Scans()
+        # Populate a_pass.scans from exp.scans (VEX) + ms.scans (observed antennas). MS scans are
+        # matched to VEX scans by time (see _ms_to_vex_scan_map), never by equal number: the MS
+        # numbering can be offset from the VEX one, and one VEX scan can be split into several
+        # MS scans, whose stations are then merged.
+        scan_map = _ms_to_vex_scan_map(exp, a_pass.msfile, ms.scans.keys())
+        vex_by_number = {n: s for s in exp.scans if (n := _scan_number(s)) is not None}
+        stations_by_vex: dict[int, set[str]] = {}
         for ms_scanno, ms_antennas in ms.scans.items():
-            if ms_scanno in vex_scanno_map:
-                vex_scan = vex_scanno_map[ms_scanno]
-                a_pass.scans.append(experiment.Scan(scanno=vex_scan.scanno, starttime=vex_scan.starttime,
-                                                    duration_s=vex_scan.duration_s, source=vex_scan.source,
-                                                    stations_scheduled=vex_scan.stations_scheduled,
-                                                    stations_observed=tuple(sorted(ms_antennas))))
-            else:
+            if (vex_no := scan_map.get(ms_scanno)) is None or vex_no not in vex_by_number:
                 logger.warning(f"MS scan {ms_scanno} in {a_pass.msfile.name} has no matching VEX scan")
+                continue
+            stations_by_vex.setdefault(vex_no, set()).update(ms_antennas)
+
+        a_pass.scans = experiment.Scans()
+        for vex_no in sorted(stations_by_vex):
+            vex_scan = vex_by_number[vex_no]
+            a_pass.scans.append(experiment.Scan(scanno=vex_scan.scanno, starttime=vex_scan.starttime,
+                                                duration_s=vex_scan.duration_s, source=vex_scan.source,
+                                                stations_scheduled=vex_scan.stations_scheduled,
+                                                stations_observed=tuple(sorted(stations_by_vex[vex_no]))))
 
     def _update_mpc_pass(a_pass: experiment.CorrelatorPass):
         """Fills a multi-phase-centre pass from the first one, except for its source list.
@@ -587,7 +594,8 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
     space, where a fringe is a sharp peak, and incoherently averages the |lag|
     spectra of all that baseline's rows. The per-pol SNR of the averaged spectrum
     (fringe peak / robust noise) is then taken; the maximum SNR per antenna (over
-    its baselines) is stored per scan and polarization into ``exp.lag_snr``.
+    its baselines) is stored per scan and polarization into ``exp.lag_snr``, keyed by the
+    VEX scan number (lag-MS scans are matched to VEX scans by time, see :func:`_ms_to_vex_scan_map`).
 
     In the same pass, for the fringe-finder scans it accumulates the per-antenna
     fringe-peak amplitude of each polarization product and derives automatic
@@ -721,13 +729,24 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
                 if snr_max > ff_best_snr[aidx]:
                     ff_best_snr[aidx] = snr_max
 
-    # Convert to nested dict: {scan_str: {ant_name: {pol: snr}}}
-    lag_snr: dict[str, dict[str, dict[str, float]]] = {}
+    # The results are keyed by VEX scan number (what the dashboard and the polarization checks
+    # look up), matched by time: the lag MS numbering can be offset from the VEX one, and a VEX
+    # scan split into several MS scans is merged (best SNR / strongest IF amplitude kept).
+    scan_map = _ms_to_vex_scan_map(exp, lag_ms, {scan for scan, _ in best_snr})
+    if unmatched := sorted({scan for scan, _ in best_snr if scan not in scan_map}):
+        logger.warning(f"Lag MS scans with no matching VEX scan are left out of the SNR table: {unmatched}")
+
+    # Convert to nested dict: {vex_scan_str: {ant_name: {pol: snr}}}
+    best_vex_snr: dict[tuple[int, int], np.ndarray] = {}
     for (scan, aidx), snr_arr in best_snr.items():
-        scan_str = str(scan)
-        if scan_str not in lag_snr:
-            lag_snr[scan_str] = {}
-        lag_snr[scan_str][ant_names[aidx]] = {p: round(float(snr_arr[i]), 1) for i, p in enumerate(pol_labels)}
+        if (vex_no := scan_map.get(scan)) is None:
+            continue
+        key = (vex_no, aidx)
+        best_vex_snr[key] = np.maximum(best_vex_snr[key], snr_arr) if key in best_vex_snr else snr_arr
+    lag_snr: dict[str, dict[str, dict[str, float]]] = {}
+    for (vex_no, aidx), snr_arr in best_vex_snr.items():
+        lag_snr.setdefault(str(vex_no), {})[ant_names[aidx]] = \
+            {p: round(float(snr_arr[i]), 1) for i, p in enumerate(pol_labels)}
 
     # Per-antenna bandpass on the fringe-finder scans: the parallel-hand (RR/LL) fringe-peak
     # amplitude in each IF, taken on the antenna's strongest baseline for that IF. The PolConvert
@@ -747,10 +766,16 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
             if np.isnan(cur) or par > cur:        # keep the strongest baseline per IF
                 bp_amp[ant_key][ddid] = par
 
-    lag_bandpass: dict[str, dict[str, list]] = {}
+    bp_vex_amp: dict[tuple[int, int], np.ndarray] = {}
     for (scan, aidx), amps in bp_amp.items():
+        if (vex_no := scan_map.get(scan)) is None:
+            continue
+        key = (vex_no, aidx)
+        bp_vex_amp[key] = np.fmax(bp_vex_amp[key], amps) if key in bp_vex_amp else amps
+    lag_bandpass: dict[str, dict[str, list]] = {}
+    for (vex_no, aidx), amps in bp_vex_amp.items():
         # None (not NaN) for IFs without data, so the result stays valid JSON.
-        lag_bandpass.setdefault(str(scan), {})[ant_names[aidx]] = \
+        lag_bandpass.setdefault(str(vex_no), {})[ant_names[aidx]] = \
             [round(float(x), 5) if np.isfinite(x) else None for x in amps]
 
     exp.lag_snr = lag_snr
@@ -1401,9 +1426,9 @@ def _write_polconvert_template(exp: experiment.Experiment, ref_idi: str, lin_ant
 def _scan_number(scan: experiment.Scan) -> Optional[int]:
     """Integer scan number from a VEX scanno like ``'No0018'`` (-> 18), or None.
 
-    The lag-MS SNR/bandpass dictionaries are keyed by the MS scan number as a string, which
-    matches this integer (verified: lag MS scan 18 == VEX No0018), so this is how a VEX scan
-    is looked up in ``exp.lag_snr`` / ``exp.lag_bandpass``.
+    The lag-MS SNR/bandpass dictionaries are keyed by this VEX number as a string (lag-MS scans
+    are matched to VEX scans by time in compute_lag_snr), so this is how a VEX scan is looked
+    up in ``exp.lag_snr`` / ``exp.lag_bandpass``.
     """
     try:
         return int(re.sub(r'\D', '', scan.scanno))
@@ -1951,31 +1976,137 @@ def polconvert(exp: experiment.Experiment) -> bool:
     return False
 
 
+def _match_scans_by_time(midtimes: dict[int, datetime], exp_scans) -> dict[int, int]:
+    """Maps MS scan numbers to VEX scan numbers from the MS scan mid times.
+
+    Each MS scan is matched to the scheduled scan that was running at its mid time. Pure
+    function (no I/O), shared by every place that needs MS -> VEX scan numbers.
+
+    Args:
+        midtimes: MS scan number -> naive UTC datetime halfway through that scan's data.
+        exp_scans: The scheduled scans (``exp.scans``); scans without start time are ignored.
+
+    Returns:
+        dict mapping MS scan number -> VEX scan number (e.g. 144 for 'No0144'). A MS scan
+        that falls in no scheduled scan is left out. Several MS scans can map to the same
+        VEX scan (a VEX scan split by a data gap).
+    """
+    windows = [(scan.starttime, scan.starttime + timedelta(seconds=max(scan.duration_s, 1)), scanno)
+               for scan in exp_scans
+               if scan.starttime is not None and (scanno := _scan_number(scan)) is not None]
+    vex_scans: dict[int, int] = {}
+    for ms_scan, midtime in midtimes.items():
+        for start, end, scanno in windows:
+            if start <= midtime <= end:
+                vex_scans[ms_scan] = scanno
+                break
+    return vex_scans
+
+
 def _vex_scan_numbers(exp: experiment.Experiment, ms: str) -> dict[int, int]:
-    """Maps the scan numbers of *ms* to the scan numbers of the experiment (VEX).
+    """Maps the scan numbers of *ms* to the scan numbers of the experiment (VEX), by time.
 
     A MS imported from FITS-IDI (the PolConverted one) numbers its scans from 1 in the order
     they appear, so they do not match the VEX ones as soon as the correlation does not start
-    at the first scheduled scan. Each MS scan is matched to the scheduled scan that was
-    running at its mid time.
+    at the first scheduled scan. See :func:`_match_scans_by_time`.
 
     Args:
         exp: Experiment object (reads ``exp.scans``).
         ms: Path to the Measurement Set.
 
     Returns:
-        dict mapping MS scan number -> VEX scan number (e.g. 144 for 'No0144'). A MS scan
-        that falls in no scheduled scan is left out.
+        dict mapping MS scan number -> VEX scan number. A MS scan in no scheduled scan is left out.
     """
-    vex_scans: dict[int, int] = {}
-    for ms_scan, midtime in plotting.scan_midtimes(ms).items():
-        for scan in exp.scans:
-            if scan.starttime is None or (scanno := _scan_number(scan)) is None:
-                continue
-            if scan.starttime <= midtime <= scan.starttime + timedelta(seconds=max(scan.duration_s, 1)):
-                vex_scans[ms_scan] = scanno
-                break
-    return vex_scans
+    return _match_scans_by_time(plotting.scan_midtimes(ms), exp.scans)
+
+
+def _ms_to_vex_scan_map(exp: experiment.Experiment, ms, ms_scannos) -> dict[int, int]:
+    """MS -> VEX scan numbers for *ms*, by time, falling back to equal numbers when time is unusable.
+
+    The fallback (MS scan N == VEX scan N) is used only when the VEX scans carry no start
+    times or the MS times cannot be read, and it is logged as a warning. Any MS scan whose
+    time-matched VEX number differs from its own number is logged, so an offset numbering
+    is visible.
+
+    Args:
+        exp: Experiment object (reads ``exp.scans``).
+        ms: Path to the Measurement Set.
+        ms_scannos: The MS scan numbers to map (used by the fallback).
+
+    Returns:
+        dict mapping MS scan number -> VEX scan number; unmatched MS scans are left out.
+    """
+    vex_numbers = {n for s in exp.scans if (n := _scan_number(s)) is not None}
+    if any(scan.starttime is not None for scan in exp.scans):
+        try:
+            scan_map = _vex_scan_numbers(exp, str(ms))
+        except Exception as exc:
+            logger.warning(f"Could not read the scan times of {ms} ({exc}); matching its scans to the "
+                           "VEX ones by equal scan number.")
+        else:
+            if offset := sorted((m, v) for m, v in scan_map.items() if m != v):
+                logger.info(f"{Path(str(ms)).name}: {len(offset)} scan(s) numbered differently from the VEX "
+                            f"(MS->VEX, first ones: {offset[:5]}).")
+            return scan_map
+    else:
+        logger.warning(f"The VEX scans have no start times; matching the scans of {ms} by equal number.")
+    return {int(n): int(n) for n in ms_scannos if int(n) in vex_numbers}
+
+
+def _remove_cross_plots(std_base: str, plots_dir: Path) -> list[str]:
+    """Removes every standard cross-correlation plot of *std_base*: .ps, .ps.gz and their PNGs.
+
+    PNGs are removed by name pattern, not only those of a .ps still present, so images left by
+    earlier runs (whose .ps was gzipped or renamed since) do not stay on the dashboard.
+
+    Args:
+        std_base: Base name of the standard plots (e.g. 'er057b').
+        plots_dir: Directory holding the PNG images.
+
+    Returns:
+        list[str]: Names of the removed files.
+    """
+    removed = []
+    for old in [*glob.glob(f"{std_base}-cross-scan*.ps"), *glob.glob(f"{std_base}-cross-scan*.ps.gz"),
+                *glob.glob(str(plots_dir / f"{Path(std_base).name}-cross-scan*.png"))]:
+        Path(old).unlink(missing_ok=True)
+        removed.append(Path(old).name)
+    if removed:
+        logger.info(f"Removed {len(removed)} cross-correlation plot files made before PolConvert.")
+    return removed
+
+
+def _rename_pconv_plots(new_plots: list[str], std_base: str, vex_scans: dict[int, int]) -> dict[str, str]:
+    """Renames the PolConverted-MS cross plots to the standard names with VEX scan numbers.
+
+    A VEX scan split into several MS scans gives several plots: the first (lowest MS scan) is
+    named ``{std_base}-cross-scan{V}.ps`` and the next ones ``...-scan{V}-part{k}.ps`` (k>=2), so
+    all show under scan V on the dashboard. A plot of a MS scan that matches no VEX scan is
+    deleted (with a warning): under any scan number it would be shown as a different scan.
+
+    Args:
+        new_plots: Plot files named ``*-cross-scan{N}.ps`` with N the PolConverted-MS scan number.
+        std_base: Base name of the standard plots (e.g. 'er057b').
+        vex_scans: MS scan number -> VEX scan number (see :func:`_vex_scan_numbers`).
+
+    Returns:
+        dict[str, str]: Original plot name -> new name, for the renamed plots.
+    """
+    by_ms_scan = sorted((int(re.search(r'-cross-scan(\d+)\.ps$', p).group(1)), p) for p in new_plots)
+    parts: dict[int, int] = {}
+    renamed: dict[str, str] = {}
+    for ms_scan, new_plot in by_ms_scan:
+        if (vex_no := vex_scans.get(ms_scan)) is None:
+            logger.warning(f"Scan {ms_scan} of the PolConverted MS matches no scheduled scan; its plot "
+                           f"{new_plot} is removed.")
+            Path(new_plot).unlink()
+            continue
+        parts[vex_no] = parts.get(vex_no, 0) + 1
+        suffix = '' if parts[vex_no] == 1 else f"-part{parts[vex_no]}"
+        target = f"{std_base}-cross-scan{vex_no}{suffix}.ps"
+        Path(new_plot).rename(target)
+        renamed[new_plot] = target
+    return renamed
 
 
 def polconvert_verification_plots(exp: experiment.Experiment, pconv_ms: str, calsources: list[str]) -> bool:
@@ -1986,6 +2117,7 @@ def polconvert_verification_plots(exp: experiment.Experiment, pconv_ms: str, cal
     PolConverted data. The new plots take the standard names, with the VEX scan number: the
     PolConverted MS numbers its scans differently (see :func:`_vex_scan_numbers`), and under
     its own numbers they would sit next to the previous plots instead of replacing them.
+    See :func:`_remove_cross_plots` and :func:`_rename_pconv_plots` for split and unmatched scans.
 
     Nothing is removed when the new plots could not be created.
 
@@ -2010,23 +2142,8 @@ def polconvert_verification_plots(exp: experiment.Experiment, pconv_ms: str, cal
                      "cross-correlation plots shown are still the ones from before PolConvert.")
         return False
 
-    for old_plot in glob.glob(f"{std_base}-cross-scan*.ps"):
-        stem = Path(old_plot).stem
-        for image in [exp.dirs.plots / f"{stem}.png", *exp.dirs.plots.glob(f"{stem}-page*.png")]:
-            image.unlink(missing_ok=True)
-        Path(old_plot).unlink()
-
-    vex_scans = _vex_scan_numbers(exp, pconv_ms)
-    for new_plot in new_plots:
-        ms_scan = int(re.search(r'-cross-scan(\d+)\.ps$', new_plot).group(1))
-        if ms_scan not in vex_scans:
-            logger.warning(f"Scan {ms_scan} of {pconv_ms} matches no scheduled scan; its plot keeps "
-                           "the scan number of that MS.")
-        target = Path(f"{std_base}-cross-scan{vex_scans.get(ms_scan, ms_scan)}.ps")
-        if target.exists():
-            logger.warning(f"{target} already exists; keeping {new_plot} under its own name.")
-            continue
-        Path(new_plot).rename(target)
+    _remove_cross_plots(std_base, exp.dirs.plots)
+    _rename_pconv_plots(new_plots, std_base, _vex_scan_numbers(exp, pconv_ms))
 
     # Convert PS plots to PNG images
     plotting.convert_ps_to_png(exp.dirs.plots, exp.expname.lower())

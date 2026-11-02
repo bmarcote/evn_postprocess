@@ -20,6 +20,25 @@ Added:
     files are kept, and a run with a `.flag` file but no `.log` files no longer aborts.
 
 Fixed:
+  - The `.flag` fallback for `.uvflg` never matched anything: it searched for `antenna='EF'` while vlbeer
+    writes `ant_name='Ef'`, so stations without `.log` (e.g. Cm/Da/Kn/Pi in ER057B) got no a-priori
+    flagging at all. Both forms are now matched case-insensitively, and the lines are written with the
+    antenna in capitals (as `uvflg.pl` and the FITS-IDI antenna table have it).
+  - A `.uvflgfs` holding only the `opcode`/`dtimrang` header (no `ant_name` line) now counts as empty
+    and is filled from the `.flag` file.
+  - Fallback `.uvflgfs` files start again with `opcode='FLAG'` / `dtimrang = 1 timeoff=0`, so their lines
+    no longer depend on the file before them in the combined `.uvflg`.
+  - `create_uvflg` returns False with a clear message (instead of raising) when `uvflgall.sh` fails or no
+    `.uvflgfs` is produced; the `.uvflg` is concatenated in Python rather than with `cat *uvflgfs`.
+  - The flag file is found as `{exp}.flag` or, failing that, `{exp}*.flag`; the "no input" error now
+    names both the `.log` and the `.flag` files.
+  - MS scans are matched to VEX scans by time (not by equal number) when filling the pass scans and the
+    dashboard overview, and for the lag-SNR / lag-bandpass tables, which are now keyed by VEX scan number.
+    A VEX scan split into several MS scans has its stations / SNRs merged.
+  - PolConvert verification plots: a VEX scan split into several MS scans gives `...-scanN.ps` plus
+    `...-scanN-partK.ps` instead of a leftover `-pconv` plot, and a MS scan with no VEX match is removed
+    instead of being shown under a wrong scan number. All previous cross plots (`.ps`, `.ps.gz` and every
+    matching PNG, including ones left by earlier runs) are removed before the new ones are renamed.
   - The dashboard scan overview marked every station as "scheduled but missing" in every scan
     whenever the correlation did not start at the first scheduled scan. The stations with data
     were copied from the correlator pass to the experiment scans by position, and the two lists
