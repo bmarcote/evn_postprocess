@@ -352,7 +352,11 @@ function updatePlot() {
   const hasScans = window._typeHasScans[ptype];
   const matches = plotFiles.filter(f => {
     if (!f.includes('-' + ptype)) return false;
-    if (hasScans && pscan && !f.includes('-scan' + pscan)) return false;
+    // Compare the whole scan number: a substring test on '-scan1' would also match scan 10, 12, 100...
+    if (hasScans && pscan) {
+      const sm = f.match(/-scan(\d+)/);
+      if (!sm || +sm[1] !== +pscan) return false;
+    }
     return true;
   });
   if (!matches.length) {

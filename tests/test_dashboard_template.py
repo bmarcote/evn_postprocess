@@ -79,6 +79,12 @@ class TestDashboardTemplate:
         assert 'const tip = s.timerange' in html
         assert '<tr${tip ? ` title="${tip}"` : \'\'}>' in html
 
+    def test_plot_filter_compares_the_whole_scan_number(self, tmp_path):
+        # A substring test ('-scan' + N) made scan 1 also show the plots of scans 10-19, 100+...
+        html = plotting._build_dashboard_html(_make_exp(tmp_path))
+        assert "f.includes('-scan' + pscan)" not in html
+        assert '+sm[1] !== +pscan' in html
+
 
 class TestScanTimerange:
     def _scan(self, start, duration_s):
