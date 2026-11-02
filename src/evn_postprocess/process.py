@@ -1442,7 +1442,7 @@ def _ant_scan_snr(exp: experiment.Experiment, ant: str, scan_key: str) -> float:
     Args:
         exp: Experiment object (reads ``exp.lag_snr``).
         ant: Antenna name.
-        scan_key: MS scan number as a string (see :func:`_scan_number`).
+        scan_key: VEX scan number as a string (see :func:`_scan_number`).
 
     Returns:
         The maximum SNR over polarizations, or 0.0 if the antenna or the scan is unknown.
@@ -1519,7 +1519,7 @@ def _polconvert_refants(exp: experiment.Experiment, lin_ants: list[str], subband
         exp: Experiment object.
         lin_ants: Linear-polarization antennas being converted.
         subbands: IFs (0-indexed) that have to be converted.
-        scan_key: MS scan number of the solve scan, as a string.
+        scan_key: VEX scan number of the solve scan, as a string.
 
     Returns:
         The reference antenna names to try, best first; empty when no antenna qualifies.
@@ -1580,7 +1580,7 @@ def _polconvert_exclude_ants(exp: experiment.Experiment, lin_ants: list[str], re
         lin_ants: Linear-polarization antennas being converted.
         refant: Reference antenna of the solve.
         subbands: IFs (0-indexed) that have to be converted.
-        scan_key: MS scan number of the solve scan, as a string. The SNR filter is skipped
+        scan_key: VEX scan number of the solve scan, as a string. The SNR filter is skipped
             when it is None or the scan has no lag data at all (e.g. a ``--no-lag`` run),
             since every antenna would then read as 0.0 and be excluded.
 
@@ -2024,7 +2024,7 @@ def _ms_to_vex_scan_map(exp: experiment.Experiment, ms, ms_scannos) -> dict[int,
     """MS -> VEX scan numbers for *ms*, by time, falling back to equal numbers when time is unusable.
 
     The fallback (MS scan N == VEX scan N) is used only when the VEX scans carry no start
-    times or the MS times cannot be read, and it is logged as a warning. Any MS scan whose
+    times, the MS times cannot be read, or no MS scan falls in any VEX scan; it is logged as a warning. Any MS scan whose
     time-matched VEX number differs from its own number is logged, so an offset numbering
     is visible.
 
@@ -2044,10 +2044,13 @@ def _ms_to_vex_scan_map(exp: experiment.Experiment, ms, ms_scannos) -> dict[int,
             logger.warning(f"Could not read the scan times of {ms} ({exc}); matching its scans to the "
                            "VEX ones by equal scan number.")
         else:
-            if offset := sorted((m, v) for m, v in scan_map.items() if m != v):
-                logger.info(f"{Path(str(ms)).name}: {len(offset)} scan(s) numbered differently from the VEX "
-                            f"(MS->VEX, first ones: {offset[:5]}).")
-            return scan_map
+            if scan_map:
+                if offset := sorted((m, v) for m, v in scan_map.items() if m != v):
+                    logger.info(f"{Path(str(ms)).name}: {len(offset)} scan(s) numbered differently from the "
+                                f"VEX (MS->VEX, first ones: {offset[:5]}).")
+                return scan_map
+            logger.warning(f"No scan of {ms} falls within a VEX scan time range; matching its scans to the "
+                           "VEX ones by equal scan number.")
     else:
         logger.warning(f"The VEX scans have no start times; matching the scans of {ms} by equal number.")
     return {int(n): int(n) for n in ms_scannos if int(n) in vex_numbers}

@@ -220,7 +220,8 @@ def supplement_uvflgfs_from_flag(exp, directory: Path) -> dict[str, list[str]]:
     lines_by_ant: dict[str, list[str]] = {}
     for line in flag_lines:
         if (ant := _flag_line_antenna(line)) is not None:
-            upper_line = _FLAG_ANT_RE.sub(lambda m: m.group(0).replace(m.group(1), ant), line, count=1)
+            match = _FLAG_ANT_RE.search(line)
+            upper_line = line[:match.start(1)] + ant + line[match.end(1):]
             lines_by_ant.setdefault(ant, []).append(upper_line.rstrip() + '\n')
 
     result: dict[str, list[str]] = {'log': [], 'flag': [], 'none': []}
@@ -294,39 +295,42 @@ def create_uvflg(exp) -> bool:
         return True
 
     expname = exp.expname.lower()
-    has_logs = len(glob.glob(str(exp.dirs.pipe_temp / "*.log"))) > 0
-    flag_file = find_flag_file(exp.dirs.pipe_temp, expname)
+    # Absolute: the Dirs are stored relative to the experiment folder and this function chdirs
+    # into pipe_temp, after which the relative path would point to pipe_temp/pipe_temp.
+    pipe_temp = Path(exp.dirs.pipe_temp).resolve()
+    has_logs = len(glob.glob(str(pipe_temp / "*.log"))) > 0
+    flag_file = find_flag_file(pipe_temp, expname)
     if not has_logs and flag_file is None:
-        logger.error(f"Neither station .log files nor a {expname}*.flag file found in {exp.dirs.pipe_temp}.")
+        logger.error(f"Neither station .log files nor a {expname}*.flag file found in {pipe_temp}.")
         rprint(f"[bold red]ERROR:[/bold red] [red]Neither station .log files nor a {expname}*.flag file "
-               f"found in {exp.dirs.pipe_temp}.[/red]")
+               f"found in {pipe_temp}.[/red]")
         return False
 
     original_cwd = os.getcwd()
-    os.chdir(exp.dirs.pipe_temp)
+    os.chdir(pipe_temp)
     try:
         if has_logs:
             try:
                 utils.shell_command(str(tools.script_path("uvflgall.sh")))
             except ValueError as exc:
-                logger.error(f"uvflgall.sh failed in {exp.dirs.pipe_temp}: {exc}")
+                logger.error(f"uvflgall.sh failed in {pipe_temp}: {exc}")
                 rprint(f"[bold red]ERROR:[/bold red] [red]uvflgall.sh failed: {exc}[/red]")
                 return False
         else:
             logger.warning(f"No log files found: building the flagging only from {flag_file.name}.")
             rprint(f"[yellow]No log files found: using only the a-priori {flag_file.name} for the flagging.[/yellow]")
 
-        supplement_uvflgfs_from_flag(exp, exp.dirs.pipe_temp)
-        uvflg_file = exp.dirs.pipe_temp / f"{expname}.uvflg"
-        if not concatenate_uvflgfs(exp.dirs.pipe_temp, uvflg_file):
-            logger.error(f"No .uvflgfs file was produced in {exp.dirs.pipe_temp}; {uvflg_file.name} not created.")
+        supplement_uvflgfs_from_flag(exp, pipe_temp)
+        uvflg_file = pipe_temp / f"{expname}.uvflg"
+        if not concatenate_uvflgfs(pipe_temp, uvflg_file):
+            logger.error(f"No .uvflgfs file was produced in {pipe_temp}; {uvflg_file.name} not created.")
             rprint(f"[bold red]ERROR:[/bold red] [red]No .uvflgfs files were produced, so {uvflg_file.name} "
                    "could not be created.[/red]")
             return False
 
         if len(pipepass := [apass.pipeline for apass in exp.correlator_passes if apass.pipeline]) > 1:
             for p in range(1, len(pipepass) + 1):
-                shutil.copy(uvflg_file, exp.dirs.pipe_temp / f"{expname}_{p}.uvflg")
+                shutil.copy(uvflg_file, pipe_temp / f"{expname}_{p}.uvflg")
     finally:
         os.chdir(original_cwd)
     return True

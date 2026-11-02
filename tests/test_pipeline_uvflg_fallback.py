@@ -106,3 +106,22 @@ def test_create_uvflg_returns_false_without_any_flagging(tmp_path: Path):
 
 def test_create_uvflg_returns_false_without_logs_or_flag(tmp_path: Path):
     assert pipeline.create_uvflg(make_exp(["Ef"], tmp_path)) is False
+
+
+def test_create_uvflg_with_relative_pipe_temp(tmp_path: Path, monkeypatch):
+    """Dirs are stored relative to the experiment folder; create_uvflg chdirs into pipe_temp and must still work."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "antenna_files").mkdir()
+    (tmp_path / "antenna_files" / "testexp.flag").write_text(VLBEER_FLAG)
+    exp = make_exp(["Ef", "Wb"])
+    exp.dirs = SimpleNamespace(pipe_temp=Path("antenna_files"))
+    assert pipeline.create_uvflg(exp) is True
+    assert (tmp_path / "antenna_files" / "testexp.uvflg").exists()
+    assert Path.cwd() == tmp_path
+
+
+def test_only_the_antenna_name_is_capitalised(tmp_path: Path):
+    """A station code that also occurs inside the keyword (e.g. 'an' in ant_name) must not touch the keyword."""
+    (tmp_path / "testexp.flag").write_text("ant_name='an' timerang=1,0,0,0,1,1,0,0 /\n")
+    pipeline.supplement_uvflgfs_from_flag(make_exp(["An"]), tmp_path)
+    assert (tmp_path / "testexpan.uvflgfs").read_text().splitlines()[-1] == "ant_name='AN' timerang=1,0,0,0,1,1,0,0 /"

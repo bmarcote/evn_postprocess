@@ -530,9 +530,11 @@ def main() -> None:
             workflow.list_exec_commands()
             sys.exit(1)
         try:
-            workflow.run_isolated_task(args.task_name, expname)
+            ok = workflow.run_isolated_task(args.task_name, expname)
         except (FileNotFoundError, KeyError, AttributeError) as e:
             _fail(f"Could not run the task '{args.task_name}': {e}")
+        if ok is False:  # a task returning False failed: give the shell a non-zero exit code
+            sys.exit(1)
         return
 
     # 'run' (or no command) is the only entry point that may initialize an experiment;

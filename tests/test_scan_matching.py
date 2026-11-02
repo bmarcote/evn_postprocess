@@ -75,3 +75,9 @@ def test_remove_cross_plots_includes_gzipped_and_orphan_pngs(tmp_path, monkeypat
     process._remove_cross_plots("exp", plots)
     assert sorted(p.name for p in tmp_path.glob("*.ps*")) == ["exp-auto-scan1.ps"]
     assert [p.name for p in plots.iterdir()] == ["exp-auto-scan1-page001.png"]
+
+
+def test_map_falls_back_when_no_ms_scan_matches_in_time(monkeypatch):
+    """E.g. VEX scans with wrong times or duration 0: an empty time map must not empty the scan list."""
+    monkeypatch.setattr(process.plotting, 'scan_midtimes', lambda ms: {10: T0 + timedelta(days=3)})
+    assert process._ms_to_vex_scan_map(SimpleNamespace(scans=VEX), "x.ms", [10]) == {10: 10}
