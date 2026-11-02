@@ -37,6 +37,8 @@
   .scan-table .cell-warn { background: #4a3a1a; color: #f0c040; font-weight: bold; }
   .scan-table .cell-miss { background: #4a1a1a; color: var(--red); font-weight: bold; }
   .scan-table .cell-na { color: var(--border); }
+  /* Data present but no fringe search done (source not in the lag MS, e.g. targets). */
+  .scan-table .cell-nosnr { background: #2a2a2a; color: var(--dim); font-weight: bold; }
   .src-fringefinder { color: #48dbfb; font-weight: 600; }
   .src-target { color: #ff9f43; font-weight: 600; }
   .src-calibrator { color: #feca57; font-weight: 600; }
@@ -243,6 +245,7 @@ function renderSummary(d) {
       h += '<div style="font-size:0.8rem;margin-bottom:4px"><span class="tag tag-green">&#10003;</span> Observed (SNR &gt; 7) '
          + '<span class="tag" style="background:#3a3a1a;color:#f0c040">&#10003;</span> Weak (3 &lt; SNR &lt; 7) '
          + '<span class="tag tag-red">&#10003;</span> No signal (SNR &lt; 3) '
+         + '<span class="tag tag-dim">&#10003;</span> Has data, no fringe search '
          + '<span class="tag tag-red">&#10007;</span> Scheduled but missing '
          + '<span style="color:var(--dim)">—</span> Not scheduled</div>';
     } else {
@@ -274,7 +277,10 @@ function renderSummary(d) {
           const snrData = d.lag_snr && d.lag_snr[scanInt] && d.lag_snr[scanInt][a];
           let maxSnr = -1;
           if (snrData) { for (const v of Object.values(snrData)) { if (v > maxSnr) maxSnr = v; } }
-          if (maxSnr < 0) h += '<td class="cell-obs">&#10003;</td>';
+          // No SNR for this scan/antenna: when lag SNRs exist at all, this source was not
+          // searched (lag MS holds only calibrators), so show it grey rather than as a detection.
+          if (maxSnr < 0) h += hasSnr ? '<td class="cell-nosnr" title="'+(tip ? tip+'\n' : '')+'No fringe search for this source">&#10003;</td>'
+                                      : '<td class="cell-obs">&#10003;</td>';
           else if (maxSnr >= 7) h += '<td class="cell-obs" title="'+(tip ? tip+'\n' : '')+'SNR '+maxSnr.toFixed(1)+'">&#10003;</td>';
           else if (maxSnr >= 3) h += '<td class="cell-warn" title="'+(tip ? tip+'\n' : '')+'SNR '+maxSnr.toFixed(1)+'">&#10003;</td>';
           else h += '<td class="cell-miss" title="'+(tip ? tip+'\n' : '')+'SNR '+maxSnr.toFixed(1)+'">&#10003;</td>';
