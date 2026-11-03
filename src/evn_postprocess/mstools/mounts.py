@@ -92,7 +92,8 @@ def fix_yebes_mount(msfile: str, verbose: bool = True) -> bool:
 def fix_hobart_mount(msfile: str, verbose: bool = True) -> bool:
     """Fix mount type information for the Hobart (Ho) antenna in the MS file.
     Changes Hobart X_YEW to X-YEW expected by tConvert (MNTSTA=3).
-    It will check for 'HOBART', 'HO', or 'HOB_DBBC' as name of the station.
+    It will check for 'Ho' (the VEX site ID used in EVN MSs), 'HOBART', 'HO', or 'HOB_DBBC' as name
+    of the station.
     
     Args:
         msfile (str): Path to Measurement Set file to modify.
@@ -102,8 +103,8 @@ def fix_hobart_mount(msfile: str, verbose: bool = True) -> bool:
         bool: True if the mount type was successfully updated, False otherwise.
     """
     ms = Ms(msfile, runstats=False)
-    honame = [n for n in ('HOBART', 'HO', 'HOB_DBBC') if n in ms.antennas.names]
+    honame = [n for n in ('Ho', 'HOBART', 'HO', 'HOB_DBBC') if n in ms.antennas.names]
     if len(honame) == 0:
-        raise ValueError('Ys antenna not found in the MS file.')
+        raise ValueError('Ho antenna not found in the MS file.')
 
     return all([modify_mounts(msfile, ho, 'X-YEW', verbose=verbose) for ho in honame])

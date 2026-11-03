@@ -118,6 +118,40 @@ def table(msfile: str | Path, readonly: bool = True, ack: bool = False):
             ms.close()
 
 
+# MS keyword listing the in-place, non-idempotent operations already applied to that MS
+# (e.g. 'polswap:Wb', 'onebit:Kn,Sr'), as one ';'-separated string. Kept in the MS itself so
+# a re-created MS (fresh j2ms2) starts clean while a re-run on the same MS can skip them.
+APPLIED_OPS_KEYWORD = 'EVNPP_APPLIED_OPS'
+
+
+def applied_operations(msfile: str | Path) -> list[str]:
+    """Returns the in-place operations recorded as already applied to *msfile*.
+
+    Args:
+        msfile (str | Path): Path to the Measurement Set.
+
+    Returns:
+        list[str]: Entries like 'polswap:Wb'; empty if none was recorded.
+    """
+    with table(msfile) as ms:
+        if APPLIED_OPS_KEYWORD not in ms.keywordnames():
+            return []
+        return [entry for entry in str(ms.getkeyword(APPLIED_OPS_KEYWORD)).split(';') if entry]
+
+
+def record_operation(msfile: str | Path, entry: str) -> None:
+    """Records *entry* (e.g. 'polswap:Wb') as applied to *msfile* (see :func:`applied_operations`).
+
+    Args:
+        msfile (str | Path): Path to the Measurement Set.
+        entry (str): Operation and its argument, without ';'.
+    """
+    entries = applied_operations(msfile)
+    if entry not in entries:
+        with table(msfile, readonly=False) as ms:
+            ms.putkeyword(APPLIED_OPS_KEYWORD, ';'.join(entries + [entry]))
+
+
 # def _open_close(msfile: str | Path, msobj, nomodify: bool = True, lock: str = 'default'):
 #     try:
 #         msobj.open(msfile if isinstance(msfile, str) else str(msfile), nomodify=nomodify,

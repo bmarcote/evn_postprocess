@@ -81,7 +81,7 @@ class TestWorkflowCreateStandardplots:
 
         with patch("evn_postprocess.workflow.process.standardplots", return_value=True) as mock_sp:
             assert workflow.create_standardplots(exp) is True
-            mock_sp.assert_called_once_with(exp, do_weights=True)
+            mock_sp.assert_called_once_with(exp, do_weights=True, plots=None)
 
     def test_returns_false_when_no_source_exists(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)

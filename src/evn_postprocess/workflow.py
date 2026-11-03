@@ -27,6 +27,7 @@ from . import distribution
 from . import eevn
 from . import pipelines
 from . import process
+from . import plotting
 from . import retrieval
 from . import review
 from . import verification
@@ -433,7 +434,8 @@ def create_msfile(exp: experiment.Experiment) -> bool:
         return False
 
 
-def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) -> bool:
+def create_standardplots(exp: experiment.Experiment, do_weights: bool = True, plots: list[str] | None = None,
+                         force: bool = False) -> bool:
     """Creates standardplots from MS files.
 
     Validates that the reference antenna and fringe-finder sources are set
@@ -442,11 +444,13 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
     Args:
         exp (experiment.Experiment): Experiment object.
         do_weights (bool): Whether to include weight plots. Default True.
+        plots (list[str] | None): Plot types to create (see process.standardplots); None for all.
+        force (bool): Create them even if *.ps files already exist (the caller removes the old ones).
 
     Returns:
         bool: True if standardplots were created successfully.
     """
-    if len(glob.glob("*.ps")) > 0:
+    if not force and len(glob.glob("*.ps")) > 0:
         logger.debug("Standardplots already run. Skipping.")
         return True
 
@@ -472,7 +476,7 @@ def create_standardplots(exp: experiment.Experiment, do_weights: bool = True) ->
     # if not gui.show_scan_overview(exp):
     #     logger.info("User cancelled after scan overview.")
     #     return False
-    return process.standardplots(exp, do_weights=do_weights)
+    return process.standardplots(exp, do_weights=do_weights, plots=plots)
 
 
 def msops(exp: experiment.Experiment) -> bool:
@@ -986,8 +990,17 @@ def post_polconvert(exp: experiment.Experiment) -> bool:
     return ok
 
 
+# Plot type (plotting.Jplot.create_plot) -> the part of the standard plot file names that identifies it.
+_PLOT_TYPE_NAME = {'cross': 'cross', 'auto': 'auto', 'time': 'ampphase'}
+
+
 def msops_post(exp: experiment.Experiment) -> bool:
     """Re-runs the standard plots after the MS operations (polswap, flagging, 1-bit) have run.
+
+    The plots made before msops are removed first (.ps and their PNGs) and re-created from the
+    corrected MS, so the review and the archived plots show the corrected data. The weight plots
+    are kept (msops does not change them). When PolConvert ran, the cross plots are kept too:
+    post_polconvert already re-made them from the PolConverted data, which the MS does not have.
 
     Args:
         exp (experiment.Experiment): Experiment object.
@@ -995,7 +1008,17 @@ def msops_post(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if the standard plots were re-created successfully.
     """
-    return create_standardplots(exp, do_weights=False)
+    plot_types = ['auto', 'time'] if exp.antennas.polconvert else ['cross', 'auto', 'time']
+    base = exp.expname.lower()
+    for plot_type in plot_types:
+        name = _PLOT_TYPE_NAME[plot_type]
+        for old in [*Path('.').glob(f"{base}*-{name}*.ps"), *exp.dirs.plots.glob(f"{base}*-{name}*.png")]:
+            old.unlink()
+    logger.info(f"Re-creating the {', '.join(plot_types)} standard plots after the MS operations.")
+    if not create_standardplots(exp, do_weights=False, plots=plot_types, force=True):
+        return False
+    plotting.convert_ps_to_png(exp.dirs.plots, base)
+    return True
 
 
 def antfiles(exp: experiment.Experiment) -> bool:
@@ -1552,6 +1575,10 @@ def validate_steps(from_step: str, to_step: str | None = None) -> tuple[bool, st
     return True, ""
 
 
+# Files in pipeline/in that the EVN pipeline reads (written by antab and pipeinputs).
+_PIPELINE_INPUT_PATTERNS = ("*.inp.txt", "*.antab", "*.uvflg")
+
+
 def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None:
     """Check that expected output files exist and are up-to-date for steps marked done.
 
@@ -1632,9 +1659,10 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
             _reset_from('j2ms2', "MS file(s) older than lis input(s)")
             return
 
-    # --- standardplots: inputs=*.ms, outputs=*.ps ---
+    # --- standardplots: inputs=*.ms, outputs=*.ps (gzipped to *.ps.gz by distribute) ---
+    # gzip keeps the original mtime, so the timestamp check still holds for the .ps.gz files.
     if 'standardplots' in step_names and all_steps[step_names.index('standardplots')].done:
-        ps_files = list(Path('.').glob("*.ps"))
+        ps_files = list(Path('.').glob("*.ps")) + list(Path('.').glob("*.ps.gz"))
         ms_files = [p.msfile for p in exp.correlator_passes] if exp.correlator_passes else []
 
         if not ps_files:
@@ -1699,10 +1727,14 @@ def _validate_outputs(exp: experiment.Experiment, all_steps: list[Task]) -> None
         if not (list(exp.dirs.pipe_in.glob("*.inp.txt")) if exp.dirs.pipe_in.exists() else []):
             _reset_from('pipeinputs', "Pipeline input file(s) missing in pipeline/in")
 
-    # --- pipeline: inputs=pipeline/in/*, outputs=pipeline/out/* ---
+    # --- pipeline: inputs=pipeline/in/{*.inp.txt,*.antab,*.uvflg}, outputs=pipeline/out/* ---
+    # Only the files the pipeline reads count as inputs: later steps also write into
+    # pipeline/in (postpipe writes {exp}.tasav.txt after the pipeline ran), and those must
+    # never make the pipeline outputs look stale (which would delete all of pipeline/out).
     if 'pipeline' in step_names and all_steps[step_names.index('pipeline')].done:
         pipe_out = list(exp.dirs.pipe_out.glob("*")) if exp.dirs.pipe_out.exists() else []
-        pipe_in = list(exp.dirs.pipe_in.glob("*")) if exp.dirs.pipe_in.exists() else []
+        pipe_in = [f for pattern in _PIPELINE_INPUT_PATTERNS
+                   for f in (exp.dirs.pipe_in.glob(pattern) if exp.dirs.pipe_in.exists() else [])]
 
         if not pipe_out:
             _reset_from('pipeline', "Pipeline output file(s) missing")

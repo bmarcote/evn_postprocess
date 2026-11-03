@@ -338,8 +338,26 @@ class TestPolswapCheck:
         monkeypatch.setattr(process.mstools, 'polswap',
                             lambda ms, ant, start=None, end=None: applied.append((ant, start, end)))
         monkeypatch.setattr(experiment.Experiment, 'store', lambda self: None)
+        recorded: list[str] = []
+        monkeypatch.setattr(process.mstools.misc, 'applied_operations', lambda ms: list(recorded))
+        monkeypatch.setattr(process.mstools.misc, 'record_operation', lambda ms, entry: recorded.append(entry))
         assert process.polswap(exp) is True
         assert applied == [('Wb', None, exp.scans[3].starttime)]
+        assert recorded == ['polswap:Wb']
+
+    def test_polswap_is_not_applied_twice(self, tmp_path, monkeypatch):
+        """A re-run of msops must not swap the antenna back (a polswap is its own inverse)."""
+        exp = _swap_exp(tmp_path, swapped_scans=(1, 2, 3))
+        exp.correlator_passes = [experiment.CorrelatorPass(
+            lisfile=Path('eb101.lis'), msfile=Path('eb101.ms'),
+            fitsidifile='eb101_1_1.IDI', pipeline=True)]
+        applied = []
+        monkeypatch.setattr(process.mstools, 'polswap', lambda ms, ant, start=None, end=None: applied.append(ant))
+        monkeypatch.setattr(experiment.Experiment, 'store', lambda self: None)
+        monkeypatch.setattr(process.mstools.misc, 'applied_operations', lambda ms: ['polswap:Wb'])
+        monkeypatch.setattr(process.mstools.misc, 'record_operation', lambda ms, entry: None)
+        assert process.polswap(exp) is True
+        assert applied == []
 
 
 class TestMsopsSummary:

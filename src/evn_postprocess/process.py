@@ -808,7 +808,7 @@ def _select_plot_sources(sources: experiment.Sources | None) -> list[str]:
     return []
 
 
-def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
+def standardplots(exp: experiment.Experiment, do_weights=True, plots: Optional[list[str]] = None) -> bool:
     """Runs the standardplots on the specified experiment using Jplot.
 
     For each pipelinable correlator pass, discovers all scans containing the
@@ -818,6 +818,8 @@ def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
     Args:
         exp (experiment.Experiment): Experiment object.
         do_weights (bool): Whether to include weight plots. Default True.
+        plots (Optional[list[str]]): Plot types to create ('cross', 'auto', 'time', 'weight', see
+            plotting.Jplot.create_plot). None creates all of them (weight only if *do_weights*).
 
     Returns:
         bool: True if standardplots completed successfully, False otherwise.
@@ -848,7 +850,7 @@ def standardplots(exp: experiment.Experiment, do_weights=True) -> bool:
             plotter = plotting.Jplot(ms=str(a_pass.msfile.name), refant=refant, calsrc=','.join(calsources),
                             weight_plots=(do_weights and counter == 1))
 
-            if not plotter.create_plot(sources=calsources):
+            if not plotter.create_plot(sources=calsources, plots=plots):
                 logger.error(f"Standardplots failed for {a_pass.msfile.name}")
                 return False
 
@@ -932,11 +934,29 @@ def onebit(exp: experiment.Experiment) -> bool:
     """
     # Sanity check
     if len(exp.antennas.onebit) > 0:
+        # The scaling multiplies the data: a second run would scale it twice. The set of 1-bit
+        # stations is recorded in each MS; the factor of a baseline depends on both of its
+        # stations, so a different set on an already scaled MS needs a manual undo first.
+        entry = f"onebit:{','.join(sorted(exp.antennas.onebit))}"
+
+        def _onebit_pass(a_pass) -> bool:
+            done = [op for op in mstools.misc.applied_operations(a_pass.msfile) if op.startswith('onebit:')]
+            if entry in done:
+                logger.info(f"1-bit scaling ({entry}) already applied to {a_pass.msfile}; not scaling again.")
+                return True
+            if done:
+                logger.error(f"{a_pass.msfile} was already scaled for {done[0]} but now {entry} is requested. "
+                             "Re-create the MS (j2ms2), or undo the previous scaling (mstools scale1bit --undo "
+                             f"with the same stations) and remove the {mstools.misc.APPLIED_OPS_KEYWORD} keyword.")
+                return False
+            mstools.scale1bit(a_pass.msfile, exp.antennas.onebit)
+            mstools.misc.record_operation(a_pass.msfile, entry)
+            return True
+
         with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
-            futures = [executor.submit(mstools.scale1bit, a_pass.msfile, exp.antennas.onebit)
-                      for a_pass in exp.correlator_passes]
-            for fut in futures:
-                fut.result()  # Propagate any exceptions
+            futures = [executor.submit(_onebit_pass, a_pass) for a_pass in exp.correlator_passes]
+            if not all([fut.result() for fut in futures]):  # list: wait for (and propagate) all
+                return False
         logger.info(f"scale1bit {' '.join(exp.antennas.onebit)}")
     elif utils.station_1bit_in_vix(exp.vixfile):
         logger.error(f"Traces of 1bit station found in {exp.vixfile} "
@@ -955,14 +975,15 @@ def ysfocus(exp: experiment.Experiment) -> bool:
     Returns:
         bool: True if mount types were fixed successfully.
     """
-    if ('Ys' not in exp.antennas.names) and ('Ho' not in exp.antennas.names) and ('Hb' not in exp.antennas.names):
+    # Only Ho (26m, X-YEW mount) needs the fix; Hb (12m) does not.
+    if ('Ys' not in exp.antennas.names) and ('Ho' not in exp.antennas.names):
         return True
 
     def _fix_mounts(a_pass):
         if 'Ys' in exp.antennas.names:
             logger.info(f"Fixing yebes mount for {a_pass.msfile}")
             mstools.fix_yebes_mount(a_pass.msfile)
-        if ('Ho' in exp.antennas.names) or ('Hb' in exp.antennas.names):
+        if 'Ho' in exp.antennas.names:
             logger.info(f"Fixing hobart mount for {a_pass.msfile}")
             mstools.fix_hobart_mount(a_pass.msfile)
 
@@ -1082,8 +1103,15 @@ def polswap(exp: experiment.Experiment) -> bool:
     polswap_check(exp)
 
     def _polswap_pass(a_pass):
+        # A polswap is its own inverse: applying it twice (a re-run of msops after a later
+        # operation failed) would swap the antenna back. Each swap is recorded in the MS.
+        done = mstools.misc.applied_operations(a_pass.msfile)
         for antenna in exp.antennas.polswap:
+            if f"polswap:{antenna}" in done:
+                logger.info(f"polswap {antenna} already applied to {a_pass.msfile}; not swapping it again.")
+                continue
             mstools.polswap(a_pass.msfile, antenna, *polswap_range(exp, antenna))
+            mstools.misc.record_operation(a_pass.msfile, f"polswap:{antenna}")
 
     with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
         for fut in [executor.submit(_polswap_pass, a_pass) for a_pass in exp.correlator_passes]:
