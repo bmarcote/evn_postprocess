@@ -33,6 +33,7 @@ class TestLisFileOrderingDeterministic:
         exp = Mock(spec=experiment.Experiment)
         exp.expname = "testexp"
         exp.correlator_passes = []
+        exp.multi_phase_center = False  # a bare Mock attribute is truthy and takes the MPC branch
 
         # We capture the args_list as it is submitted to ThreadPoolExecutor.map.
         # That is the deterministic, pre-thread-pool ordering we care about \u2014
@@ -64,6 +65,35 @@ class TestLisFileOrderingDeterministic:
         assert seen_filenames == sorted(seen_filenames), (
             f"glob output was not sorted: {seen_filenames}"
         )
+
+    def test_line_pairs_get_distinct_pair_indices(self, tmp_path: Path, monkeypatch):
+        """'e.lis'/'e_line.lis' and 'e_2.lis'/'e_2_line.lis' are two pairs (indices 0 and 1), even though
+        the sorted order is e.lis, e_2.lis, e_2_line.lis, e_line.lis."""
+        monkeypatch.chdir(tmp_path)
+        for name in ("e.lis", "e_line.lis", "e_2.lis", "e_2_line.lis"):
+            Path(name).write_text("dummy\n")
+        exp = Mock(spec=experiment.Experiment)
+        exp.expname = "e"
+        exp.correlator_passes = []
+        exp.multi_phase_center = False
+        captured: list = []
+
+        class _FakeExecutor:
+            def __enter__(self_):
+                return self_
+
+            def __exit__(self_, *a):
+                return False
+
+            def map(self_, fn, args_list):
+                captured.extend(args_list)
+                return [None] * len(captured)
+
+        with patch("evn_postprocess.lisfiles.ThreadPoolExecutor", return_value=_FakeExecutor()), \
+             patch("evn_postprocess.process.aggregate_sources_from_passes"), patch.object(exp, "store"):
+            lisfiles.get_passes_from_lisfiles(exp)
+        pairs = {tup[1]: tup[4] for tup in captured}
+        assert pairs == {"e.lis": 0, "e_line.lis": 0, "e_2.lis": 1, "e_2_line.lis": 1}
 
 
 class TestRunAntabEditorReturnsTrueOnSuccess:

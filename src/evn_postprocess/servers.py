@@ -74,9 +74,11 @@ def retrieve_servers() -> Servers:
     Raises:
         FileNotFoundError: If the ``computers.toml`` file cannot be found.
     """
-    if (configpath := (Path(os.getenv('XDG_CONFIG_HOME', Path.home())) / 'evn')).exists():
+    # XDG: an unset or empty XDG_CONFIG_HOME means ~/.config (it used to fall back to ~ itself).
+    xdg_config = Path(os.getenv('XDG_CONFIG_HOME') or (Path.home() / '.config'))
+    if (configpath := xdg_config / 'evn').joinpath('computers.toml').exists():
         pass
-    elif (configpath := (Path(os.path.expanduser('~jops')) / '.config/evn')).exists():
+    elif (configpath := (Path(os.path.expanduser('~jops')) / '.config/evn')).joinpath('computers.toml').exists():
         pass
     else:
         raise FileNotFoundError("No such file or directory: .config/evn/computers.toml neither "

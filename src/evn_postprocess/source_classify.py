@@ -158,6 +158,10 @@ def classify_sources(exp: experiment.Experiment) -> dict[str, str]:
     ``other`` are classified. Never raises: on any degradation it logs and continues.
     """
     observed = {scan.source for scan in exp.scans}
+    # Multi-phase-centre scans correlate more sources than the pointing centre (scan.source):
+    # those extra phase centres are targets by construction, and the schedule statistics below
+    # (which only see scan.source) cannot say anything about them.
+    extra_centres = {pc for scan in exp.scans for pc in scan.phase_centers} - observed
     exp_toml = getattr(exp, 'exp_toml', None)
 
     def user_typed(name: str) -> bool:
@@ -173,16 +177,22 @@ def classify_sources(exp: experiment.Experiment) -> dict[str, str]:
         entry = exp_toml.sources[name]
         return entry.type is not None and not entry.guessed
 
+    untyped_centres = {s.name: 'target' for s in exp.sources
+                       if s.type == experiment.SourceType.other and s.name in extra_centres
+                       and not user_typed(s.name)}
+    for name in untyped_centres:
+        logger.warning(f"Source {name} is a multi-phase-centre position: classified as target. "
+                       f"Edit the [sources] section of the experiment toml if wrong.")
     untyped = [s for s in exp.sources
                if s.type == experiment.SourceType.other and s.name in observed
                and not user_typed(s.name)]
     if not untyped:
-        return {}
+        return untyped_centres
 
     if experiment.is_nme(exp.expname):
         logger.warning(f"{exp.expname} is an NME: all "
                        f"{len(untyped)} unclassified sources are set as targets.")
-        return {s.name: 'target' for s in untyped}
+        return {**untyped_centres, **{s.name: 'target' for s in untyped}}
 
     stats = ScheduleStats(exp)
     catalog = _load_rfc_catalogue()
@@ -210,7 +220,7 @@ def classify_sources(exp: experiment.Experiment) -> dict[str, str]:
         logger.warning(f"Source {name} classified heuristically as {guess} "
                        f"({stats.n_scans[name]} scans, {stats.time_s[name]:.0f} s on source). "
                        f"Edit the [sources] section of the experiment toml if wrong.")
-    return guesses
+    return {**untyped_centres, **guesses}
 
 
 def apply_classification(exp: experiment.Experiment) -> dict[str, str]:

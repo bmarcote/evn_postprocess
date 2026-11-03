@@ -22,6 +22,7 @@ wrong-typed values raise :class:`ExperimentTomlError` naming file, section, and 
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -441,6 +442,13 @@ class ExperimentToml:
             return
         if 'pi' not in self.document:
             self.document['pi'] = tomlkit.aot()
+        elif not isinstance(self.document['pi'], tomlkit.items.AoT):
+            # A hand-written single [pi] table: turn it into a [[pi]] array keeping that entry.
+            single = self.document['pi']
+            del self.document['pi']
+            pi_array = tomlkit.aot()
+            pi_array.append(single)
+            self.document['pi'] = pi_array
         # Safe: just created above, or from a previous call to this same method; tomlkit's
         # own __getitem__ return type is a broader union since a document key can hold any
         # TOML item type.
@@ -504,11 +512,24 @@ class ExperimentToml:
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(tomlkit.dumps(self.document))
+            # mkstemp creates the file 0600: keep the mode the toml already had, or give a new one
+            # the usual umask default, instead of making it private on the first save.
+            os.chmod(tmpname, _target_mode(target))
             os.replace(tmpname, target)
         except BaseException:
             Path(tmpname).unlink(missing_ok=True)
             raise
         self.path = target
+
+
+def _target_mode(target: Path) -> int:
+    """File mode for a rewritten toml: the existing file's, else 0666 minus the current umask."""
+    try:
+        return stat.S_IMODE(os.stat(target).st_mode)
+    except OSError:
+        umask = os.umask(0)
+        os.umask(umask)
+        return 0o666 & ~umask
 
 
 def load_toml(path: str | Path) -> ExperimentToml:

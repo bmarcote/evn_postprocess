@@ -215,12 +215,14 @@ def get_passes_from_lisfiles(exp: experiment.Experiment) -> bool:
     
     # Prepare arguments for parallel processing
     # Calculate i_lines_done for each file index
-    args_list = []
-    i_lines_done = 0
-    for i, a_lisfile in enumerate(lisfiles):
-        args_list.append((i, a_lisfile, exp.expname, thereis_line, i_lines_done))
-        if thereis_line and (i % 2 == 0) and (i > 0):
-            i_lines_done += 1
+    # i_lines_done is the index of the continuum/line pair a file belongs to: the pair of
+    # 'X.lis' and 'X_line.lis' shares it (by base name, since the sorted order does not keep the
+    # two of a pair next to each other: 'e_2.lis' sorts before 'e_line.lis'). The old running
+    # counter gave the third file the index of the first pair, so two passes got the same
+    # FITS-IDI name.
+    pair_bases = list(dict.fromkeys(Path(f).name.replace('_line', '') for f in lisfiles))
+    args_list = [(i, a_lisfile, exp.expname, thereis_line, pair_bases.index(Path(a_lisfile).name.replace('_line', '')))
+                 for i, a_lisfile in enumerate(lisfiles)]
     
     with ThreadPoolExecutor() as executor:
         results = list(executor.map(_process_single_lisfile, args_list))
