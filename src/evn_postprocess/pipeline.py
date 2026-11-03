@@ -129,9 +129,13 @@ def run_antab_editor(exp) -> bool:
     return True
 
 
-# A flagging command names its antenna as ant_name='XX' (uvflg.pl, vlbeer .flag) or antenna='XX'.
-# The name is matched case-insensitively: uvflg.pl writes 'EF' while vlbeer writes 'Ef'.
-_FLAG_ANT_RE = re.compile(r"\b(?:ant_name|antenna)\s*=\s*'?([A-Za-z0-9]+)'?", re.IGNORECASE)
+# A flagging command names its antenna as ant_name='XX' (uvflg.pl, vlbeer .flag), or with the AIPS
+# UVFLG adverb antennas= (any abbreviation down to ANTE=, as used in hand-written flags). The name is
+# matched case-insensitively: uvflg.pl writes 'EF' while vlbeer writes 'Ef'.
+_FLAG_ANT_RE = re.compile(r"\b(?:ant_name|ante\w*)\s*=\s*'?([A-Za-z0-9]+)'?", re.IGNORECASE)
+# First line of a .uvflgfs written by supplement_uvflgfs_from_flag (so a re-run can tell it from a
+# .log-derived one and refresh it).
+_FALLBACK_MARK = "! A-priori flagging for"
 # Every .uvflgfs starts with these settings so its lines never depend on the file before it in
 # the combined .uvflg (same lines uvflg.pl writes).
 _UVFLGFS_HEADER = "opcode='FLAG'\ndtimrang = 1   timeoff=0\n"
@@ -168,15 +172,24 @@ def _has_flag_commands(uvflgfs_file: Path) -> bool:
     """
     if not uvflgfs_file.exists():
         return False
-    with open(uvflgfs_file, 'r') as fh:
+    with open(uvflgfs_file, 'r', errors='replace') as fh:
         return any(_flag_line_antenna(line) is not None for line in fh)
+
+
+def _is_fallback_uvflgfs(uvflgfs_file: Path) -> bool:
+    """True if *uvflgfs_file* was written from the .flag file by supplement_uvflgfs_from_flag."""
+    if not uvflgfs_file.exists():
+        return False
+    with open(uvflgfs_file, 'r', errors='replace') as fh:
+        return fh.readline().startswith(_FALLBACK_MARK)
 
 
 def find_flag_file(directory: Path, expname: str) -> Path | None:
     """Returns the a-priori (vlbeer) flag file of the experiment in *directory*.
 
-    The exact name {exp}.flag is preferred; otherwise the first (sorted) {exp}*.flag is used,
-    e.g. a file carrying a session or pass suffix.
+    The exact name {exp}.flag is preferred; otherwise the first (sorted) {exp}_*.flag is used,
+    e.g. a file carrying a session or pass suffix. The underscore keeps another experiment whose
+    name extends this one (e.g. er057b for er057) from matching.
 
     Args:
         directory (Path): Directory to search (the pipeline temp dir).
@@ -188,7 +201,7 @@ def find_flag_file(directory: Path, expname: str) -> Path | None:
     exact = directory / f"{expname.lower()}.flag"
     if exact.exists():
         return exact
-    candidates = sorted(directory.glob(f"{expname.lower()}*.flag"))
+    candidates = sorted(directory.glob(f"{expname.lower()}_*.flag"))
     if len(candidates) > 1:
         logger.warning(f"Several flag files found ({', '.join(c.name for c in candidates)}); "
                        f"using {candidates[0].name}.")
@@ -215,7 +228,7 @@ def supplement_uvflgfs_from_flag(exp, directory: Path) -> dict[str, list[str]]:
     """
     expname = exp.expname.lower()
     flag_file = find_flag_file(directory, expname)
-    flag_lines = flag_file.read_text().splitlines() if flag_file is not None else []
+    flag_lines = flag_file.read_text(errors='replace').splitlines() if flag_file is not None else []
     lines_by_ant: dict[str, list[str]] = {}
     for line in flag_lines:
         if (ant := _flag_line_antenna(line)) is not None:
@@ -226,14 +239,14 @@ def supplement_uvflgfs_from_flag(exp, directory: Path) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {'log': [], 'flag': [], 'none': []}
     for ant in sorted({a.upper() for a in exp.antennas.observed}):
         uvflgfs_file = directory / f"{expname}{ant.lower()}.uvflgfs"
-        if _has_flag_commands(uvflgfs_file):
+        if _has_flag_commands(uvflgfs_file) and not _is_fallback_uvflgfs(uvflgfs_file):
             result['log'].append(ant)
             continue
         if not (ant_lines := lines_by_ant.get(ant)):
             result['none'].append(ant)
             continue
         with open(uvflgfs_file, 'w') as fh:
-            fh.write(f"! A-priori flagging for {ant} from {flag_file.name}\n")
+            fh.write(f"{_FALLBACK_MARK} {ant} from {flag_file.name}\n")
             fh.write(_UVFLGFS_HEADER)
             fh.writelines(ant_lines)
         result['flag'].append(ant)
@@ -267,11 +280,34 @@ def concatenate_uvflgfs(directory: Path, output: Path) -> list[Path]:
         return []
     with open(output, 'w') as out:
         for uvflgfs_file in uvflgfs_files:
-            text = uvflgfs_file.read_text()
+            text = uvflgfs_file.read_text(errors='replace')
             out.write(text if text.endswith('\n') or not text else text + '\n')
     logger.info(f"Wrote {output.name} from {len(uvflgfs_files)} .uvflgfs files: "
                 f"{', '.join(f.name for f in uvflgfs_files)}")
     return uvflgfs_files
+
+
+def _warn_unflagged_antennas(exp, uvflg_file: Path) -> list[str]:
+    """Warns about observed antennas with no flagging line in an existing .uvflg.
+
+    The existing file is kept (it may have been edited by hand), but one made before a station's
+    flagging became available (e.g. by an older version without the .flag fallback) would
+    silently leave that station unflagged.
+
+    Args:
+        exp: Experiment object (uses antennas.observed).
+        uvflg_file: The existing combined .uvflg file.
+
+    Returns:
+        The observed antennas (capitals) without any flagging line in it.
+    """
+    with open(uvflg_file, 'r', errors='replace') as fh:
+        flagged = {ant for line in fh if (ant := _flag_line_antenna(line)) is not None}
+    missing = sorted({a.upper() for a in exp.antennas.observed} - flagged)
+    if missing:
+        logger.warning(f"{uvflg_file.name} has no flagging for {', '.join(missing)}. Delete it (and the "
+                       f"*.uvflg in pipeline/in) and re-run the antab step to regenerate it.")
+    return missing
 
 
 def create_uvflg(exp) -> bool:
@@ -289,8 +325,9 @@ def create_uvflg(exp) -> bool:
     Returns:
         bool: True if the {exp}.uvflg file was created (or already existed).
     """
-    if len(glob.glob(str(exp.dirs.pipe_temp / "*.uvflg"))) > 0:
+    if existing := sorted(Path(exp.dirs.pipe_temp).glob("*.uvflg")):
         logger.info("uvflg files already created. Skipping.")
+        _warn_unflagged_antennas(exp, existing[0])
         return True
 
     expname = exp.expname.lower()
@@ -361,84 +398,105 @@ def create_input_file(exp) -> bool:
         for uvflgfile in exp.dirs.pipe_temp.glob("*.uvflg"):
             shutil.copy(uvflgfile, exp.dirs.pipe_in / uvflgfile.name)
 
+    pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
+    userno = _aips_userno(exp.supsci)
     original_cwd = os.getcwd()
     os.chdir(exp.dirs.pipe_in)
-    if len(pipepasses := [apass.pipeline for apass in exp.correlator_passes if apass.pipeline]) > 1:
-        # Only fan out from the unnumbered .antab/.uvflg into per-pass copies if the
-        # unnumbered file actually exists. Previously the .uvflg copy was unguarded,
-        # so a perfectly valid setup with already-numbered files (e.g. testexp_1.uvflg
-        # and testexp_2.uvflg already present) crashed with FileNotFoundError.
-        if Path(f"{exp.expname.lower()}.antab").exists():
-            for p in range(1, len(pipepasses) + 1):
-                shutil.copy(f"{exp.expname.lower()}.antab", f"{exp.expname.lower()}_{p}.antab")
-
-        if Path(f"{exp.expname.lower()}.uvflg").exists():
-            for p in range(1, len(pipepasses) + 1):
-                shutil.copy(f"{exp.expname.lower()}.uvflg", f"{exp.expname.lower()}_{p}.uvflg")
-
-    # Copy and modify the pipeline input template. We read the template once and
-    # then format it per pass to avoid re-opening the same file (and to make the
-    # function trivially mockable in tests via importlib.resources.read_text).
-    template_path = resources.files("evn_postprocess.templates").joinpath("pipeline.inp.txt.template")
-    template_text = template_path.read_text()
-    pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
-
-    for i, apass in enumerate(pipepasses, 1):
+    try:
         if len(pipepasses) > 1:
-            inp_filename = Path(f"{exp.expname.lower()}_{i}.inp.txt")
-        else:
-            inp_filename = Path(f"{exp.expname.lower()}.inp.txt")
+            # Fan out the unnumbered .antab/.uvflg into per-pass copies, but never over a numbered
+            # file that already exists (written per pass by antab_editor, or edited by hand).
+            for ext in ('antab', 'uvflg'):
+                if Path(f"{exp.expname.lower()}.{ext}").exists():
+                    for p in range(1, len(pipepasses) + 1):
+                        if not Path(f"{exp.expname.lower()}_{p}.{ext}").exists():
+                            shutil.copy(f"{exp.expname.lower()}.{ext}", f"{exp.expname.lower()}_{p}.{ext}")
 
-        if inp_filename.exists():
-            continue
+        # Read the template once and format it per pass (also keeps it mockable in tests via
+        # importlib.resources).
+        template_path = resources.files("evn_postprocess.templates").joinpath("pipeline.inp.txt.template")
+        template_text = template_path.read_text()
+        for i, apass in enumerate(pipepasses, 1):
+            inp_filename = Path(f"{exp.expname.lower()}_{i}.inp.txt" if len(pipepasses) > 1
+                                else f"{exp.expname.lower()}.inp.txt")
+            if inp_filename.exists():
+                continue
 
-        template_content = template_text
-
-        # Order-preserving dedupe (targets, then fringe finders, then calibrators; first
-        # occurrence wins). A set would reorder the names on every run, making the generated
-        # input file differ between otherwise identical runs.
-        all_sources: list[str] = []
-        for src_name in list(apass.sources.target) + list(apass.sources.fringefinder) + list(apass.sources.calibrator):
-            if src_name not in all_sources:
-                all_sources.append(src_name)
-
-        replacements = {
-            '{expname}': exp.expname.lower() if len(pipepasses) == 1 else f"{exp.expname.lower()}_{i}",
-            '{userno}': subprocess.run(['aips_userno.py', exp.supsci.lower()], 
-                                       capture_output=True, text=True).stdout.strip() or '100',
-            # The full prioritised list: EVN.py uses refant[0] and passes the rest to FRING as
-            # SEARCH antennas, so scans without the first one still get fringe solutions.
-            '{refant}': ', '.join(exp.refant),
-            '{plotref}': exp.refant[0],
-            '{bpass}': ', '.join(_select_bandpass_sources(apass.sources)),
-            '{dophaseref}': '' if apass.sources.calibrator else '#',
-            # '{phaseref}': ', '.join(apass.sources.calibrator),
-            # '{target}': ', '.join(apass.sources.target),
-            '{target}': ', '.join(apass.sources.target),
-            '{phaseref}': ', '.join([apass.sources.calibrator_for_target(tgt) for tgt in apass.sources.target]) if apass.sources.calibrator else '',
-            '{dosolint}': '#' if apass.sources.calibrator else '',
-            '{solint}': '2',
-            # doprimarybeam/setup_station are only relevant for multi-phase-center
-            # (wide-field) experiments. For a single-pass experiment they are commented
-            # out via the {do_primarybeam} prefix so they never take effect.
-            '{do_primarybeam}': '' if exp.multi_phase_center else '#',
-            '{doprimarybeam}': '1' if exp.multi_phase_center else '-1',
-            '{setup_station}': exp.refant[0] if len(exp.refant) > 0 else '',
-            '{do_all_sources}': '' if exp.multi_phase_center else '#',
-            '{all_sources}': ', '.join(all_sources) if exp.multi_phase_center else '',
-            }
-        
-        for placeholder, value in replacements.items():
-            logger.debug(f"Pipeline input file - replaced {placeholder} with {value}")
-            template_content = template_content.replace(placeholder, value)
-        
-        with open(inp_filename, 'w') as f:
-            f.write(template_content)
-        
-        logger.debug(f"Created pipeline input file: {inp_filename}")
-
-    os.chdir(original_cwd)
+            with open(inp_filename, 'w') as f:
+                f.write(_fill_pipeline_template(exp, apass, i, len(pipepasses), userno, template_text))
+            logger.debug(f"Created pipeline input file: {inp_filename}")
+    finally:
+        os.chdir(original_cwd)
     return True
+
+
+def _aips_userno(supsci: str) -> str:
+    """AIPS user number of the support scientist (from aips_userno.py), or '100' if unavailable.
+
+    Args:
+        supsci: Support scientist's user name.
+
+    Returns:
+        The user number as a string; '100' (with a warning) if the helper is missing or prints nothing.
+    """
+    try:
+        userno = subprocess.run(['aips_userno.py', supsci.lower()], capture_output=True, text=True).stdout.strip()
+    except OSError as exc:
+        logger.warning(f"Could not run aips_userno.py ({exc}); using AIPS user number 100.")
+        return '100'
+    return userno or '100'
+
+
+def _fill_pipeline_template(exp, apass, i: int, n_passes: int, userno: str, template_text: str) -> str:
+    """Returns the pipeline input file text for one correlator pass.
+
+    Args:
+        exp: Experiment object.
+        apass: The correlator pass.
+        i: 1-based index of the pass among the pipelined passes.
+        n_passes: Number of pipelined passes.
+        userno: AIPS user number.
+        template_text: Content of pipeline.inp.txt.template.
+
+    Returns:
+        The template with every placeholder replaced.
+    """
+    # Order-preserving dedupe (targets, then fringe finders, then calibrators; first
+    # occurrence wins). A set would reorder the names on every run, making the generated
+    # input file differ between otherwise identical runs.
+    all_sources: list[str] = []
+    for src_name in list(apass.sources.target) + list(apass.sources.fringefinder) + list(apass.sources.calibrator):
+        if src_name not in all_sources:
+            all_sources.append(src_name)
+
+    replacements = {
+        '{expname}': exp.expname.lower() if n_passes == 1 else f"{exp.expname.lower()}_{i}",
+        '{userno}': userno,
+        # The full prioritised list: EVN.py uses refant[0] and passes the rest to FRING as
+        # SEARCH antennas, so scans without the first one still get fringe solutions.
+        '{refant}': ', '.join(exp.refant),
+        '{plotref}': exp.refant[0],
+        '{bpass}': ', '.join(_select_bandpass_sources(apass.sources)),
+        '{dophaseref}': '' if apass.sources.calibrator else '#',
+        '{target}': ', '.join(apass.sources.target),
+        '{phaseref}': ', '.join([apass.sources.calibrator_for_target(tgt) for tgt in apass.sources.target])
+                      if apass.sources.calibrator else '',
+        '{dosolint}': '#' if apass.sources.calibrator else '',
+        '{solint}': '2',
+        # doprimarybeam/setup_station are only relevant for multi-phase-center
+        # (wide-field) experiments. For a single-pass experiment they are commented
+        # out via the {do_primarybeam} prefix so they never take effect.
+        '{do_primarybeam}': '' if exp.multi_phase_center else '#',
+        '{doprimarybeam}': '1' if exp.multi_phase_center else '-1',
+        '{setup_station}': exp.refant[0] if len(exp.refant) > 0 else '',
+        '{do_all_sources}': '' if exp.multi_phase_center else '#',
+        '{all_sources}': ', '.join(all_sources) if exp.multi_phase_center else '',
+        }
+    content = template_text
+    for placeholder, value in replacements.items():
+        logger.debug(f"Pipeline input file - replaced {placeholder} with {value}")
+        content = content.replace(placeholder, value)
+    return content
 
 
 def run_pipeline(exp) -> bool:

@@ -125,3 +125,33 @@ def test_only_the_antenna_name_is_capitalised(tmp_path: Path):
     (tmp_path / "testexp.flag").write_text("ant_name='an' timerang=1,0,0,0,1,1,0,0 /\n")
     pipeline.supplement_uvflgfs_from_flag(make_exp(["An"]), tmp_path)
     assert (tmp_path / "testexpan.uvflgfs").read_text().splitlines()[-1] == "ant_name='AN' timerang=1,0,0,0,1,1,0,0 /"
+
+
+def test_fallback_file_is_refreshed_not_taken_as_real(tmp_path: Path):
+    (tmp_path / "testexp.flag").write_text(VLBEER_FLAG)
+    pipeline.supplement_uvflgfs_from_flag(make_exp(["Wb"]), tmp_path)
+    assert pipeline.supplement_uvflgfs_from_flag(make_exp(["Wb"]), tmp_path)['flag'] == ['WB']
+
+
+def test_aips_antennas_abbreviations_count_as_flags(tmp_path: Path):
+    """Hand-written UVFLG lines (ANTE=, antennas=) are real flagging and must not be overwritten."""
+    (tmp_path / "testexp.flag").write_text(VLBEER_FLAG)
+    (tmp_path / "testexpwb.uvflgfs").write_text("ANTE=2,0 timerang=1,0,0,0,1,1,0,0 /\n")
+    assert pipeline.supplement_uvflgfs_from_flag(make_exp(["Wb"]), tmp_path)['log'] == ['WB']
+
+
+def test_suffix_glob_does_not_pick_another_experiment(tmp_path: Path):
+    (tmp_path / "testexpb.flag").write_text(VLBEER_FLAG)  # a different experiment, TESTEXPB
+    assert pipeline.find_flag_file(tmp_path, "TESTEXP") is None
+
+
+def test_undecodable_bytes_do_not_raise(tmp_path: Path):
+    (tmp_path / "testexp.flag").write_bytes(VLBEER_FLAG.encode() + b"\n! \xff\xfe bad\n")
+    assert pipeline.create_uvflg(make_exp(["Ef"], tmp_path)) is True
+
+
+def test_existing_uvflg_kept_but_unflagged_antennas_reported(tmp_path: Path):
+    (tmp_path / "testexp.uvflg").write_text("ant_name='EF' timerang=1,0,0,0,1,1,0,0 /\n")
+    exp = make_exp(["Ef", "Cm"], tmp_path)
+    assert pipeline.create_uvflg(exp) is True
+    assert pipeline._warn_unflagged_antennas(exp, tmp_path / "testexp.uvflg") == ['CM']

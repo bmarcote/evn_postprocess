@@ -408,6 +408,41 @@ class TestPipelineAntabFileEdgeCases:
         inp = next(self.pipe_in_dir.glob("*.inp.txt")).read_text()
         assert "refant = Ef, O8, Mc" in inp
 
+    def test_missing_aips_userno_helper_falls_back_and_restores_cwd(self):
+        """aips_userno.py not installed: user number 100, and the process is back in its cwd."""
+        mock_pass = Mock(spec=experiment.CorrelatorPass)
+        mock_pass.pipeline = True
+        mock_pass.sources = Mock()
+        mock_pass.sources.fringefinder = ["source1"]
+        mock_pass.sources.target = ["target1"]
+        mock_pass.sources.calibrator = []
+        self.mock_exp.correlator_passes = [mock_pass]
+        cwd = os.getcwd()
+        with patch('subprocess.run', side_effect=FileNotFoundError("aips_userno.py")):
+            with patch('evn_postprocess.pipeline.resources.files') as mock_resources:
+                mock_resources.return_value.joinpath.return_value.read_text.return_value = "userno = {userno}\n"
+                assert pipeline.create_input_file(self.mock_exp) is True
+        assert os.getcwd() == cwd
+        assert "userno = 100" in (self.pipe_in_dir / "testexp.inp.txt").read_text()
+
+    def test_existing_per_pass_files_are_not_overwritten(self):
+        passes = []
+        for _ in range(2):
+            mock_pass = Mock(spec=experiment.CorrelatorPass)
+            mock_pass.pipeline = True
+            mock_pass.sources = Mock(fringefinder=["s"], target=["t"], calibrator=[])
+            passes.append(mock_pass)
+        self.mock_exp.correlator_passes = passes
+        (self.pipe_in_dir / "testexp.antab").write_text("continuum")
+        (self.pipe_in_dir / "testexp_2.antab").write_text("line pass")
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value.stdout = "1"
+            with patch('evn_postprocess.pipeline.resources.files') as mock_resources:
+                mock_resources.return_value.joinpath.return_value.read_text.return_value = "x"
+                assert pipeline.create_input_file(self.mock_exp) is True
+        assert (self.pipe_in_dir / "testexp_1.antab").read_text() == "continuum"
+        assert (self.pipe_in_dir / "testexp_2.antab").read_text() == "line pass"
+
     def test_empty_correlator_passes_should_handle_gracefully(self):
         """Test behavior with empty correlator passes list."""
         self.mock_exp.correlator_passes = []
