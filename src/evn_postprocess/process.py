@@ -538,6 +538,14 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
     for exp_scan in exp.scans:
         exp_scan.stations_observed = tuple(sorted(observed_by_scan.get(exp_scan.scanno, ())))
 
+    # Observing time range (shown in the dashboard, notes.md and the chat summaries; it was
+    # never set): from the first to the last scan with data, or every scheduled scan if none.
+    timed = [s for s in exp.scans if s.starttime is not None]
+    with_data = [s for s in timed if s.stations_observed] or timed
+    if with_data:
+        exp.timerange = [min(s.starttime for s in with_data),
+                         max(s.starttime + timedelta(seconds=s.duration_s) for s in with_data)]
+
     # Antennas scheduled (from VEX) but absent from every MS get observed=False.
     for ant_name in exp.antennas.names:
         exp.antennas[ant_name].observed = any((ant_name in a_pass.antennas) and a_pass.antennas[ant_name].observed \

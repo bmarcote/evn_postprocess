@@ -42,6 +42,33 @@ Fixed:
   - Dashboard plot filter: choosing scan 1 no longer also shows scans 10-19, 100+.
   - The pipeline input gets the whole prioritised `refant` list (FRING SEARCH antennas), not only the first.
   - `postprocess exec <task>` exits non-zero when the task fails.
+  - Smaller fixes from the full code review:
+    - pipeline input: no chdir left behind on errors; missing `aips_userno.py` falls back to 100;
+      per-pass `.antab`/`.uvflg` copies never overwrite existing numbered files;
+    - uvflg: hand-written `antennas=`/`ANTE=` lines count as flagging; fallback files are refreshed on
+      re-run; `{exp}_*.flag` no longer matches another experiment; an existing `.uvflg` missing observed
+      stations is reported; undecodable bytes no longer raise;
+    - a failed or interrupted `j2ms2`/`tConvert` removes its partial MS/FITS-IDI; `archive` no longer
+      deletes every `*.ps.gz` before compressing; merged back-to-back scans are matched to a VEX scan;
+      stale `stations_observed` values are reset; the observing time range is now set;
+    - re-running from `initialize` (or `distribute` without archiving) no longer raises; batch mode
+      pauses instead of opening `antab_editor.py`; the `REVIEW_REQUIRED` marker is removed on resume;
+      a stored `--policy` is announced (new `--no-policy`); a refant from the toml/policy is honoured;
+    - experiment toml keeps its file mode on save; a single `[pi]` table can be extended; the
+      `computers.toml` default location is `~/.config/evn`;
+    - extra multi-phase-centre positions are classified as targets; continuum/line `.lis` pairs no
+      longer reuse a FITS-IDI name;
+    - Mattermost errors include the server's explanation; a failed full-text attachment is reported;
+      replies are matched to the experiment (thread reply or naming it), so concurrent runs do not
+      take each other's answers;
+    - PI letter: display names with commas are quoted; letters with the archive password are 0600;
+      a doubled `)` in the Markdown template; the distribution re-reads the toml before saving it;
+    - station files are recognised as `{exp}{ant}` by every retrieval backend (the 'none' backend never
+      found them; the opacity remark never appeared); `make_lis` runs only after a successful `cd`;
+    - `invert_subband`/`copy_pol` act on the right axis (and `invert_subband` no longer flips
+      autocorrelations twice); `get_polarizations` opens the MS read-only; `append_antab_idi.py`
+      keeps `--replace` with several ANTAB files and pairs them by pass number; the pbcor tasav
+      template numbers CL3/CL4 correctly; PolConvert input globs skip earlier outputs.
   - The `.flag` fallback for `.uvflg` never matched anything: it searched for `antenna='EF'` while vlbeer
     writes `ant_name='Ef'`, so stations without `.log` (e.g. Cm/Da/Kn/Pi in ER057B) got no a-priori
     flagging at all. Both forms are now matched case-insensitively, and the lines are written with the
