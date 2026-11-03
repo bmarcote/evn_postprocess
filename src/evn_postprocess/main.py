@@ -5,6 +5,7 @@ import os
 import sys
 import json
 import argparse
+import dataclasses
 from pathlib import Path
 from importlib.metadata import version
 from loguru import logger
@@ -196,6 +197,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         help='Path to a policy.toml file with the unattended decisions '
                              '(weight threshold, polswap/polconvert/onebit antennas, refant, '
                              'pause_after, skip_archive). See evn_postprocess.policy.')
+    parser.add_argument('--no-policy', action='store_true', default=False,
+                        help='Drop the policy stored by an earlier --policy (it is otherwise kept '
+                             'for the following runs, so a batch resume keeps its decisions).')
     parser.add_argument('--batch', action='store_true', default=False,
                         help='Run unattended: never invoke interactive dialogs or open the '
                              'standardplots dashboard. The runner stops with exit code 0 and '
@@ -416,6 +420,16 @@ def _apply_cli_options(exp: experiment.Experiment, args) -> None:
     # The policy is attached to the experiment so the helpers that need it (dialog.
     # PolicyDriven, workflow._pause_steps) can read it without threading it through
     # every call.
+    if getattr(args, 'no_policy', False):
+        if exp.policy is not None:
+            logger.info("Dropping the policy stored by an earlier run (--no-policy).")
+        exp.policy = None
+        exp.store()
+    elif not args.policy and exp.policy is not None and dataclasses.replace(exp.policy, batch=False) != Policy():
+        # (a default Policy is what --batch alone attaches: nothing to announce for that one)
+        # Kept on purpose (a batch resume is a bare `postprocess run`), but never silently.
+        rprint("[yellow]Using the policy stored by an earlier `--policy` run; pass --no-policy to "
+               "drop it, or --policy FILE to replace it.[/yellow]")
     if args.policy:
         try:
             exp.policy = Policy.load(args.policy)

@@ -359,6 +359,31 @@ def update_ms_expname(exp: experiment.Experiment) -> bool:
     return True
 
 
+def _configured_refant(exp: experiment.Experiment) -> list[str]:
+    """Reference antennas set in the experiment toml or, failing that, the policy.
+
+    Only antennas with data are kept (case-insensitive match, returned with the experiment's
+    spelling). Empty if none is configured or none of them observed.
+
+    Args:
+        exp: Experiment object (uses its attached toml, policy and antennas).
+
+    Returns:
+        The configured reference antennas, in priority order.
+    """
+    from . import experiment_state
+    try:
+        exp_toml = experiment_state.attached_toml(exp)
+    except Exception as exc:  # no toml, or unreadable: the policy alone decides
+        logger.debug(f"No experiment toml for the refant ({exc}).")
+        exp_toml = None
+    wanted = experiment_state.resolve_parameters(exp_toml, getattr(exp, 'policy', None)).refant or []
+    observed = {a.upper(): a for a in exp.antennas.observed}
+    if missing := [a for a in wanted if a.upper() not in observed]:
+        logger.warning(f"Configured reference antenna(s) without data, ignored: {', '.join(missing)}.")
+    return [observed[a.upper()] for a in wanted if a.upper() in observed]
+
+
 def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
     """Extracts metadata from MS files and populates the experiment object.
 
@@ -527,6 +552,13 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
             if ant.name not in exp.antennas:
                 exp.antennas.append(experiment.Antenna(name=ant.name, observed=ant.observed,
                                                        subbands=ant.subbands))
+
+    # A reference antenna set by the operator (experiment toml, else policy) wins over the auto-pick
+    # below, which would otherwise run first and make the configured one unreachable (and then be
+    # written back over it into the toml by the msops step).
+    if not exp.refant and (configured := _configured_refant(exp)):
+        exp.refant = configured
+        logger.info(f"Reference antenna(s) from the configuration: {', '.join(configured)}.")
 
     # Pick a default reference antenna if none is set yet
     if not exp.refant:

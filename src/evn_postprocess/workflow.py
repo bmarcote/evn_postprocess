@@ -492,7 +492,11 @@ def msops(exp: experiment.Experiment) -> bool:
     # has already produced them, which means these in-place MS operations were applied too;
     # skip to avoid re-applying them. tConvert itself is now the separate 'tconvert' step.
     if all(len(glob.glob(f"{p.fitsidifile}*")) > 0 for p in exp.correlator_passes):
-        logger.debug("FITS IDI files already exist. MS operations were already applied. Skipping.")
+        # Not silent: an operator re-running msops to apply a new operation must know it did not
+        # happen (the FITS-IDI would not carry it anyway without converting the MS again).
+        logger.warning("The FITS-IDI files already exist, so the MS operations are not applied again. To "
+                       "apply new ones, delete the FITS-IDI files and run again from 'msops' (tconvert "
+                       "re-creates them from the corrected MS).")
         return True
 
     if _toml_msops_available(exp):
@@ -1074,7 +1078,18 @@ def antfiles(exp: experiment.Experiment) -> bool:
         review.announce_antab_summary(
             exp, _NOTIFIER if _operator_away("the antab_editor.py start") else None)
 
-        antab_edited = pipeline.run_antab_editor(exp)  # TODO: use the correct codes if eEVN or line
+        if _BATCH_MODE:
+            # antab_editor.py is an interactive GUI: in batch mode nobody would close it and the
+            # run would hang. Pause instead; the next run finds the .antab and goes on.
+            reason = (f"the Tsys tables must be edited with antab_editor.py, which is interactive and "
+                      f"this run is in batch mode. Run it by hand in `{exp.dirs.pipe_temp}` (the .uvflg "
+                      f"is ready), then resume with `postprocess run`.")
+            _write_review_flag(exp, 'antab', reason)
+            if _operator_away("the antab_editor.py session"):
+                _comms.notify_step_pause(exp, 'antab', reason, _NOTIFIER)
+            raise StepPaused(reason)
+
+        antab_edited = pipeline.run_antab_editor(exp)
         _note_operator_interaction()  # the editor is interactive: it returns when they close it
         if not antab_edited:
             raise StepFailed(f"`antab_editor.py` needs to be run by hand in "
@@ -1968,6 +1983,22 @@ def _plan_steps(exp: experiment.Experiment, archive: bool,
                                 for s in (exp.steps or []))}
 
     if from_step is not None:
+        # validate_steps accepts every step name, including ones this plan leaves out
+        # ('initialize', 'distribute' without archiving, skip_steps): start from the first
+        # planned step at or after from_step, and stop at the last one at or before to_step.
+        full_order = [s.name for s in _WORKFLOW_STEPS]
+        if from_step not in step_names:
+            later = [n for n in full_order[full_order.index(from_step):] if n in step_names]
+            if not later:
+                logger.info(f"Step '{from_step}' is not part of this run and no planned step follows it.")
+                return []
+            logger.info(f"Step '{from_step}' is not part of this run; starting from '{later[0]}'.")
+            from_step = later[0]
+        if to_step is not None and to_step not in step_names:
+            earlier = [n for n in full_order[:full_order.index(to_step) + 1] if n in step_names]
+            to_step = earlier[-1] if earlier else None
+            if to_step is None or step_names.index(to_step) < step_names.index(from_step):
+                return []
         # Explicit restart: keep the done state before from_step, reset it from there on.
         from_idx = step_names.index(from_step)
         for i, step in enumerate(all_steps):
@@ -2089,6 +2120,11 @@ def run_workflow(exp: experiment.Experiment, archive: bool = True, debug: bool =
         logger.info("No pending steps — the post-processing is already complete.")
         return True
 
+    # Resuming means the operator dealt with whatever the REVIEW_REQUIRED marker asked for; a
+    # new pause in this run writes it again. Left in place it would flag a run that moved on.
+    if _review_flag_path().exists():
+        logger.info(f"Removing the {REVIEW_FLAG_FILENAME} marker of the previous pause.")
+        _clear_review_flag(exp)
     pause_after = _pause_steps(exp)
     logger.info(f"Running steps: {', '.join(s.name for s in steps_to_run)}.")
     for position, step in enumerate(steps_to_run):

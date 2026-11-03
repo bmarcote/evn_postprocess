@@ -90,3 +90,11 @@ def test_scale1bit_scales_only_data_by_default(tmp_path):
         data, weight = t.getcol('DATA'), t.getcol('WEIGHT')
     assert np.isclose(data[0, 0, 0].real, np.sqrt(np.pi / 2.0 / 1.1329552)) and data[1, 0, 0] == 1
     assert np.all(weight == 1.0)
+
+
+def test_configured_refant_from_policy_wins_and_is_filtered(monkeypatch):
+    from evn_postprocess import experiment_state
+    from evn_postprocess.policy import Policy
+    monkeypatch.setattr(experiment_state, 'attached_toml', lambda exp: (_ for _ in ()).throw(FileNotFoundError()))
+    exp = SimpleNamespace(policy=Policy(refant=['O8', 'XX', 'ef']), antennas=SimpleNamespace(observed=['Ef', 'O8']))
+    assert process._configured_refant(exp) == ['O8', 'Ef']

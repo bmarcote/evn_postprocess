@@ -168,3 +168,23 @@ def test_resume_continues_after_last_done_step_not_at_earlier_gap(tmp_path, engi
     assert workflow.run_workflow(exp) is True
     assert 'polconvert' not in engine
     assert engine[0] == 'standardplots2'
+
+
+def test_rerun_from_initialize_starts_at_the_first_step(tmp_path, engine):
+    """validate_steps accepts 'initialize'; _plan_steps used to raise ValueError for it."""
+    exp = make_exp(tmp_path)
+    steps = workflow._plan_steps(exp, True, 'initialize', None)
+    assert steps[0].name == 'lisfiles'
+
+
+def test_rerun_from_distribute_without_archive_runs_nothing(tmp_path, engine):
+    exp = make_exp(tmp_path)
+    assert workflow._plan_steps(exp, False, 'distribute', None) == []
+
+
+def test_resume_clears_the_previous_review_marker(tmp_path, engine):
+    exp = make_exp(tmp_path)
+    assert workflow.run_workflow(exp) is True            # pauses after postpipe, writes the marker
+    assert (tmp_path / workflow.REVIEW_FLAG_FILENAME).exists()
+    assert workflow.run_workflow(exp) is True            # resume to the end
+    assert not (tmp_path / workflow.REVIEW_FLAG_FILENAME).exists()
