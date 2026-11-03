@@ -13,12 +13,15 @@ def test_record_pi_on_a_single_pi_table(tmp_path):
     assert emails == ['a@x.org', 'b@x.org']
 
 
-def test_save_keeps_the_existing_mode(tmp_path):
+def test_save_uses_the_default_mode_even_over_a_private_file(tmp_path):
+    """A toml left 0600 by older versions gets the usual permissions back on the next save."""
     path = tmp_path / "e.toml"
     path.write_text('[postprocess]\n')
-    os.chmod(path, 0o644)
+    os.chmod(path, 0o600)
     experiment_state.load_toml(path).save()
-    assert oct(os.stat(path).st_mode & 0o777) == oct(0o644)
+    umask = os.umask(0)
+    os.umask(umask)
+    assert os.stat(path).st_mode & 0o777 == 0o666 & ~umask
 
 
 def test_servers_default_config_dir_is_dot_config(tmp_path, monkeypatch):

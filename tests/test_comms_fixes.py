@@ -24,11 +24,13 @@ def test_pi_address_is_quoted_when_needed():
     assert piletter._address('José Pérez', 'j@b.org') == 'José Pérez <j@b.org>'
 
 
-def test_credential_letter_files_are_private(tmp_path):
+
+def test_letter_files_get_the_default_permissions(tmp_path):
+    """Same permissions as every other experiment file (no owner-only letters)."""
     import os
     from evn_postprocess.distribution import piletter
     path = tmp_path / "e.piletter_auth"
-    path.write_text("old password")
-    piletter._write(path, "new password", private=True)
-    assert oct(os.stat(path).st_mode & 0o777) == oct(0o600)
-    assert oct(os.stat(tmp_path / "e.piletter_auth.bak").st_mode & 0o777) == oct(0o600)
+    piletter._write(path, "letter")
+    umask = os.umask(0)
+    os.umask(umask)
+    assert os.stat(path).st_mode & 0o777 == 0o666 & ~umask

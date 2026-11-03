@@ -22,7 +22,6 @@ wrong-typed values raise :class:`ExperimentTomlError` naming file, section, and 
 from __future__ import annotations
 
 import os
-import stat
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -512,9 +511,9 @@ class ExperimentToml:
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(tomlkit.dumps(self.document))
-            # mkstemp creates the file 0600: keep the mode the toml already had, or give a new one
-            # the usual umask default, instead of making it private on the first save.
-            os.chmod(tmpname, _target_mode(target))
+            # mkstemp creates the file 0600: give it the umask default, as every other file of the
+            # experiment (group access for the support scientists), instead of making it private.
+            os.chmod(tmpname, _default_file_mode())
             os.replace(tmpname, target)
         except BaseException:
             Path(tmpname).unlink(missing_ok=True)
@@ -522,14 +521,11 @@ class ExperimentToml:
         self.path = target
 
 
-def _target_mode(target: Path) -> int:
-    """File mode for a rewritten toml: the existing file's, else 0666 minus the current umask."""
-    try:
-        return stat.S_IMODE(os.stat(target).st_mode)
-    except OSError:
-        umask = os.umask(0)
-        os.umask(umask)
-        return 0o666 & ~umask
+def _default_file_mode() -> int:
+    """Mode a newly created file gets: 0666 minus the current umask."""
+    umask = os.umask(0)
+    os.umask(umask)
+    return 0o666 & ~umask
 
 
 def load_toml(path: str | Path) -> ExperimentToml:

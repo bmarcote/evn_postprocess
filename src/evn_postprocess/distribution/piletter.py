@@ -32,7 +32,6 @@ import re
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.headerregistry import Address
-import os
 from importlib import resources
 from pathlib import Path
 
@@ -702,30 +701,20 @@ def _address(name: str, email: str) -> str:
         return f"{name} <{email}>"
 
 
-def _write(path: Path, content: str | bytes, private: bool = False) -> None:
+def _write(path: Path, content: str | bytes) -> None:
     """Writes *content*, keeping one backup of the previous version in '<path>.bak'.
 
     The letter is regenerated from the template every time (after the pipeline, and again
     before the delivery, so the latest dashboard comments are in it). Anything edited by hand
-    in the meantime would be lost, so the previous version is always kept next to it.
-
-    Args:
-        path: File to write.
-        content: Its content.
-        private: Readable by the owner only (0600), file and backup: for the letters that
-            carry the archive credentials.
+    in the meantime would be lost, so the previous version is always kept next to it. The files
+    get the same permissions as every other file of the experiment (the umask default).
     """
     data = content.encode() if isinstance(content, str) else content
-    targets = [path]
     if path.exists() and (previous := path.read_bytes()) != data:
         backup = path.with_suffix(path.suffix + '.bak')
         backup.write_bytes(previous)
-        targets.append(backup)
         logger.debug(f"Previous {path.name} kept as {backup.name}.")
     path.write_bytes(data)
-    if private:
-        for target in targets:
-            os.chmod(target, 0o600)
 
 
 def write_letter(exp: experiment.Experiment, with_credentials: bool | None = None) -> dict[str, Path]:
@@ -751,12 +740,11 @@ def write_letter(exp: experiment.Experiment, with_credentials: bool | None = Non
 
     _write(paths['text'], render_text(build(exp, with_credentials=False, with_recipients=False)))
     sent = build(exp, with_credentials=include)
-    # The letter that is sent carries the archive password when *include*: owner-only files.
-    _write(paths['html'], render_html(sent), private=include)
-    _write(paths['eml'], render_eml(sent), private=include)
+    _write(paths['html'], render_html(sent))
+    _write(paths['eml'], render_eml(sent))
     written = {'text': paths['text'], 'html': paths['html'], 'eml': paths['eml']}
     if include:
-        _write(paths['auth'], render_text(sent), private=True)
+        _write(paths['auth'], render_text(sent))
         written['auth'] = paths['auth']
     logger.info(f"PI letter written: {', '.join(str(p) for p in written.values())}.")
     return written

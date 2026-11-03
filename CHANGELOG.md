@@ -54,15 +54,15 @@ Fixed:
     - re-running from `initialize` (or `distribute` without archiving) no longer raises; batch mode
       pauses instead of opening `antab_editor.py`; the `REVIEW_REQUIRED` marker is removed on resume;
       a stored `--policy` is announced (new `--no-policy`); a refant from the toml/policy is honoured;
-    - experiment toml keeps its file mode on save; a single `[pi]` table can be extended; the
-      `computers.toml` default location is `~/.config/evn`;
+    - the experiment toml is saved with the default permissions (it was made 0600); a single `[pi]`
+      table can be extended; the `computers.toml` default location is `~/.config/evn`;
     - extra multi-phase-centre positions are classified as targets; continuum/line `.lis` pairs no
       longer reuse a FITS-IDI name;
     - Mattermost errors include the server's explanation; a failed full-text attachment is reported;
       replies are matched to the experiment (thread reply or naming it), so concurrent runs do not
       take each other's answers;
-    - PI letter: display names with commas are quoted; letters with the archive password are 0600;
-      a doubled `)` in the Markdown template; the distribution re-reads the toml before saving it;
+    - PI letter: display names with commas are quoted; a doubled `)` in the Markdown template; the
+      distribution re-reads the toml before saving it;
     - station files are recognised as `{exp}{ant}` by every retrieval backend (the 'none' backend never
       found them; the opacity remark never appeared); `make_lis` runs only after a successful `cd`;
     - `invert_subband`/`copy_pol` act on the right axis (and `invert_subband` no longer flips
