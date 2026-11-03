@@ -12,6 +12,7 @@ from pathlib import Path
 from loguru import logger
 
 from . import InputSet, RetrievalError, Retriever
+from .station_files import register_station_files
 from .. import experiment_state
 from ..inputs import find_local_vex
 from ..lisfiles import LAG_TAG
@@ -76,11 +77,13 @@ class NoneRetriever(Retriever):
             raise RetrievalError(
                 f"No .antabfs files found in {tempdir.resolve()}. Retrieval mode 'none' does "
                 f"not download station files: place the .antabfs (and .log) files there.")
+        # Station files are named {exp}{ant}.antabfs / .log (the old glob looked for {ant}*).
+        register_station_files(exp)
         for ant in exp.antennas.observed:
-            if not list(tempdir.glob(f"{ant.lower()}*.antabfs")):
+            if not exp.antennas[ant].antabfsfile:
                 logger.warning(f"No .antabfs file for station {ant} in {tempdir} "
                                f"(mode 'none': it will not be downloaded).")
-            if not list(tempdir.glob(f"{ant.lower()}*.log")):
+            if not exp.antennas[ant].logfsfile:
                 logger.warning(f"No .log file for station {ant} in {tempdir} "
                                f"(mode 'none': it will not be downloaded).")
         return True

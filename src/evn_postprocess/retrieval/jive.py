@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from rich import print as rprint
 from . import InputSet, RetrievalError, Retriever
+from .station_files import register_station_files
 from .. import experiment_state
 from .. import lisfiles
 from .. import utils
@@ -212,7 +213,7 @@ def create_lis_files(exp) -> bool:
     if not lis_files_in_ccs(exp, server):
         logger.info(f"Creating the .lis file(s) for {eEVNname} on {server.host}...")
         utils.ssh(f"{server.user}@{server.host}",
-                  f"cd {Path(str(server.path).format(expname=eEVNname))};"
+                  f"cd {Path(str(server.path).format(expname=eEVNname))} && "
                   f"/ccs/bin/make_lis -e {eEVNname}{_make_lis_filter(exp)}")
     return True
 
@@ -353,9 +354,9 @@ def fetch_from_vlbeer(exp, server) -> bool:
 
     Moved verbatim from the historical pipeline module (audit finding: vlbeer
     knowledge belongs to retrieval). Missing/timed-out file classes are warnings, not
-    errors (stations may legitimately lack them). Also flags which antennas have
+    errors (stations may legitimately lack them). Then flags which antennas have
     log/antabfs files and normalises the non-standard ',opacity_corrected' POLY tag
-    so antab_editor can parse the files.
+    (see retrieval.register_station_files).
 
     Already-downloaded files are never overwritten: the first run grabs everything in one
     scp, but on any later run only files that are not yet present locally are fetched (the
@@ -416,57 +417,7 @@ def fetch_from_vlbeer(exp, server) -> bool:
         for future in [executor.submit(fetch_file, a_file) for a_file in ('antabfs', 'log', 'flag')]:
             future.result()
 
-    for ext in ('antabfs', 'log'):
-        for a_file in list(exp.dirs.pipe_temp.glob(f"{exp.expname.lower()}*{ext}")):
-            ant = a_file.name.split('.')[0].replace(f"{exp.expname.lower()}", '').split('_')[0].capitalize()
-            try:
-                if ext == 'log':
-                    exp.antennas[ant].logfsfile = True
-                elif ext == 'antabfs':
-                    exp.antennas[ant].antabfsfile = True
-            except ValueError:
-                # Likely the antenna has a different name, or is an e-EVN antenna that
-                # participated in the run but not in this particular experiment.
-                rprint(f"[yellow]The antenna '{ant}' has a log file but is not part of "
-                       "this experiment. Just ignoring this and continuing...[/yellow]")
-
-    logger.debug(f"\n# Log files found for:\n# {', '.join(exp.antennas.logfsfile)}")
-    if len(set(exp.antennas.names) - set(exp.antennas.logfsfile)) > 0:
-        logger.debug("# Missing files for: "
-                     f"{', '.join((set(exp.antennas.names) - set(exp.antennas.logfsfile)).intersection(set(exp.antennas.observed)))}\n")
-    else:
-        logger.debug("# No missing log files for any station that observed.\n")
-
-    logger.debug(f"# Antab files found for:\n# {', '.join(exp.antennas.antabfsfile)}")
-    if len(set(exp.antennas.names) - set(exp.antennas.antabfsfile)) > 0:
-        logger.debug("# Missing files for: "
-                     f"{', '.join((set(exp.antennas.names) - set(exp.antennas.antabfsfile)).intersection(set(exp.antennas.observed)))}\n")
-    else:
-        logger.debug("# No missing antab files for any station that observed.\n")
-
-    # In case of high-freq observations, some stations added the "opacity_corrected"
-    # flag to the POLY= line, against any standard... Remove it so antab_editor (later)
-    # can work fine, keeping a comment line as the record.
-    for antabfs_file in exp.dirs.pipe_temp.glob(f"{exp.expname.lower()}*.antabfs"):
-        with open(antabfs_file, 'r') as f:
-            content = f.read()
-
-        if ',opacity_corrected' in content:
-            new_lines = []
-            for line in content.split('\n'):
-                if ',opacity_corrected' in line:
-                    new_lines.append(line.replace(',opacity_corrected', ''))
-                    new_lines.append('! opacity_corrected')
-                else:
-                    new_lines.append(line)
-
-            with open(antabfs_file, 'w') as f:
-                f.write('\n'.join(new_lines))
-
-            antenna = antabfs_file.name.split('.')[0].replace(f"{exp.expname.lower()}_", '').split('_')[0].capitalize()
-            if antenna in exp.antennas:
-                exp.antennas[antenna].opacity = True
-
+    register_station_files(exp)
     exp.store()
     return True
 

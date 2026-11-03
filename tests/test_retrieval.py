@@ -106,21 +106,33 @@ def test_none_fetch_lisfiles_always_fails(tmp_path):
 
 
 class ExpStub:
-    """Minimal experiment stand-in for fetch_station_files."""
+    """Minimal experiment stand-in for fetch_station_files (station files are {exp}{ant}.ext)."""
+    expname = 'EB101'
+
     def __init__(self, tempdir, observed):
         class Dirs:
             pipe_temp = tempdir
         self.dirs = Dirs()
-        class Ants:
-            pass
-        self.antennas = Ants()
-        self.antennas.observed = observed
+
+        class Ant:
+            logfsfile = antabfsfile = opacity = False
+
+        class Ants(dict):
+            @property
+            def observed(self):
+                return list(self)
+        self.antennas = Ants({name: Ant() for name in observed})
+
+    def store(self):
+        pass
 
 
 def test_none_station_files_present(tmp_path):
-    (tmp_path / 'ef.antabfs').touch()
-    (tmp_path / 'ef.log').touch()
-    assert NoneRetriever().fetch_station_files(ExpStub(tmp_path, ['Ef'])) is True
+    (tmp_path / 'eb101ef.antabfs').touch()
+    (tmp_path / 'eb101ef.log').touch()
+    exp = ExpStub(tmp_path, ['Ef'])
+    assert NoneRetriever().fetch_station_files(exp) is True
+    assert exp.antennas['Ef'].antabfsfile and exp.antennas['Ef'].logfsfile
 
 
 def test_none_station_files_all_missing(tmp_path):
@@ -130,7 +142,7 @@ def test_none_station_files_all_missing(tmp_path):
 
 
 def test_none_station_files_partially_missing_is_soft(tmp_path):
-    (tmp_path / 'ef.antabfs').touch()
+    (tmp_path / 'eb101ef.antabfs').touch()
     # Wb has nothing: warning only, not an error.
     assert NoneRetriever().fetch_station_files(ExpStub(tmp_path, ['Ef', 'Wb'])) is True
 
@@ -212,7 +224,10 @@ class _Ants:
     observed = []
 
     def __getitem__(self, key):
-        raise ValueError(key)   # unknown antenna -> caught by the marking loop
+        raise ValueError(key)
+
+    def __contains__(self, key):
+        return False            # unknown antenna -> skipped by the marking loop
 
 
 def _vlbeer_exp(pipe_temp):
