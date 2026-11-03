@@ -375,8 +375,12 @@ if __name__ == '__main__':
         # e.g. In case it is just a number
         args['config']['suffix'] = str(args['config']['suffix'])
 
+    suffix = args['config']['suffix']
     if isinstance(args['inputs']['idi_files'], str):
-        args['inputs']['idi_files'] = glob.glob(args['inputs']['idi_files'])
+        # The pattern ('<exp>_*_1.IDI*') also matches earlier outputs (<idi><suffix>, <idi><suffix>.ok):
+        # converting those would produce <idi><suffix><suffix> files and "does not exist" errors.
+        args['inputs']['idi_files'] = sorted(f for f in glob.glob(args['inputs']['idi_files'])
+                                             if not (suffix and suffix in Path(f).name))
         # Only checks the integrity of the existance of the files if it will compute the solutions
         assert len(args['inputs']['idi_files']) > 0 or not args['options']['to_apply'], \
                "Could not find any FITS-IDI file associated to 'idi_files' that will get the conversion applied."
@@ -388,7 +392,7 @@ if __name__ == '__main__':
 
     if ('*' in args['inputs']['ref_idi']) or ('?' in args['inputs']['ref_idi']):
         args['inputs']['ref_idi'] = find_idi.find_idi_with_time(idi_files= \
-                sorted(glob.glob(args['inputs']['ref_idi'])),
+                sorted(f for f in glob.glob(args['inputs']['ref_idi']) if not (suffix and suffix in Path(f).name)),
                 aipstime=args['options']['time_range'][:4], verbose=False)
         if args['inputs']['ref_idi'] is None:
             raise ValueError("The introduced time range has not been found in the selected FITS-IDI files")

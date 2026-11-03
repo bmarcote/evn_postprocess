@@ -102,16 +102,33 @@ _POLCONVERT_CHANAVGS: tuple[int, ...] = (8, 16, 32)
 _POLCONVERT_MAX_ATTEMPTS: int = 150
 
 
+def _remove_partial_outputs(paths: list[Path]) -> None:
+    """Removes the outputs a failed or interrupted run left behind (files or MS directories).
+
+    Only called for outputs that did not exist before that run, so nothing pre-existing is lost.
+
+    Args:
+        paths: Files or directories to remove; missing ones are ignored.
+    """
+    for path in paths:
+        path = Path(path)
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.exists():
+            path.unlink(missing_ok=True)
+        else:
+            continue
+        logger.warning(f"Removed the partial output {path} left by the failed run.")
+
+
 def archive(exp: experiment.Experiment) -> bool:
     """Runs the archive command for all -auth, -stnd, -fits,...
     """
-    # Compress all figures from standardplots if they haven't been yet
+    # Compress the standard plots not compressed yet. gzip -f replaces a plot's own older .gz
+    # (without -f gzip stops to ask, which looked like a freeze); the .ps.gz of plots that have
+    # no new .ps are kept (they used to be deleted all at once, losing those plots).
     if len(glob.glob("*.ps")) > 0:
-        # This avoids issues as it seems like gzip freezes when overwriting the same files
-        if len(glob.glob("*.ps.gz")) > 0:
-            utils.shell_command("rm -rf", "*ps.gz", shell=True)
-
-        utils.shell_command("gzip", "*ps", shell=True)
+        utils.shell_command("gzip", ["-f", "*.ps"], shell=True)
 
     if exp.credentials is not None:
         utils.shell_command("archive.pl", ["-auth", "-e", f"{exp.expname}_{exp.obsdate.strftime('%y%m%d')}",
@@ -250,9 +267,15 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                 if not exp.eEVNname:
                     j2ms2_args.append("fo:nosquash_source_table")
 
-                utils.shell_command("j2ms2", j2ms2_args, shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0,
-                                    logfile=exp.dirs.logs / "j2ms2.log",
-                                    line_prefix=f"[{a_pass.lisfile.stem}] " if show_bar else '')
+                try:
+                    utils.shell_command("j2ms2", j2ms2_args, shell=True, stdout=None, stderr=subprocess.STDOUT,
+                                        bufsize=0, logfile=exp.dirs.logs / "j2ms2.log",
+                                        line_prefix=f"[{a_pass.lisfile.stem}] " if show_bar else '')
+                except BaseException:
+                    # The MS did not exist before (checked above): whatever j2ms2 left is partial,
+                    # and a re-run would otherwise accept it as done.
+                    _remove_partial_outputs([a_pass.msfile])
+                    raise
                 return True
             except Exception as e:
                 logger.opt(exception=True).error(f"Error running j2ms2 for "
@@ -307,6 +330,7 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                         logger.info(f"Created lag-space MS: {lag_ms}")
                     except Exception as e:
                         logger.warning(f"Lag-space MS creation failed (non-fatal): {e}")
+                        _remove_partial_outputs([lag_ms])
 
         return all(ms_results)
     except Exception as e:
@@ -483,10 +507,11 @@ def get_metadata_from_ms(exp: experiment.Experiment) -> bool:
     # exp.scans holds every scheduled (VEX) scan while a pass holds only the correlated
     # ones, so the two lists are matched by scan number, never by position: as soon as the
     # correlation does not start at the first scheduled scan they are offset from each other.
+    # Every scan is (re)set, so a value left by an older run (e.g. from the old positional
+    # matching) cannot survive for a scan that has no data now: that one gets an empty tuple.
     observed_by_scan = experiment.stations_observed_by_scan(exp.correlator_passes)
     for exp_scan in exp.scans:
-        if exp_scan.scanno in observed_by_scan:
-            exp_scan.stations_observed = tuple(sorted(observed_by_scan[exp_scan.scanno]))
+        exp_scan.stations_observed = tuple(sorted(observed_by_scan.get(exp_scan.scanno, ())))
 
     # Antennas scheduled (from VEX) but absent from every MS get observed=False.
     for ant_name in exp.antennas.names:
@@ -583,6 +608,27 @@ def _derive_pol_diagnostics(ff_amp_sum: dict[int, np.ndarray], ff_amp_cnt: dict[
                                   'ratio': round(ratio, 3) if ratio is not None else None,
                                   'snr': snr, 'decision': decision}
     return diag
+
+
+def _merge_by_vex_scan(per_ms_scan: dict[tuple[int, int], np.ndarray], scan_map: dict[int, int],
+                       combine) -> dict[tuple[int, int], np.ndarray]:
+    """Re-keys (MS scan, antenna) arrays by (VEX scan, antenna), combining MS scans of one VEX scan.
+
+    Args:
+        per_ms_scan: (MS scan number, antenna index) -> array.
+        scan_map: MS scan number -> VEX scan number; MS scans not in it are dropped.
+        combine: Element-wise combination of two arrays of the same VEX scan (e.g. np.maximum).
+
+    Returns:
+        (VEX scan number, antenna index) -> combined array.
+    """
+    merged: dict[tuple[int, int], np.ndarray] = {}
+    for (scan, aidx), values in per_ms_scan.items():
+        if (vex_no := scan_map.get(scan)) is None:
+            continue
+        key = (vex_no, aidx)
+        merged[key] = combine(merged[key], values) if key in merged else values
+    return merged
 
 
 def compute_lag_snr(exp: experiment.Experiment) -> bool:
@@ -737,14 +783,8 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
         logger.warning(f"Lag MS scans with no matching VEX scan are left out of the SNR table: {unmatched}")
 
     # Convert to nested dict: {vex_scan_str: {ant_name: {pol: snr}}}
-    best_vex_snr: dict[tuple[int, int], np.ndarray] = {}
-    for (scan, aidx), snr_arr in best_snr.items():
-        if (vex_no := scan_map.get(scan)) is None:
-            continue
-        key = (vex_no, aidx)
-        best_vex_snr[key] = np.maximum(best_vex_snr[key], snr_arr) if key in best_vex_snr else snr_arr
     lag_snr: dict[str, dict[str, dict[str, float]]] = {}
-    for (vex_no, aidx), snr_arr in best_vex_snr.items():
+    for (vex_no, aidx), snr_arr in _merge_by_vex_scan(best_snr, scan_map, np.maximum).items():
         lag_snr.setdefault(str(vex_no), {})[ant_names[aidx]] = \
             {p: round(float(snr_arr[i]), 1) for i, p in enumerate(pol_labels)}
 
@@ -766,14 +806,8 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
             if np.isnan(cur) or par > cur:        # keep the strongest baseline per IF
                 bp_amp[ant_key][ddid] = par
 
-    bp_vex_amp: dict[tuple[int, int], np.ndarray] = {}
-    for (scan, aidx), amps in bp_amp.items():
-        if (vex_no := scan_map.get(scan)) is None:
-            continue
-        key = (vex_no, aidx)
-        bp_vex_amp[key] = np.fmax(bp_vex_amp[key], amps) if key in bp_vex_amp else amps
     lag_bandpass: dict[str, dict[str, list]] = {}
-    for (vex_no, aidx), amps in bp_vex_amp.items():
+    for (vex_no, aidx), amps in _merge_by_vex_scan(bp_amp, scan_map, np.fmax).items():
         # None (not NaN) for IFs without data, so the result stays valid JSON.
         lag_bandpass.setdefault(str(vex_no), {})[ant_names[aidx]] = \
             [round(float(x), 5) if np.isfinite(x) else None for x in amps]
@@ -1310,10 +1344,16 @@ def tconvert(exp: experiment.Experiment) -> bool:
         # in the debug log either way.
         logger.log('DEBUG' if show_bar else 'INFO',
                    f"tConvert: {a_pass.lisfile.name} -> {a_pass.fitsidifile}*")
-        utils.shell_command(_TCONVERT_BIN, ["-v", a_pass.lisfile.name, "-o", chunk_arg],
-                            stdout=None, stderr=subprocess.STDOUT,
-                            logfile=exp.dirs.logs / "tconvert.log", echo=echo,
-                            line_prefix=f"[{a_pass.lisfile.stem}] " if show_bar else '')
+        try:
+            utils.shell_command(_TCONVERT_BIN, ["-v", a_pass.lisfile.name, "-o", chunk_arg],
+                                stdout=None, stderr=subprocess.STDOUT,
+                                logfile=exp.dirs.logs / "tconvert.log", echo=echo,
+                                line_prefix=f"[{a_pass.lisfile.stem}] " if show_bar else '')
+        except BaseException:
+            # The pass had no FITS-IDI before (that is why it is converting): any file it left
+            # is partial, and a re-run would otherwise skip the pass as already converted.
+            _remove_partial_outputs([Path(f) for f in glob.glob(f"{a_pass.fitsidifile}*")])
+            raise
 
     if show_bar:
         logger.info(f"Converting {len(passes)} correlator passes at once; their output stays "
@@ -2077,11 +2117,17 @@ def polconvert(exp: experiment.Experiment) -> bool:
     return False
 
 
+# How far (s) outside a VEX scan an MS scan mid time may fall and still be matched to it. Covers
+# the short gaps MS scans can straddle (importfitsidi re-indexes scans at gaps > 8 s).
+_SCAN_MATCH_TOLERANCE_S = 15.0
+
+
 def _match_scans_by_time(midtimes: dict[int, datetime], exp_scans) -> dict[int, int]:
     """Maps MS scan numbers to VEX scan numbers from the MS scan mid times.
 
-    Each MS scan is matched to the scheduled scan that was running at its mid time. Pure
-    function (no I/O), shared by every place that needs MS -> VEX scan numbers.
+    Each MS scan is matched to the scheduled scan that was running at its mid time, or else to
+    the nearest one within ``_SCAN_MATCH_TOLERANCE_S``. Pure function (no I/O), shared by every
+    place that needs MS -> VEX scan numbers.
 
     Args:
         midtimes: MS scan number -> naive UTC datetime halfway through that scan's data.
@@ -2101,6 +2147,13 @@ def _match_scans_by_time(midtimes: dict[int, datetime], exp_scans) -> dict[int, 
             if start <= midtime <= end:
                 vex_scans[ms_scan] = scanno
                 break
+        else:
+            # Mid time in the gap between two scans (e.g. two back-to-back VEX scans merged into one
+            # MS scan): the nearest scan, if it is within a few seconds.
+            distances = [(max((start - midtime).total_seconds(), (midtime - end).total_seconds()), scanno)
+                         for start, end, scanno in windows]
+            if distances and (nearest := min(distances))[0] <= _SCAN_MATCH_TOLERANCE_S:
+                vex_scans[ms_scan] = nearest[1]
     return vex_scans
 
 
@@ -2235,7 +2288,9 @@ def polconvert_verification_plots(exp: experiment.Experiment, pconv_ms: str, cal
     """
     pconv_base = plotting.mk_basenm(pconv_ms)
     std_base = pconv_base.replace('-pconv', '')
-    for leftover in glob.glob(f"{pconv_base}-cross-scan*.ps"):
+    # Leftovers of an earlier run under the PolConverted-MS names: the .ps and any PNG made from them.
+    for leftover in [*glob.glob(f"{pconv_base}-cross-scan*.ps"),
+                     *exp.dirs.plots.glob(f"{Path(pconv_base).name}-cross-scan*.png")]:
         Path(leftover).unlink()
 
     plotter = plotting.Jplot(ms=pconv_ms, refant=exp.refant[0], calsrc=','.join(calsources))

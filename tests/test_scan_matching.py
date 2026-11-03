@@ -81,3 +81,24 @@ def test_map_falls_back_when_no_ms_scan_matches_in_time(monkeypatch):
     """E.g. VEX scans with wrong times or duration 0: an empty time map must not empty the scan list."""
     monkeypatch.setattr(process.plotting, 'scan_midtimes', lambda ms: {10: T0 + timedelta(days=3)})
     assert process._ms_to_vex_scan_map(SimpleNamespace(scans=VEX), "x.ms", [10]) == {10: 10}
+
+
+def test_merged_back_to_back_scan_in_the_gap_goes_to_the_nearest():
+    """A merged MS scan whose mid time falls in the 1-min gap between VEX 10 (ends 2:00) and 11 (starts 3:00)."""
+    midtimes = {1: T0 + timedelta(minutes=2, seconds=10), 2: T0 + timedelta(minutes=2, seconds=30)}
+    assert process._match_scans_by_time(midtimes, VEX) == {1: 10}  # 10 s from scan 10; 30 s is too far
+
+
+def test_failed_tconvert_removes_the_partial_fitsidi(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "logs").mkdir()
+    a_pass = SimpleNamespace(lisfile=Path("e.lis"), fitsidifile="e_1_1.IDI")
+    exp = SimpleNamespace(correlator_passes=[a_pass], dirs=SimpleNamespace(logs=tmp_path / "logs"))
+    monkeypatch.setattr(process, '_tconvert_chunk_arg', lambda p: 'chunk_size=8GB')
+
+    def crash(*args, **kwargs):
+        Path("e_1_1.IDI1").write_text("half")
+        raise ValueError("tConvert exited with code 1")
+    monkeypatch.setattr(process.utils, 'shell_command', crash)
+    assert process.tconvert(exp) is False
+    assert not Path("e_1_1.IDI1").exists()  # a re-run must convert the pass again, not skip it
