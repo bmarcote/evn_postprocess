@@ -211,12 +211,13 @@ def copy_pol(msfile: str | Path, antenna: str, polfrom: str):
         print(f"[green]\n{msfile} modified correctly.[/green]")
 
 
-def scale1bit(msfile: str | Path, antenna: str | list[str], undo: bool = False, scale_weights: bool = True):
+def scale1bit(msfile: str | Path, antenna: str | list[str], undo: bool = False, scale_weights: bool = False):
     """Scales 1-bit data to correct for quantization losses.
     
     When one or both antennas in a baseline use 1-bit sampling, the data needs to be scaled
     to correct for quantization losses. The scaling factor depends on whether one or both
-    antennas use 1-bit sampling.
+    antennas use 1-bit sampling. Port of scripts/scale1bit.py: only cross-correlations are
+    scaled, and only DATA unless *scale_weights* is set (the script's -w option).
     
     Args:
         msfile (str | Path): Path to the Measurement Set file.

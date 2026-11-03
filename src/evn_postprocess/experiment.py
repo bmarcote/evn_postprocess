@@ -662,6 +662,13 @@ class Experiment:
         # resulting polswap / polconvert findings. Empty until the lag analysis runs. See
         # process.compute_lag_snr / workflow.msops for how it is produced and consumed.
         self.pol_diagnostics: dict = pol_diagnostics if pol_diagnostics else {}
+        # In-place, non-idempotent MS operations already applied (polswap, 1-bit scaling), so a
+        # re-run of msops never applies them twice. Keyed by MS file name:
+        # {ms_name: {'inode': <inode of the MS directory>, 'ops': ['polswap:Wb', 'onebit:Kn']}}.
+        # The inode identifies that MS: a re-created MS (fresh j2ms2) has another one, and its
+        # stale record is ignored. Nothing is written into the MS itself. See
+        # process.applied_ms_operations / process.record_ms_operation.
+        self.applied_msops: dict[str, dict] = {}
         # When True, the auxiliary lag-space MS is not created and no lag SNR is computed
         # (set via the --no-lag CLI option). The per-scan antenna data check then only reports
         # whether an antenna has data in each scan, without the lag signal-to-noise comparison.
@@ -943,6 +950,7 @@ class Experiment:
                 'lag_snr': self.lag_snr,
                 'lag_bandpass': self.lag_bandpass,
                 'pol_diagnostics': self.pol_diagnostics,
+                'applied_msops': self.applied_msops,
                 'mode': self.mode.value if self.mode is not None else None}
 
     @classmethod
@@ -963,6 +971,7 @@ class Experiment:
 
         exp.no_lag = data.get('no_lag', False)
         exp.pol_diagnostics = data.get('pol_diagnostics', {})
+        exp.applied_msops = data.get('applied_msops', {})
         if data.get('_timerange'):
             exp._timerange = [dt.datetime.fromisoformat(t) for t in data['_timerange']]
 

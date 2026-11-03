@@ -339,8 +339,8 @@ class TestPolswapCheck:
                             lambda ms, ant, start=None, end=None: applied.append((ant, start, end)))
         monkeypatch.setattr(experiment.Experiment, 'store', lambda self: None)
         recorded: list[str] = []
-        monkeypatch.setattr(process.mstools.misc, 'applied_operations', lambda ms: list(recorded))
-        monkeypatch.setattr(process.mstools.misc, 'record_operation', lambda ms, entry: recorded.append(entry))
+        monkeypatch.setattr(process, 'applied_ms_operations', lambda exp, ms: list(recorded))
+        monkeypatch.setattr(process, 'record_ms_operation', lambda exp, ms, entry: recorded.append(entry))
         assert process.polswap(exp) is True
         assert applied == [('Wb', None, exp.scans[3].starttime)]
         assert recorded == ['polswap:Wb']
@@ -354,8 +354,8 @@ class TestPolswapCheck:
         applied = []
         monkeypatch.setattr(process.mstools, 'polswap', lambda ms, ant, start=None, end=None: applied.append(ant))
         monkeypatch.setattr(experiment.Experiment, 'store', lambda self: None)
-        monkeypatch.setattr(process.mstools.misc, 'applied_operations', lambda ms: ['polswap:Wb'])
-        monkeypatch.setattr(process.mstools.misc, 'record_operation', lambda ms, entry: None)
+        monkeypatch.setattr(process, 'applied_ms_operations', lambda exp, ms: ['polswap:Wb'])
+        monkeypatch.setattr(process, 'record_ms_operation', lambda exp, ms, entry: None)
         assert process.polswap(exp) is True
         assert applied == []
 

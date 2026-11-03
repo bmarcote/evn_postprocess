@@ -26,7 +26,10 @@ Fixed:
   - Resuming a delivered experiment re-ran everything from `standardplots`, since `distribute` gzips the
     `*.ps` files; `*.ps.gz` now count as standard plots.
   - Re-running `msops` swapped a polswapped antenna back and scaled 1-bit data twice. Both are recorded
-    in the MS (`EVNPP_APPLIED_OPS` keyword) and not applied again.
+    per MS in the experiment JSON (`applied_msops`, keyed with the MS inode so a re-created MS starts
+    clean; nothing is written into the MS) and not applied again.
+  - 1-bit scaling scaled WEIGHT by default (contradicting its docstring). `mstools.scale1bit` now behaves
+    like `scripts/scale1bit.py`: only DATA, WEIGHT only with `scale_weights=True` / `-w`.
   - `standardplots2` never re-made the plots after the MS operations (it skipped because `*.ps` existed).
   - PolConvert: a failed `--apply` worker left an unconverted copy under the `.PCONVERT` name, which was
     accepted and delivered, and a re-run after a partial apply accepted the partial set. Converted files

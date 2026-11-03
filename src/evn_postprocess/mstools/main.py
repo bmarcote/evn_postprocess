@@ -51,8 +51,8 @@ def create_parser():
     scale1bit_parser.add_argument('msfile', type=str, help='MS file to process')
     scale1bit_parser.add_argument('antenna', type=str, nargs='+', help='Antenna name(s)')
     scale1bit_parser.add_argument('--undo', action='store_true', help='Undo the scaling')
-    scale1bit_parser.add_argument('--no-scale-weights', action='store_false', dest='scale_weights',
-                                  help='Do not scale weights')
+    scale1bit_parser.add_argument('-w', '--scale-weights', action='store_true', dest='scale_weights',
+                                  help='Also scale the weights (by default only DATA is scaled)')
     
     invertsubband_parser = run_subparsers.add_parser('invert_subband', help='Invert frequency subbands for antenna',
                                                      formatter_class=RichHelpFormatter)

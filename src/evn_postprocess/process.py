@@ -922,6 +922,55 @@ def open_pipeline_dashboard(exp, on_ready: Optional[Callable[[str, str], None]] 
     return True
 
 
+_APPLIED_MSOPS_LOCK = threading.Lock()
+
+
+def _ms_inode(msfile) -> int | None:
+    """Inode of the MS directory (identifies that MS until it is re-created), or None if absent."""
+    try:
+        return os.stat(msfile).st_ino
+    except OSError:
+        return None
+
+
+def applied_ms_operations(exp: experiment.Experiment, msfile) -> list[str]:
+    """In-place operations recorded in the experiment state as already applied to *msfile*.
+
+    A record made for another MS of the same name (re-created since, so another inode) is
+    ignored. See ``Experiment.applied_msops``.
+
+    Args:
+        exp: Experiment object.
+        msfile: Path to the Measurement Set.
+
+    Returns:
+        Entries like 'polswap:Wb' or 'onebit:Kn,Sr'; empty if none apply to this MS.
+    """
+    record = exp.applied_msops.get(Path(msfile).name)
+    if not record or record.get('inode') != _ms_inode(msfile):
+        return []
+    return list(record.get('ops', []))
+
+
+def record_ms_operation(exp: experiment.Experiment, msfile, entry: str) -> None:
+    """Records *entry* as applied to *msfile* in the experiment state and stores it right away.
+
+    Stored immediately so a crash later in msops cannot lose the record of a change that is
+    already in the MS.
+
+    Args:
+        exp: Experiment object.
+        msfile: Path to the Measurement Set.
+        entry: Operation and its argument, e.g. 'polswap:Wb'.
+    """
+    with _APPLIED_MSOPS_LOCK:  # called from the per-pass worker threads; store() is not thread-safe
+        ops = applied_ms_operations(exp, msfile)
+        if entry not in ops:
+            ops.append(entry)
+        exp.applied_msops[Path(msfile).name] = {'inode': _ms_inode(msfile), 'ops': ops}
+        exp.store()
+
+
 def onebit(exp: experiment.Experiment) -> bool:
     """In case some stations recorded at 1 bit, scales 1-bit data to correct for
     quantization losses in all MS associated with the given experiment name.
@@ -935,22 +984,22 @@ def onebit(exp: experiment.Experiment) -> bool:
     # Sanity check
     if len(exp.antennas.onebit) > 0:
         # The scaling multiplies the data: a second run would scale it twice. The set of 1-bit
-        # stations is recorded in each MS; the factor of a baseline depends on both of its
+        # stations is recorded per MS in the experiment state; the factor of a baseline depends on both of its
         # stations, so a different set on an already scaled MS needs a manual undo first.
         entry = f"onebit:{','.join(sorted(exp.antennas.onebit))}"
 
         def _onebit_pass(a_pass) -> bool:
-            done = [op for op in mstools.misc.applied_operations(a_pass.msfile) if op.startswith('onebit:')]
+            done = [op for op in applied_ms_operations(exp, a_pass.msfile) if op.startswith('onebit:')]
             if entry in done:
                 logger.info(f"1-bit scaling ({entry}) already applied to {a_pass.msfile}; not scaling again.")
                 return True
             if done:
                 logger.error(f"{a_pass.msfile} was already scaled for {done[0]} but now {entry} is requested. "
                              "Re-create the MS (j2ms2), or undo the previous scaling (mstools scale1bit --undo "
-                             f"with the same stations) and remove the {mstools.misc.APPLIED_OPS_KEYWORD} keyword.")
+                             "with the same stations) and remove its entry from 'applied_msops' in the experiment JSON.")
                 return False
             mstools.scale1bit(a_pass.msfile, exp.antennas.onebit)
-            mstools.misc.record_operation(a_pass.msfile, entry)
+            record_ms_operation(exp, a_pass.msfile, entry)
             return True
 
         with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
@@ -1104,14 +1153,15 @@ def polswap(exp: experiment.Experiment) -> bool:
 
     def _polswap_pass(a_pass):
         # A polswap is its own inverse: applying it twice (a re-run of msops after a later
-        # operation failed) would swap the antenna back. Each swap is recorded in the MS.
-        done = mstools.misc.applied_operations(a_pass.msfile)
+        # operation failed) would swap the antenna back. Each swap is recorded in the
+        # experiment state (see applied_ms_operations).
+        done = applied_ms_operations(exp, a_pass.msfile)
         for antenna in exp.antennas.polswap:
             if f"polswap:{antenna}" in done:
                 logger.info(f"polswap {antenna} already applied to {a_pass.msfile}; not swapping it again.")
                 continue
             mstools.polswap(a_pass.msfile, antenna, *polswap_range(exp, antenna))
-            mstools.misc.record_operation(a_pass.msfile, f"polswap:{antenna}")
+            record_ms_operation(exp, a_pass.msfile, f"polswap:{antenna}")
 
     with ThreadPoolExecutor(utils.pass_workers(len(exp.correlator_passes))) as executor:
         for fut in [executor.submit(_polswap_pass, a_pass) for a_pass in exp.correlator_passes]:
