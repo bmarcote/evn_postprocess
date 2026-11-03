@@ -335,10 +335,24 @@ class TestApplyIsJudgedByItsOutputFiles:
         def fake_run(cmd, **kwargs):
             for idi in idis:
                 Path(idi + '.PCONVERT').write_text('converted')
+                Path(idi + '.PCONVERT.ok').touch()     # polconvert.py marks each converted file
             return _FakeProc(-6)                       # aborts on the way out, as it always does
 
         monkeypatch.setattr(process.subprocess, "run", fake_run)
         assert process._polconvert_apply(Path("in.toml"), idis) is True
+
+    def test_failure_when_an_output_has_no_ok_marker(self, tmp_path, monkeypatch):
+        """A .PCONVERT without its .ok marker is an unconverted copy left by a failed worker."""
+        idis = [str(tmp_path / f"ez041a_1_1.IDI{n}") for n in (1, 2)]
+
+        def fake_run(cmd, **kwargs):
+            for idi in idis:
+                Path(idi + '.PCONVERT').write_text('copy')
+            Path(idis[0] + '.PCONVERT.ok').touch()
+            return _FakeProc(0)
+
+        monkeypatch.setattr(process.subprocess, "run", fake_run)
+        assert process._polconvert_apply(Path("in.toml"), idis) is False
 
     def test_failure_when_a_file_is_left_unconverted(self, tmp_path, monkeypatch):
         idis = [str(tmp_path / f"ez041a_1_1.IDI{n}") for n in (1, 2)]

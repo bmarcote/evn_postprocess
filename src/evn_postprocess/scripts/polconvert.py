@@ -10,6 +10,7 @@ Written by Benito Marcote (marcote@jive.eu)
 
 import os
 import re
+import sys
 import glob
 import shutil
 import argparse
@@ -28,6 +29,10 @@ except ModuleNotFoundError:
 
 
 __version__ = '2.2'
+
+# Written next to each <idi><suffix> once PolConvert converted that file successfully. A converted
+# file without it is incomplete (PolConvert copies the input first and converts in place).
+OK_MARKER_SUFFIX = '.ok'
 
 
 def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exclude_baselines, do_ifs,
@@ -153,6 +158,9 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
             an_idi_path = Path(an_idi + suffix)
             if an_idi_path.exists() and (suffix != ''):
                 an_idi_path.unlink()
+            Path(an_idi + suffix + OK_MARKER_SUFFIX).unlink(missing_ok=True)
+
+        failed: list[str] = []
 
         try:
             with futures.ProcessPoolExecutor(max_workers=8) as executor:
@@ -166,11 +174,20 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
 
                 # Without reading the results, a child that died (or raised) would leave its
                 # FITS-IDI unconverted while this program still reported success.
+                # PolConvert creates OUTPUTIDI by copying the input before converting it, so a
+                # failed worker leaves an unconverted copy under the converted name: it is removed,
+                # and only a file whose worker succeeded gets its OK marker.
                 for worker in futures.as_completed(workers):
+                    an_idi = workers[worker]
                     try:
                         worker.result()
                     except Exception as apply_error:
-                        print(f"ERROR: PolConvert failed on {workers[worker]}: {apply_error}")
+                        print(f"ERROR: PolConvert failed on {an_idi}: {apply_error}")
+                        failed.append(an_idi)
+                        if suffix != '':
+                            Path(an_idi + suffix).unlink(missing_ok=True)
+                    else:
+                        Path(an_idi + suffix + OK_MARKER_SUFFIX).touch()
         finally:
             # Move all created output files (but the IDIs) into the expected log folder
             for a_path in _TEMP_FILES:
@@ -189,6 +206,10 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
         print_fringe_snr_table(logdir)
     except Exception as summary_error:
         print(f"Warning: could not build the fringe-SNR summary table ({summary_error}).")
+
+    if to_apply and failed:
+        print(f"ERROR: PolConvert failed on {len(failed)} FITS-IDI file(s): {', '.join(sorted(failed))}.")
+        sys.exit(1)
 
 
 # Polarizations reported in the FRINGE.PEAKS files, in the order they should appear in the table.

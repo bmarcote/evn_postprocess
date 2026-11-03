@@ -1803,6 +1803,25 @@ def _poll_pconvert_progress(idi_files: list[str], advance: Callable[[], None],
         counted = done
 
 
+def _unconverted_idi_files(idi_files: list[str]) -> list[str]:
+    """The FITS-IDI files that do not have a complete PolConverted counterpart.
+
+    Complete means ``<idi>.PCONVERT`` exists together with the ``<idi>.PCONVERT.ok`` marker that
+    ``polconvert.py --apply`` writes only once that file was converted successfully. PolConvert
+    copies the input before converting it, so the ``.PCONVERT`` file alone may be an unconverted
+    copy left by a failed or killed run.
+
+    Args:
+        idi_files: The FITS-IDI files that must be converted.
+
+    Returns:
+        The files (from *idi_files*, same order) still lacking a complete conversion.
+    """
+    from .scripts.polconvert import OK_MARKER_SUFFIX
+    return [f for f in idi_files
+            if not (Path(f + '.PCONVERT').exists() and Path(f + '.PCONVERT' + OK_MARKER_SUFFIX).exists())]
+
+
 def _polconvert_apply(template_file: Path, idi_files: list[str]) -> bool:
     """Apply an accepted solution to every FITS-IDI file, judged by the files it produces.
 
@@ -1817,7 +1836,8 @@ def _polconvert_apply(template_file: Path, idi_files: list[str]) -> bool:
         idi_files: The FITS-IDI files that must come out converted.
 
     Returns:
-        True once every file has its ``.PCONVERT`` counterpart, False if some never appear.
+        True once every file has a complete ``.PCONVERT`` counterpart (see
+        :func:`_unconverted_idi_files`), False if some never do.
     """
     show_bar = utils.show_pass_progress(len(idi_files))
     for attempt in range(1, _POLCONVERT_RETRIES + 2):
@@ -1835,7 +1855,7 @@ def _polconvert_apply(template_file: Path, idi_files: list[str]) -> bool:
                 stop.set()
                 if show_bar:
                     poller.join()
-        missing = [f for f in idi_files if not Path(f + '.PCONVERT').exists()]
+        missing = _unconverted_idi_files(idi_files)
         if not missing:
             return True
         logger.warning(f"PolConvert did not convert {len(missing)} of {len(idi_files)} FITS-IDI "
@@ -1896,9 +1916,13 @@ def polconvert(exp: experiment.Experiment) -> bool:
         logger.info("PolConvert is not required.")
         return True
 
-    if len(glob.glob('*IDI*.PCONVERT')) > 0:
-        logger.info("PolConvert output files already exist. Skipping.")
+    idi_files = sorted(f for f in glob.glob(f"{exp.expname.lower()}_*_1.IDI*") if '.PCONVERT' not in f)
+    if idi_files and not _unconverted_idi_files(idi_files):
+        logger.info("PolConvert output files already exist for every FITS-IDI file. Skipping.")
         return True
+    if glob.glob('*IDI*.PCONVERT'):
+        logger.warning("Some PolConvert output files are missing or incomplete (no .ok marker): "
+                       "PolConvert runs again on every FITS-IDI file.")
 
     lin_ants = [a for a in exp.antennas.polconvert]
     subbands = set().union(*(set(exp.antennas[p].subbands) for p in lin_ants))
@@ -1907,7 +1931,6 @@ def polconvert(exp: experiment.Experiment) -> bool:
         return False
     do_ifs = [i + 1 for i in sorted(subbands)]
 
-    idi_files = sorted(glob.glob(f"{exp.expname.lower()}_*_1.IDI*"))
     if not idi_files:
         logger.error("No FITS-IDI files found for PolConvert.")
         return False
@@ -2256,20 +2279,33 @@ def post_post_polconvert(exp: experiment.Experiment) -> bool:
         return True
 
     cwd = Path.cwd()
+    originals = sorted(str(p.name) for p in cwd.glob('*.IDI*') if '.PCONVERT' not in p.name)
+    if incomplete := _unconverted_idi_files([f for f in originals if (cwd / f"{f}.PCONVERT").exists()]):
+        logger.error(f"PolConvert outputs without their .ok marker (incomplete conversion): "
+                     f"{', '.join(incomplete)}. Re-run the polconvert step; nothing was renamed.")
+        return False
+    if unconverted := [f for f in originals if not (cwd / f"{f}.PCONVERT").exists()]:
+        logger.error(f"No PolConvert output for {', '.join(unconverted)}. Re-run the polconvert step; "
+                     "nothing was renamed.")
+        return False
+
     idi_ori = cwd / 'idi_ori'
     idi_ori.mkdir(exist_ok=True)
 
-    # Copy original FITS-IDI files to idi_ori/
-    for an_idi in cwd.glob('*.IDI*'):
-        if '.PCONVERT' not in an_idi.name:
-            shutil.copy2(str(an_idi), str(idi_ori / an_idi.name))
+    # Copy original FITS-IDI files to idi_ori/. An existing backup is never overwritten: on a
+    # re-run the files in place may already be converted ones.
+    for name in originals:
+        if not (idi_ori / name).exists():
+            shutil.copy2(str(cwd / name), str(idi_ori / name))
 
     logger.info(f"Copied original IDI files to {idi_ori}")
 
-    # Rename PCONVERT files to standard IDI names
+    # Rename PCONVERT files to standard IDI names, and drop their completion markers
+    from .scripts.polconvert import OK_MARKER_SUFFIX
     pconverted_idi = list(cwd.glob('*IDI*.PCONVERT'))
     for an_idi in pconverted_idi:
         an_idi.rename(cwd / an_idi.name.replace('.PCONVERT', ''))
+        Path(f"{an_idi}{OK_MARKER_SUFFIX}").unlink(missing_ok=True)
 
     logger.info(f"Renamed {len(pconverted_idi)} PCONVERT files to standard names")
     return True
