@@ -20,6 +20,25 @@ Added:
     files are kept, and a run with a `.flag` file but no `.log` files no longer aborts.
 
 Fixed:
+  - Resuming after the default pause at `postpipe` deleted all of `pipeline/out`: the staleness check
+    compared it with every file in `pipeline/in`, including the `tasav.txt` that `postpipe` writes later.
+    Only `*.inp.txt`, `*.antab` and `*.uvflg` count as pipeline inputs now.
+  - Resuming a delivered experiment re-ran everything from `standardplots`, since `distribute` gzips the
+    `*.ps` files; `*.ps.gz` now count as standard plots.
+  - Re-running `msops` swapped a polswapped antenna back and scaled 1-bit data twice. Both are recorded
+    in the MS (`EVNPP_APPLIED_OPS` keyword) and not applied again.
+  - `standardplots2` never re-made the plots after the MS operations (it skipped because `*.ps` existed).
+  - PolConvert: a failed `--apply` worker left an unconverted copy under the `.PCONVERT` name, which was
+    accepted and delivered, and a re-run after a partial apply accepted the partial set. Converted files
+    now carry a `.PCONVERT.ok` marker that every check requires; `idi_ori/` backups are never overwritten.
+  - e-EVN antab: `antab_editor.py` got the sibling directories after `-p 1`, which it rejects; spectral-line
+    runs were never detected (the `.lis` glob ran inside `antenna_files`).
+  - Hobart mount fix: the antenna is looked up as `Ho` too; only Ho (not Hb) triggers it.
+  - Dashboard: source-type changes now reach the correlator passes (and so the pipeline input), and
+    dashboard edits are merged into the stored JSON instead of overwriting newer progress.
+  - Dashboard plot filter: choosing scan 1 no longer also shows scans 10-19, 100+.
+  - The pipeline input gets the whole prioritised `refant` list (FRING SEARCH antennas), not only the first.
+  - `postprocess exec <task>` exits non-zero when the task fails.
   - The `.flag` fallback for `.uvflg` never matched anything: it searched for `antenna='EF'` while vlbeer
     writes `ant_name='Ef'`, so stations without `.log` (e.g. Cm/Da/Kn/Pi in ER057B) got no a-priori
     flagging at all. Both forms are now matched case-insensitively, and the lines are written with the

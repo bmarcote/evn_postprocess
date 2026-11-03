@@ -406,7 +406,9 @@ def create_input_file(exp) -> bool:
             '{expname}': exp.expname.lower() if len(pipepasses) == 1 else f"{exp.expname.lower()}_{i}",
             '{userno}': subprocess.run(['aips_userno.py', exp.supsci.lower()], 
                                        capture_output=True, text=True).stdout.strip() or '100',
-            '{refant}': exp.refant[0] if len(exp.refant) > 0 else '',
+            # The full prioritised list: EVN.py uses refant[0] and passes the rest to FRING as
+            # SEARCH antennas, so scans without the first one still get fringe solutions.
+            '{refant}': ', '.join(exp.refant),
             '{plotref}': exp.refant[0],
             '{bpass}': ', '.join(_select_bandpass_sources(apass.sources)),
             '{dophaseref}': '' if apass.sources.calibrator else '#',

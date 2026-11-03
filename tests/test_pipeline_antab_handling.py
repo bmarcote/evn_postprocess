@@ -386,6 +386,28 @@ class TestPipelineAntabFileEdgeCases:
                 content = input_file.read_text()
                 assert "100" in content  # Default userno
     
+    def test_refant_writes_the_whole_prioritised_list(self):
+        """EVN.py reads refant as a comma-separated list and gives FRING the rest as SEARCH antennas."""
+        mock_pass = Mock(spec=experiment.CorrelatorPass)
+        mock_pass.pipeline = True
+        mock_pass.sources = Mock()
+        mock_pass.sources.fringefinder = ["source1"]
+        mock_pass.sources.target = ["target1"]
+        mock_pass.sources.calibrator = []
+        mock_pass.sources.calibrator_for_target = Mock(return_value=None)
+        self.mock_exp.correlator_passes = [mock_pass]
+        self.mock_exp.refant = ["Ef", "O8", "Mc"]
+        (self.pipe_temp_dir / "testexp.antab").write_text("x")
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value.stdout = ""
+            with patch('evn_postprocess.pipeline.resources.files') as mock_resources:
+                mock_resources.return_value.joinpath.return_value.read_text.return_value = "refant = {refant}\n"
+                assert pipeline.create_input_file(self.mock_exp) is True
+
+        inp = next(self.pipe_in_dir.glob("*.inp.txt")).read_text()
+        assert "refant = Ef, O8, Mc" in inp
+
     def test_empty_correlator_passes_should_handle_gracefully(self):
         """Test behavior with empty correlator passes list."""
         self.mock_exp.correlator_passes = []
