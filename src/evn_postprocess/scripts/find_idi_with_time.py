@@ -34,6 +34,30 @@ def get_timerange_in_ididata(datafits):
     return starttime, mjd2date(jd2mjd(datafits['DATE'][-1] + datafits['TIME'][-1]))
 
 
+def get_reference_date(uvdata_hdu):
+    """Returns the date that AIPS times (day number) are counted from: the observation start date.
+
+    It is the DATE-OBS keyword of the UV_DATA table, which the correlator writes with the same
+    value in every FITS-IDI file of an experiment. The DATE column cannot be used for this: each
+    file has its own reference date (files starting after midnight refer to the next day), so
+    counting from it would shift every time after midnight by one day in those files.
+    It falls back to the date of the first record if DATE-OBS is missing.
+
+    Input
+    -----
+    uvdata_hdu : astropy.io.fits.BinTableHDU
+        The UV_DATA table of a FITS-IDI file.
+
+    Output
+    ------
+    refdate : datetime.date
+    """
+    if (date_obs := uvdata_hdu.header.get('DATE-OBS')):
+        return dt.date.fromisoformat(str(date_obs).strip()[:10])
+
+    return get_timerange_in_ididata(uvdata_hdu.data)[0].date()
+
+
 
 
 def find_idi_with_time(idi_files, datetime=None, aipstime=None, verbose=True):
@@ -47,6 +71,7 @@ def find_idi_with_time(idi_files, datetime=None, aipstime=None, verbose=True):
         Date and time (in UT) to search for in the FITS-IDI files.
     aipstime : list (optional, but either datetime or time must be provided)
         Time to search for in the FITS-IDI files, in a AIPS time format (list with D, H, M, S).
+        The day is counted from the observation start date (see get_reference_date).
     verbose : bool (default: True)
         Print messages.
 
@@ -60,11 +85,14 @@ def find_idi_with_time(idi_files, datetime=None, aipstime=None, verbose=True):
     for idi_file in idi_files:
         if verbose:
             print('Opening {} file'.format(idi_file))
-        inittime, endtime = get_timerange_in_ididata(fits.open(idi_file)['UV_DATA'].data)
+        with fits.open(idi_file, mode='readonly') as hdul:
+            inittime, endtime = get_timerange_in_ididata(hdul['UV_DATA'].data)
+            refdate = get_reference_date(hdul['UV_DATA'])
+
         if datetime is not None:
             the_time = datetime
         elif aipstime is not None:
-            the_time = dt.datetime.combine(inittime.date() + dt.timedelta(days=aipstime[0]),
+            the_time = dt.datetime.combine(refdate + dt.timedelta(days=aipstime[0]),
                                            dt.time(*aipstime[1:]))
         else:
             raise Exception('Either datetime or time must be provided')
@@ -90,7 +118,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     the_idi_files = sys.argv[1:-1]
-    if (len(the_idi_files) == 1) and ('*' in the_idi_files[0] or '?' in the_idi_files[1]):
+    if (len(the_idi_files) == 1) and ('*' in the_idi_files[0] or '?' in the_idi_files[0]):
         the_idi_files = glob.glob(the_idi_files[0])
     the_time = dt.datetime.strptime(sys.argv[-1], '%Y/%m/%d/%H:%M')
     find_idi_with_time(the_idi_files, the_time, verbose=True)

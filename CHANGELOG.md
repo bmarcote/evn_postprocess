@@ -12,6 +12,13 @@ Changed:
     `find_idi_with_time`, `uvflgall.sh` (and the `uvflg.pl` it calls) and `ampcal.sh` (and its
     `ampcal-db.py`). `tools.script_path()` locates them. `scripts/feedback.pl` no longer carries
     unresolved merge-conflict markers nor a hardcoded path into `evn_support`.
+  - `checklis.py`, `getdata.pl` and `aips_userno.py` are now shipped in `evn_postprocess/scripts` (copied
+    from `evn_support`) and run from there, as is `perlmod/`, which `scripts/ampcalstats.pl` needs.
+  - `polconvert.py` passes `use_rates`/`use_delays` from `polconvert_inputs.toml` to PolConvert
+    (`useRates`/`useDelays`) when computing the solutions; they were written to the file but ignored.
+    Note that the template sets both to `true`.
+  - `gscale2avg.py` is the `evn_support` version (writes `<file>-avg`, `-o/--output`, `-s/--silent`).
+  - `idi2ms.py` runs `importfitsidi` from `casatasks` directly instead of a `casa` session.
 
 Added:
   - `.uvflg` creation now falls back to the a-priori `{exp}.flag` file (downloaded with the antenna files)
@@ -20,6 +27,10 @@ Added:
     files are kept, and a run with a `.flag` file but no `.log` files no longer aborts.
 
 Fixed:
+  - `find_idi_with_time` counted the AIPS day from each FITS-IDI file's own first date, so a time after
+    midnight was never found in a file that starts after midnight (e.g. `polconvert.py` raising "The
+    introduced time range has not been found", and the automatic PolConvert search skipping every scan
+    after midnight). It counts from the observation date (UV_DATA `DATE-OBS`) now.
   - Resuming after the default pause at `postpipe` deleted all of `pipeline/out`: the staleness check
     compared it with every file in `pipeline/in`, including the `tasav.txt` that `postpipe` writes later.
     Only `*.inp.txt`, `*.antab` and `*.uvflg` count as pipeline inputs now.

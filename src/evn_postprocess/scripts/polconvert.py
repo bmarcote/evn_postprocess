@@ -37,7 +37,7 @@ OK_MARKER_SUFFIX = '.ok'
 
 def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exclude_baselines, do_ifs,
          time_range, chan_avg=1, time_avg=20, solve_weight=0.0, solve_amp=True, to_compute=True, to_apply=True,
-         suffix='.PCONVERT', logdir='polconvert_logs'):
+         suffix='.PCONVERT', logdir='polconvert_logs', use_rates=False, use_delays=False):
     """Runs PolConvert on the given project.
     Inputs:
         - ref_idi : str
@@ -74,6 +74,10 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
             If empty, it will overwrite the original files (not recommended).
         - logdir : str  [default = 'polconvert_logs']
             Specifies the folder that will be created to keep the log files from this run.
+        - use_rates : bool  [default = False]
+            Fit the fringe rates (PolConvert's useRates) when computing the solutions.
+        - use_delays : bool  [default = False]
+            Fit the multiband delays (PolConvert's useDelays) when computing the solutions.
     """
     # Doing it here to avoid the slow importing and stdout messages before checking the inputs
     from PolConvert import polconvert_standalone as pconv
@@ -117,7 +121,7 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
                                      solveMethod='COBYLA', excludeAnts=exclude_antennas,
                                      excludeBaselines=exclude_baselines, doIF=do_ifs, plotIF=do_ifs, doTest=True,
                                      saveArgs=True, plotRange=time_range, Range=time_range, solveAmp=solve_amp,
-                                     XYadd=XYadd, XYratio=XYratio)
+                                     XYadd=XYadd, XYratio=XYratio, useRates=use_rates, useDelays=use_delays)
 
             with open(path / 'polconvert.gains', 'wb') as gain_file:
                 pk.dump(gains, gain_file)
@@ -131,7 +135,8 @@ def main(ref_idi, idi_files, linear_antennas, ref_antenna, exclude_antennas, exc
                                  plotAnt=ref_antenna, doSolve=-1, solint=[chan_avg, time_avg], solveMethod='COBYLA',
                                  excludeAnts=exclude_antennas, excludeBaselines=exclude_baselines,
                                  doIF=do_ifs, plotIF=do_ifs, doTest=True, plotRange=time_range,
-                                 Range=time_range, solveAmp=solve_amp, XYadd=XYadd, XYratio=XYratio)
+                                 Range=time_range, solveAmp=solve_amp, XYadd=XYadd, XYratio=XYratio,
+                                 useRates=use_rates, useDelays=use_delays)
         finally:
             # Move all created output files (but the IDIs) into the expected log folder
             for a_path in _TEMP_FILES:
@@ -359,6 +364,9 @@ if __name__ == '__main__':
            "The parameter 'to_compute' must be either 'true' or 'false'."
     assert isinstance(args['options']['to_apply'], bool), \
             "The parameter 'to_apply' must be either 'true' or 'false'."
+    for akey in ('use_rates', 'use_delays'):
+        assert isinstance(args['options'].get(akey, False), bool), \
+               f"The parameter '{akey}' must be either 'true' or 'false'."
     assert isinstance(args['options']['solve_amp'], bool), \
             "The parameter 'solve_amp' must be either 'true' or 'false'."
     times = args['options']['time_range']
@@ -419,4 +427,5 @@ if __name__ == '__main__':
          chan_avg=args['options']['chanavg'], time_avg=args['options']['timeavg'],
          solve_weight=args['options']['solve_weight'], solve_amp=args['options']['solve_amp'],
          to_compute=args['options']['to_compute'], to_apply=args['options']['to_apply'],
-         suffix=args['config']['suffix'], logdir=args['config']['logdir'])
+         suffix=args['config']['suffix'], logdir=args['config']['logdir'],
+         use_rates=args['options'].get('use_rates', False), use_delays=args['options'].get('use_delays', False))

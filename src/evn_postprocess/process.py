@@ -178,7 +178,7 @@ def getdata(exp: experiment.Experiment) -> bool:
                 # multi-phase-centre run, and a screen of red reads like a failed step. Genuine
                 # errors (perl die messages, "Could not open ...", scp failures) match none of
                 # these and stay red.
-                utils.shell_command("getdata.pl", cmd_args, shell=True,
+                utils.shell_command(shlex.quote(str(tools.script_path("getdata.pl"))), cmd_args, shell=True,
                                     stdout=None, stderr=subprocess.STDOUT, bufsize=0,
                                     stderr_warn_re=_GETDATA_WARN_RE,
                                     logfile=exp.dirs.logs / "getdata.log",

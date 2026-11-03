@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import glob
+import shlex
 import textwrap
 from pathlib import Path
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from rich.console import Console
 from rich.panel import Panel
-from . import experiment, reporting, utils
+from . import experiment, reporting, tools, utils
 from . import process  # cycle: process imports this module; both only use each other at call time
 
 
@@ -344,13 +345,14 @@ def _check_single_lisfile(a_pass: experiment.CorrelatorPass) -> tuple[str, str, 
         that cannot run at all is reported as an 'other' issue, so it is never silently
         ignored.
     """
-    # checklis.py (external, /home/jops/opt/evn_support) uses non-raw regex strings that
+    # checklis.py (the copy shipped in evn_postprocess/scripts) uses non-raw regex strings that
     # emit noisy SyntaxWarnings on Python >= 3.12. The script still works (the sequences are
-    # interpreted literally), and we cannot edit it, so silence the warning for this call.
+    # interpreted literally), so silence the warning for this call.
     # echo=False: the passes run in parallel, so a live echo would interleave the outputs of
     # all of them; every output is printed verbatim right after, one block per .lis file.
     try:
-        output = utils.shell_command("PYTHONWARNINGS=ignore::SyntaxWarning checklis.py",
+        output = utils.shell_command("PYTHONWARNINGS=ignore::SyntaxWarning "
+                                     f"{shlex.quote(str(tools.script_path('checklis.py')))}",
                                      a_pass.lisfile.name, shell=True, echo=False)
     except Exception as e:
         logger.error(f"checklis.py could not be run on {a_pass.lisfile.name}: {e}")

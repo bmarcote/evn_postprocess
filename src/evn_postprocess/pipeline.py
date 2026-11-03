@@ -7,6 +7,7 @@ perform required changes in intermediate files.
 import os
 import re
 import shlex
+import sys
 import glob
 import shutil
 import subprocess
@@ -440,8 +441,9 @@ def _aips_userno(supsci: str) -> str:
         The user number as a string; '100' (with a warning) if the helper is missing or prints nothing.
     """
     try:
-        userno = subprocess.run(['aips_userno.py', supsci.lower()], capture_output=True, text=True).stdout.strip()
-    except OSError as exc:
+        userno = subprocess.run([sys.executable, str(tools.script_path('aips_userno.py')), supsci.lower()],
+                                capture_output=True, text=True).stdout.strip()
+    except (OSError, tools.ToolMissingError) as exc:
         logger.warning(f"Could not run aips_userno.py ({exc}); using AIPS user number 100.")
         return '100'
     return userno or '100'

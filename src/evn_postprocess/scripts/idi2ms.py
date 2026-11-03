@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import glob
 import argparse
-import subprocess
 import shutil
+import sys
 from pathlib import Path
 
 
@@ -25,26 +25,19 @@ def main(args):
     if len(fitsidis) == 0:
         raise FileNotFoundError(f"No FITS IDI files with name '{args.idifiles}' have been found.")
 
-    # print(f"msfile: {msfile}")
-    # print(f"args.idifiles: {args.idifiles}")
-    # print(f"fitsidis: {fitsidis}")
-    casascript = f"idi2ms-{msfile.name.replace('.ms', '')}.py"
-    # fitsidis = [f'{f}' for f in fitsidis]
-    with open(casascript, mode='w') as tfile:
-        tfile.write(f"importfitsidi(vis='{str(msfile)}', fitsidifile={fitsidis}, " \
-                    "constobsid=True, scanreindexgap_s=8.0, specframe='GEO')")
+    # Imported here so the argument checks above do not wait for (or print) the CASA start-up.
+    from casatasks import importfitsidi
 
-    process = subprocess.Popen(["/home/jops/bin/casa-5.7", "--nogui", "--nologger", "-c", casascript], stdout=None,
-                               stderr=subprocess.STDOUT)
-
-    while process.poll() is None:
-        pass
+    importfitsidi(vis=str(msfile), fitsidifile=fitsidis, constobsid=True, scanreindexgap_s=8.0,
+                  specframe='GEO')
+    if not msfile.exists():
+        raise RuntimeError(f"importfitsidi did not create {msfile} (check the casa log).")
 
 
 if __name__ == '__main__':
     usage = "%(prog)s [-h] [--delete]  <msfile>  <idifiles>"
     description = """Converts a set of FITS IDI files into a single MS file by using the 'importfitsidi()'
-    function from CASA, with the standard parameters expected for EVN data.
+    task from casatasks, with the standard parameters expected for EVN data.
 
     Arguments:
       - msfile : str
@@ -67,17 +60,7 @@ if __name__ == '__main__':
 
     try:
         main(args)
-    except FileExistsError as e:
+    except (FileExistsError, FileNotFoundError, RuntimeError) as e:
         print('\n\n\n########### ERROR')
-        print(f"FileExistsError: {e}")
-
-
-
-
-
-
-
-
-
-
-
+        print(f"{type(e).__name__}: {e}")
+        sys.exit(1)
