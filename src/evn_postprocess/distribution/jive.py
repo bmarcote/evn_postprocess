@@ -91,8 +91,13 @@ class JiveDistributor(Distributor):
 
     @staticmethod
     def _exp_toml(exp):
-        """Returns the experiment toml attached to *exp*, loading it if needed."""
-        return experiment_state.attached_toml(exp)
+        """Returns the experiment toml attached to *exp*, re-read from disk.
+
+        Both callers save it afterwards. The dashboard (another process, or the paused
+        workflow) may have saved the file since it was first loaded (e.g. the station
+        comments); saving the stale in-memory copy would wipe those edits.
+        """
+        return experiment_state.attached_toml(exp, fresh=True)
 
     def _apply_source_protection(self, exp) -> bool:
         """Reads the JIVE .jex file and sets PI/co-I contacts and per-source protection.

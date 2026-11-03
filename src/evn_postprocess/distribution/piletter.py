@@ -31,6 +31,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from email.message import EmailMessage
+from email.headerregistry import Address
+import os
 from importlib import resources
 from pathlib import Path
 
@@ -431,7 +433,7 @@ def build(exp: experiment.Experiment, with_credentials: bool = True,
     pis = [pi for pi in exp.pi if pi.email]
     obsdate = exp.obsdate.strftime('%d %B %Y') if exp.obsdate else 'an unknown date'
     replacements = {
-        '{to}': ', '.join(f"{pi.name} <{pi.email}>" for pi in pis) if with_recipients else '',
+        '{to}': ', '.join(_address(pi.name, pi.email) for pi in pis) if with_recipients else '',
         '{cc}': 'jops@jive.eu' if with_recipients else '',
         '{subject}': f"EVN experiment {exp.expname.upper()} available on the EVN Archive",
         '{piname}': ' and '.join(pi.name for pi in exp.pi if pi.name) or 'PI',
@@ -689,19 +691,41 @@ def letter_paths(exp: experiment.Experiment) -> dict[str, Path]:
             'html': Path(f"{stem}.piletter.html"), 'eml': Path(f"{stem}.piletter.eml")}
 
 
-def _write(path: Path, content: str | bytes) -> None:
+def _address(name: str, email: str) -> str:
+    """'Name <email>', with the name quoted when it needs it ('Smith, J.' unquoted reads as two
+    addresses); non-ASCII names stay readable. Falls back to the plain form for an address the
+    email library cannot parse."""
+    try:
+        return str(Address(display_name=name or '', addr_spec=email))
+    except (ValueError, IndexError) as exc:
+        logger.warning(f"Unusual PI address {email!r} ({exc}); written as given.")
+        return f"{name} <{email}>"
+
+
+def _write(path: Path, content: str | bytes, private: bool = False) -> None:
     """Writes *content*, keeping one backup of the previous version in '<path>.bak'.
 
     The letter is regenerated from the template every time (after the pipeline, and again
     before the delivery, so the latest dashboard comments are in it). Anything edited by hand
     in the meantime would be lost, so the previous version is always kept next to it.
+
+    Args:
+        path: File to write.
+        content: Its content.
+        private: Readable by the owner only (0600), file and backup: for the letters that
+            carry the archive credentials.
     """
     data = content.encode() if isinstance(content, str) else content
+    targets = [path]
     if path.exists() and (previous := path.read_bytes()) != data:
         backup = path.with_suffix(path.suffix + '.bak')
         backup.write_bytes(previous)
+        targets.append(backup)
         logger.debug(f"Previous {path.name} kept as {backup.name}.")
     path.write_bytes(data)
+    if private:
+        for target in targets:
+            os.chmod(target, 0o600)
 
 
 def write_letter(exp: experiment.Experiment, with_credentials: bool | None = None) -> dict[str, Path]:
@@ -727,11 +751,12 @@ def write_letter(exp: experiment.Experiment, with_credentials: bool | None = Non
 
     _write(paths['text'], render_text(build(exp, with_credentials=False, with_recipients=False)))
     sent = build(exp, with_credentials=include)
-    _write(paths['html'], render_html(sent))
-    _write(paths['eml'], render_eml(sent))
+    # The letter that is sent carries the archive password when *include*: owner-only files.
+    _write(paths['html'], render_html(sent), private=include)
+    _write(paths['eml'], render_eml(sent), private=include)
     written = {'text': paths['text'], 'html': paths['html'], 'eml': paths['eml']}
     if include:
-        _write(paths['auth'], render_text(sent))
+        _write(paths['auth'], render_text(sent), private=True)
         written['auth'] = paths['auth']
     logger.info(f"PI letter written: {', '.join(str(p) for p in written.values())}.")
     return written

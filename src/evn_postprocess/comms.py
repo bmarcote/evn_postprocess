@@ -226,11 +226,14 @@ class Notifier(abc.ABC):
         """
         ...
 
-    def wait_for_reply(self, timeout_seconds: int = 3600) -> str | None:
+    def wait_for_reply(self, timeout_seconds: int = 3600, tag: str | None = None) -> str | None:
         """Wait for a reply from the user.
 
         Args:
             timeout_seconds: Maximum time to wait.
+            tag: When given, a reply must be in the thread of the message just sent, or name
+                *tag* (e.g. the experiment), so concurrent runs sharing a channel do not take
+                each other's replies.
 
         Returns:
             Reply text, or None if unsupported / timed out.
@@ -309,6 +312,7 @@ class MattermostNotifier(Notifier):
         self._my_user_id: str | None = None
         self._channel_id: str = config.mm_channel_id
         self._last_post_ts: int = 0
+        self._last_post_id: str = ''
 
     # -- low-level helpers --------------------------------------------------
 
@@ -327,8 +331,11 @@ class MattermostNotifier(Notifier):
         headers = {"Authorization": f"Bearer {self.config.mm_token}", "Content-Type": "application/json"}
         body = json.dumps(data).encode() if data else None
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read())
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            raise _with_error_body(exc) from exc
 
     def _ensure_channel(self) -> None:
         """Create (or retrieve) a direct-message channel with the target user.
@@ -376,8 +383,11 @@ class MattermostNotifier(Notifier):
             "Content-Type": f"multipart/form-data; boundary={boundary}",
         }
         req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            result = json.loads(resp.read())
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            raise _with_error_body(exc) from exc
 
         return result["file_infos"][0]["id"]
 
@@ -413,12 +423,19 @@ class MattermostNotifier(Notifier):
                 files.append(overflow)
 
             file_ids: list[str] = []
+            full_text_missing = False
             for path in files:
                 if path.exists():
                     try:
                         file_ids.append(self._upload_file(path))
                     except Exception as exc:
                         logger.warning(f"Failed to upload {path.name}: {exc}")
+                        full_text_missing |= (path.name == _FULL_MESSAGE_NAME and full_text is not None)
+            if full_text_missing:
+                # The shortened post says the rest is attached: it is not, so say so in the post too.
+                message += (f"\n\n**The attachment {_FULL_MESSAGE_NAME} with the full text could not be "
+                            f"uploaded**; the complete message is in the post-processing log.")
+                logger.info(f"The full text of '{subject}':\n{full_text}")
 
             post_data: dict = {"channel_id": self._channel_id, "message": message}
             if file_ids:
@@ -426,6 +443,10 @@ class MattermostNotifier(Notifier):
 
             result = self._api("POST", "/posts", post_data)
             self._last_post_ts = result.get("create_at", int(time.time() * 1000))
+            self._last_post_id = result.get("id", "")
+            if full_text_missing:
+                logger.error(f"Mattermost message '{subject}' sent without its full-text attachment.")
+                return False
             logger.info(f"Mattermost message sent: {subject}")
             return True
         except Exception as exc:
@@ -442,14 +463,17 @@ class MattermostNotifier(Notifier):
         """Mattermost supports receiving replies."""
         return True
 
-    def wait_for_reply(self, timeout_seconds: int = 3600) -> str | None:
+    def wait_for_reply(self, timeout_seconds: int = 3600, tag: str | None = None) -> str | None:
         """Poll the DM channel for a new message from the target user.
 
         Only messages created *after* the last ``send_message`` call are
-        considered.  Messages posted by the bot itself are ignored.
+        considered.  Messages posted by the bot itself are ignored. With *tag*, only a
+        reply in the thread of that message, or a message naming *tag*, is taken: the
+        channel is shared by every experiment notifying the same person.
 
         Args:
             timeout_seconds: Maximum seconds to wait before giving up.
+            tag: Text a top-level reply must contain (case-insensitive), e.g. the experiment.
 
         Returns:
             The reply text, or None on timeout / error.
@@ -469,6 +493,9 @@ class MattermostNotifier(Notifier):
                         continue
                     seen.add(pid)
                     if post.get("user_id") != self._my_user_id and post.get("message", "").strip():
+                        if not _reply_is_for(post, self._last_post_id, tag):
+                            logger.debug(f"Ignoring a Mattermost message not addressed to {tag}.")
+                            continue
                         logger.info(f"Received Mattermost reply: {post['message'][:100]}…")
                         return post["message"]
             except Exception as exc:
@@ -478,6 +505,30 @@ class MattermostNotifier(Notifier):
 
         logger.info("Mattermost reply timeout reached.")
         return None
+
+
+def _with_error_body(exc: urllib.error.HTTPError) -> urllib.error.HTTPError:
+    """The same HTTPError with the server's response body in its message.
+
+    Mattermost explains a refusal in the body (e.g. a 400 for a DM to a user who shares no team
+    with the bot, or a post above MaxPostSize); without it the log only says 'Bad Request'.
+    """
+    try:
+        detail = exc.read().decode('utf-8', errors='replace').strip()
+    except Exception:
+        detail = ''
+    return urllib.error.HTTPError(exc.url, exc.code, f"{exc.reason}: {detail[:500]}" if detail else exc.reason,
+                                  exc.headers, None)
+
+
+def _reply_is_for(post: dict, root_post_id: str, tag: str | None) -> bool:
+    """True if a Mattermost *post* answers this run: any post without *tag*; with it, a reply in
+    the thread of *root_post_id*, or a top-level post that names *tag* (case-insensitive)."""
+    if tag is None:
+        return True
+    if root_post_id and post.get("root_id") == root_post_id:
+        return True
+    return not post.get("root_id") and tag.lower() in post.get("message", "").lower()
 
 
 def recipient_for(config: CommsConfig, supsci: str) -> str:
@@ -617,7 +668,8 @@ def collect_plot_files(exp) -> list[Path]:
 
 _MSOPS_REPLY_TEMPLATE = (
     "\n\n---\n"
-    "**Please reply with the following information (one per line):**\n"
+    "**Please reply in this message's thread (or name {expname} in your message) with the "
+    "following information (one per line):**\n"
     "```\n"
     "weight_threshold: 0.85\n"
     "polswap: Wb, Jb\n"
@@ -742,7 +794,7 @@ def notify_dashboard_review(exp, notifier: Notifier) -> dict | None:
     situation = ("The standard plots are ready and the MS operations have to be decided "
                  "before the pipeline can run.\n\n" + build_summary_text(exp))
     if notifier.supports_interactive():
-        needed = _MSOPS_REPLY_TEMPLATE.format(antennas=", ".join(exp.antennas.names)).strip()
+        needed = _MSOPS_REPLY_TEMPLATE.format(antennas=", ".join(exp.antennas.names), expname=exp.expname).strip()
     else:
         needed = (f"Log in to the server and open the dashboard "
                   f"(`postprocess -e {exp.expname} info --serve` in {Path.cwd()}) to review "
@@ -753,7 +805,7 @@ def notify_dashboard_review(exp, notifier: Notifier) -> dict | None:
         return None
 
     if notifier.supports_interactive():
-        reply = notifier.wait_for_reply(timeout_seconds=86400)  # 24 h
+        reply = notifier.wait_for_reply(timeout_seconds=86400, tag=exp.expname)  # 24 h
         if reply:
             feedback = parse_msops_reply(reply, exp)
             if feedback:
