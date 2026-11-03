@@ -810,6 +810,31 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             raise RuntimeError("_DashboardHandler.exp is not set; serve_dashboard() must run first.")
         return self.__class__.exp
 
+    def _apply_and_store(self, edit) -> None:
+        """Applies one edit to the served experiment and to its stored JSON, without overwriting
+        anything else in that JSON.
+
+        The dashboard may run as its own process (``postprocess dashboard`` / ``info --serve``)
+        while a ``postprocess run`` advances in another terminal, so its in-memory experiment
+        can be older than the JSON on disk: storing it whole would roll back that run's
+        progress. The edit is therefore applied to a fresh load of the JSON, which is stored,
+        and also to the in-memory object (which an in-process run keeps using and storing).
+        If the JSON cannot be read, the in-memory object is stored as before.
+
+        Args:
+            edit: Callable taking an Experiment and modifying it in place.
+        """
+        exp = self._experiment()
+        edit(exp)
+        try:
+            on_disk = experiment.Experiment.load(path=exp._local_copy)
+        except (FileNotFoundError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+            logger.warning(f"Could not re-read the stored experiment ({exc}); storing the dashboard copy.")
+            exp.store()
+            return
+        edit(on_disk)
+        on_disk.store(path=exp._local_copy)
+
     def _exp_toml(self):
         """Returns the experiment toml of the served experiment, loading it if needed."""
         return experiment_state.attached_toml(self._experiment())
@@ -904,13 +929,13 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         source_type_cls = type(target_src.type)  # the SourceType enum class
         try:
-            target_src.type = source_type_cls[new_type_name]
+            new_type = source_type_cls[new_type_name]
         except KeyError:
             valid = [e.name for e in source_type_cls]
             self._serve_json({"ok": False, "error": f"Invalid type '{new_type_name}'. Valid: {valid}"})
             return
 
-        exp.store()
+        self._apply_and_store(lambda e: experiment.set_source_type(e, [src_name], new_type))
         self.__class__.experiment_summary = _build_experiment_summary(exp)
         logger.info(f"Source '{src_name}' type changed to '{new_type_name}' and stored.")
         self._serve_json({"ok": True})
@@ -933,9 +958,11 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._serve_json({"ok": False, "error": f"Antenna '{new_ref}' not in this experiment"})
             return
 
-        # Put the chosen antenna first, keeping the rest of the previous list as fallback.
-        exp.refant = [new_ref] + [r for r in exp.refant if r != new_ref]
-        exp.store()
+        def _set_refant(e: experiment.Experiment) -> None:
+            # Put the chosen antenna first, keeping the rest of the previous list as fallback.
+            e.refant = [new_ref] + [r for r in e.refant if r != new_ref]
+
+        self._apply_and_store(_set_refant)
         self.__class__.experiment_summary = _build_experiment_summary(exp)
         logger.info(f"Reference antenna set to '{new_ref}' (refant order: {', '.join(exp.refant)}) and stored.")
         self._serve_json({"ok": True})

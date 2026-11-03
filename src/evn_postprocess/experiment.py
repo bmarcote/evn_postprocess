@@ -549,6 +549,25 @@ class CorrelatorPass:
                    freqsetup=Subbands.from_dict(data['freqsetup']) if data.get('freqsetup') else None)
 
 
+def set_source_type(exp: 'Experiment', names: list[str], src_type: 'SourceType') -> None:
+    """Sets the type of the named sources in the experiment and in every correlator pass.
+
+    The per-pass source lists are separate Source objects (they are what the pipeline input
+    file is built from), so changing only ``exp.sources`` would not reach the pipeline.
+
+    Args:
+        exp: Experiment to modify in place.
+        names: Source names (must exist in ``exp.sources``).
+        src_type: The new SourceType.
+    """
+    for name in names:
+        exp.sources[name].type = src_type
+    for a_pass in exp.correlator_passes or []:
+        for name in names:
+            if a_pass.sources and name in a_pass.sources.names:
+                a_pass.sources[name].type = src_type
+
+
 def stations_observed_by_scan(correlator_passes: list[CorrelatorPass] | None) -> dict[str, set[str]]:
     """Returns the stations with data in each correlated scan, across all correlator passes.
 

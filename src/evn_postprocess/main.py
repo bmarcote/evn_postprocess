@@ -145,14 +145,7 @@ def _handle_edit(exp: experiment.Experiment, field: str, values: list[str]):
         _fail(f"Unknown source{'s' if len(unknown) > 1 else ''}: {', '.join(unknown)}.",
               f"Available sources: {', '.join(exp.sources.names)}")
 
-    for src_name in values:
-        exp.sources[src_name].type = src_type
-
-    # The per-pass source lists are separate objects: propagate the change to them too.
-    for a_pass in exp.correlator_passes:
-        for src_name in values:
-            if a_pass.sources and src_name in a_pass.sources.names:
-                a_pass.sources[src_name].type = src_type
+    experiment.set_source_type(exp, values, src_type)
 
 
 def _build_parser() -> argparse.ArgumentParser:
