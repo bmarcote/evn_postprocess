@@ -19,7 +19,6 @@ from rich import print as rprint
 from . import experiment
 from . import utils
 from . import tools
-from . import lisfiles
 from . import comment_tasav
 from . import feedback
 
@@ -107,12 +106,12 @@ def run_antab_editor(exp) -> bool:
 
         assoc_args = ["-a", *other_exps] if other_exps else []
         assoc_paths = [f"../../{e}/" for e in other_exps]
-        base_cmd = ["antab_editor.py", "-e", exp.expname.lower(), *assoc_args, "-f", ".."]
-
-        if '_line' in ''.join(lisfiles._pass_lisfiles(f"{exp.expname.lower()}*.lis")):
-            cmd = [*base_cmd, "-l", *assoc_paths]
-        else:
-            cmd = [*base_cmd, "-p", "1", *assoc_paths]
+        # -f takes every FITS-IDI directory (this experiment's, '..', and its e-EVN siblings), so
+        # it must come last: -p is nargs='+' of ints and would otherwise swallow the sibling paths.
+        # The spectral-line check uses the correlator passes: the .lis files are in the
+        # experiment folder, not in antenna_files where this runs.
+        pass_args = ["-l"] if exp.spectral_line else ["-p", "1"]
+        cmd = ["antab_editor.py", "-e", exp.expname.lower(), *assoc_args, *pass_args, "-f", "..", *assoc_paths]
 
         try:
             utils.shell_command("antab_editor.py", cmd[1:],

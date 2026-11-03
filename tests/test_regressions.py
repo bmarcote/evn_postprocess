@@ -123,6 +123,7 @@ class TestRunAntabEditoreEVNAssociatesOtherExperiments:
         exp.expname = "EZ041A"
         exp.eEVNname = "EZ041A"  # main experiment of the e-EVN run
         exp.eEVN_experiments = Mock(return_value=["EZ041A", *others])
+        exp.spectral_line = False
         exp.dirs = Mock()
         exp.dirs.pipe_temp = pipe_temp
         exp.vixfile = vixfile

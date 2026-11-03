@@ -27,6 +27,7 @@ def exp(tmp_path, monkeypatch):
     stub.expname = 'ES124'
     stub.dirs = Mock()
     stub.dirs.pipe_temp = pipe_temp
+    stub.spectral_line = False
     stub.vixfile = Path('ES124.vix')
     stub.vixfile.write_text('VEX_rev = 1.5;\n')
     return stub
@@ -95,7 +96,6 @@ class TestAntabEditorExitCode:
             return ''
 
         monkeypatch.setattr(pipeline.utils, 'shell_command', fake)
-        monkeypatch.setattr(pipeline.lisfiles, '_pass_lisfiles', lambda _p: [])
         exp.eEVNname = None
         exp.antennas = []
         assert pipeline.run_antab_editor(exp) is True
@@ -108,8 +108,28 @@ class TestAntabEditorExitCode:
             raise ValueError(f"'{command}' exited with code 1 (see output above).")
 
         monkeypatch.setattr(pipeline.utils, 'shell_command', boom)
-        monkeypatch.setattr(pipeline.lisfiles, '_pass_lisfiles', lambda _p: [])
         exp.eEVNname = None
         exp.antennas = []
         with pytest.raises(ValueError, match="exited with code 1"):
             pipeline.run_antab_editor(exp)
+
+
+class TestAntabEditorPassArgument:
+    """The spectral-line choice comes from the correlator passes (exp.spectral_line), not from a
+    glob of .lis files inside antenna_files, where there are none."""
+
+    def _args(self, exp, monkeypatch) -> list[str]:
+        seen = {}
+        monkeypatch.setattr(pipeline.utils, 'shell_command',
+                            lambda command, parameters=None, **kw: seen.setdefault('args', parameters) and '')
+        exp.eEVNname = None
+        exp.antennas = []
+        pipeline.run_antab_editor(exp)
+        return seen['args']
+
+    def test_spectral_line_passes_l(self, exp, monkeypatch):
+        exp.spectral_line = True
+        assert self._args(exp, monkeypatch) == ['-e', 'es124', '-l', '-f', '..']
+
+    def test_continuum_passes_p_1(self, exp, monkeypatch):
+        assert self._args(exp, monkeypatch) == ['-e', 'es124', '-p', '1', '-f', '..']
