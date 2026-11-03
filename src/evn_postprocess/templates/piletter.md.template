@@ -11,7 +11,7 @@ The data from your EVN project **{expname}** (observed on {obsdate}) are now ava
 {station_remarks}
 ## Acknowledgment
 
-Publications that result from your EVN observations should carry the [standard EVN acknowledgment](https://www.evlbi.org/publication)):
+Publications that result from your EVN observations should carry the [standard EVN acknowledgment](https://www.evlbi.org/publication):
 
 > The European VLBI Network is a joint facility of independent European, African, Asian, and North American radio astronomy institutes. Scientific results from data presented in this publication are derived from the following EVN project code: {expcode}.
 {extra_acknowledgments}

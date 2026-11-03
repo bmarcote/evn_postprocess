@@ -16,7 +16,7 @@ def get_polarizations(msfile: str | Path) -> tuple[misc.Stokes, ...]:
     Returns:
         stokes (tuple[misc.Stokes, ...]): Tuple with the Stokes parameters
     """
-    with misc.table(msfile, readonly=False) as ms:
+    with misc.table(msfile) as ms:  # read-only: it only reads, and must work on read-only MSs
         with misc.table(ms.getkeyword('POLARIZATION')) as ms_pol:
             return tuple([misc.Stokes(i) for i in ms_pol.getcol('CORR_TYPE')[0]])
 
@@ -199,9 +199,9 @@ def copy_pol(msfile: str | Path, antenna: str, polfrom: str):
                         for a_col in columns:
                             ms_col = ms.getcol(a_col, startrow=start, nrow=nrow)
                             for src_pol, tgt_pol in copy_map[ant_pos]:
-                                if len(ms_col.shape) == 3:  # (nrow, npol, nfreq)
-                                    ms_col[cond, tgt_pol, :] = ms_col[cond, src_pol, :]
-                                elif len(ms_col.shape) == 2:  # (nrow, npol)
+                                if len(ms_col.shape) == 3:  # (nrow, nchan, ncorr): correlation is last
+                                    ms_col[cond, :, tgt_pol] = ms_col[cond, :, src_pol]
+                                elif len(ms_col.shape) == 2:  # (nrow, ncorr)
                                     ms_col[cond, tgt_pol] = ms_col[cond, src_pol]
                                 else:
                                     raise ValueError(f'Unexpected dimensions for {a_col} column.')
@@ -328,24 +328,26 @@ def invert_subband(msfile: str | Path, antenna: str | list[str], starttime: dt.d
             for (start, nrow) in misc.chunkert(0, len(ms), 100):
                 progress_bar.update(task, advance=nrow)
                 
-                for antcol in ('ANTENNA1', 'ANTENNA2'):
-                    ants = ms.getcol(antcol, startrow=start, nrow=nrow)
-                    datetimes = dt.datetime(1858, 11, 17, 0, 0, 2) + \
-                               ms.getcol('TIME', startrow=start, nrow=nrow)*dt.timedelta(seconds=1)
-                    cond = np.where(np.isin(ants, antenna_numbers) & 
-                                   (datetimes > datetimes_start) & 
-                                   (datetimes < datetimes_end))[0]
-                    if len(cond) > 0:
-                        for a_col in columns:
-                            ms_col = ms.getcol(a_col, startrow=start, nrow=nrow)
-                            if len(ms_col.shape) == 3:  # (nrow, npol, nfreq)
-                                ms_col[cond, :, :] = ms_col[cond, :, ::-1]
-                            elif len(ms_col.shape) == 2:  # (nrow, npol) or (nrow, nfreq)
-                                ms_col[cond, :] = ms_col[cond, ::-1]
-                            else:
-                                raise ValueError(f'Unexpected dimensions for {a_col} column.')
+                # One condition for both antenna columns: looping over ANTENNA1 and then ANTENNA2
+                # flipped autocorrelations, and baselines between two listed antennas, twice
+                # (i.e. back to the original order).
+                ants1 = ms.getcol('ANTENNA1', startrow=start, nrow=nrow)
+                ants2 = ms.getcol('ANTENNA2', startrow=start, nrow=nrow)
+                datetimes = dt.datetime(1858, 11, 17, 0, 0, 2) + \
+                           ms.getcol('TIME', startrow=start, nrow=nrow)*dt.timedelta(seconds=1)
+                cond = np.where((np.isin(ants1, antenna_numbers) | np.isin(ants2, antenna_numbers)) &
+                                (datetimes > datetimes_start) & (datetimes < datetimes_end))[0]
+                if len(cond) > 0:
+                    for a_col in columns:
+                        ms_col = ms.getcol(a_col, startrow=start, nrow=nrow)
+                        if len(ms_col.shape) == 3:  # (nrow, nchan, ncorr): reverse the channels
+                            ms_col[cond] = ms_col[cond][:, ::-1, :]
+                        elif len(ms_col.shape) == 2:  # (nrow, ncorr): no frequency axis to invert
+                            continue
+                        else:
+                            raise ValueError(f'Unexpected dimensions for {a_col} column.')
 
-                            ms.putcol(a_col, ms_col, startrow=start, nrow=nrow)
+                        ms.putcol(a_col, ms_col, startrow=start, nrow=nrow)
 
     print(f"[green]\nSubbands inverted for {', '.join(antenna)} in {msfile}.[/green]")
 

@@ -7,6 +7,7 @@ Written by Benito Marcote (marcote@jive.eu)
 """
 import os
 import glob
+import re
 from natsort import natsort_keygen
 from pathlib import Path
 import argparse
@@ -87,7 +88,7 @@ if __name__ == '__main__':
     if arguments.antab is not None:
         antabfiles = [arguments.antab]
     elif len(glob.glob(f"{expname}*.antab")) > 0:
-        antabfiles = glob.glob(f"{expname}*.antab")
+        antabfiles = sorted(glob.glob(f"{expname}*.antab"), key=natsort_keygen())
     else:
         pipepath = f"jops@archive.jive.eu:/data/pipe/{expname}/in/"
         print(f"Trying to recover {pipepath + expname}*.antab...")
@@ -100,12 +101,14 @@ if __name__ == '__main__':
         print(f"Copied ANTAB file{'s' if len(antabfiles) > 1 else ''}:  {', '.join(antabfiles)}")
 
     # It could be just one pass, two passes with different antab files,
-    # or multiple passes with same antab
-    if len(antabfiles) == 1:
+    # or multiple passes with same antab. Per-pass files ({exp}_{n}.antab) go to the FITS-IDI
+    # of pass n, matched by that number (not by position in the file list).
+    per_pass = {int(m.group(1)): f for f in antabfiles if (m := re.search(r'_(\d+)\.antab$', f))}
+    if len(antabfiles) == 1 or not per_pass:
         main(antabfiles[0], idifiles, arguments.replace)
-    else: #if len(antabfiles) == 2:
-        for i in range(len(antabfiles)):
-            main(antabfiles[i], [idi for idi in idifiles if f"_{i+1}_1.IDI" in idi])
+    else:
+        for npass, antabfile in sorted(per_pass.items()):
+            main(antabfile, [idi for idi in idifiles if f"_{npass}_1.IDI" in idi], arguments.replace)
 
     print('\nDone.')
 
