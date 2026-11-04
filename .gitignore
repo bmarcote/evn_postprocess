@@ -120,3 +120,4 @@ uv.lock
 .devin
 .gitignore
 .codeium-instructions.md
+*.pyc
