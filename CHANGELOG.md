@@ -27,6 +27,10 @@ Added:
     files are kept, and a run with a `.flag` file but no `.log` files no longer aborts.
 
 Fixed:
+  - tConvert never produces more than 999 FITS-IDI files per pass (the most AIPS can load): the size per
+    file grows from the 4 GB / 8 GB defaults to the smallest number of GB that fits, from the estimated
+    IDI size (1.55 x MS). Outputs above 4 TB no longer get a size per file equal to their size in TB,
+    which gave GM084A's zoom pass 4 GB files and 1095 of them.
   - The auxiliary lag-space `.lis` was a copy of the first pass with only the MS name changed, so it
     still named that pass's FITS-IDI output (`{exp}_1_1.IDI`): anything run on it (tConvert, a loop
     over `*.lis`) wrote the lag data into the first pass's IDI files (seen in GM084A). All lag-space

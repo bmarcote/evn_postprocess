@@ -8,6 +8,7 @@ perform required changes in intermediate files.
 from __future__ import annotations
 import os
 import re
+import math
 import glob
 import shlex
 import string
@@ -1280,8 +1281,24 @@ def _du_kbytes(path: Path | str) -> int:
         return 0
 
 
+# FITS-IDI size over MS size (``du``). Measured 1.16-1.47 on real passes (GM084A); 1.55 errs on
+# the large side, so the number of files is not underestimated.
+_IDI_MS_SIZE_RATIO = 1.55
+# AIPS (FITLD) cannot read more than 999 FITS-IDI files of one pass.
+MAX_IDI_FILES = 999
+
+
+def _estimated_idi_bytes(a_pass: experiment.CorrelatorPass) -> float:
+    """Estimated size in bytes of the FITS-IDI output of a pass, from the size of its MS."""
+    return _IDI_MS_SIZE_RATIO * 1024 * _du_kbytes(a_pass.msfile)
+
+
 def _tconvert_chunk_arg(a_pass: experiment.CorrelatorPass) -> str:
     """Returns the ``chunk_size=...`` tConvert option for a pass, scaled to the IDI size.
+
+    The default is 4 GB per file for outputs below 20 GB and 8 GB above, but never so small
+    that the pass would produce more than :data:`MAX_IDI_FILES` files (the most AIPS can
+    load): the size per file is then increased to the smallest integer number of GB that fits.
 
     Args:
         a_pass: Correlator pass whose MS size drives the chunk size.
@@ -1290,18 +1307,21 @@ def _tconvert_chunk_arg(a_pass: experiment.CorrelatorPass) -> str:
         The ``chunk_size=<n>GB`` string to pass to tConvert via ``-o``.
 
     Raises:
-        IOError: If the >4 TB case would not fit in the current directory.
+        IOError: If an output above 4 TB would not fit in the current directory.
     """
-    # The size difference between internal MS and FITS-IDI is around 1.55
-    idi_size = 1.55 * u.kbit * _du_kbytes(a_pass.msfile)
-    if idi_size < 20*u.Gb:
-        return "chunk_size=4GB"
-    elif idi_size < 4*u.Tb:
-        return "chunk_size=8GB"
-    else:
-        if utils.space_available(Path.cwd()) <= 1.1*idi_size:
-            raise IOError("Not enough disk space to create the FITS-IDI files.")
-        return f"chunk_size={int(idi_size.to(u.Tb).value)}GB"
+    idi_bytes = _estimated_idi_bytes(a_pass)
+    chunk_gb = 4 if idi_bytes < 20e9 else 8
+    min_chunk_gb = math.ceil(idi_bytes / MAX_IDI_FILES / 1e9)
+    if min_chunk_gb > chunk_gb:
+        logger.info(f"{a_pass.msfile.name}: estimated FITS-IDI size {idi_bytes/1e12:.2f} TB would "
+                    f"give more than {MAX_IDI_FILES} files of {chunk_gb} GB; using "
+                    f"{min_chunk_gb} GB per file (~{math.ceil(idi_bytes/(min_chunk_gb*1e9))} files).")
+        chunk_gb = min_chunk_gb
+
+    # utils.space_available returns the free bytes labelled as bits (u.b), hence u.bit here.
+    if idi_bytes >= 4e12 and utils.space_available(Path.cwd()) <= 1.1 * idi_bytes * u.bit:
+        raise IOError("Not enough disk space to create the FITS-IDI files.")
+    return f"chunk_size={chunk_gb}GB"
 
 
 def tconvert(exp: experiment.Experiment) -> bool:
