@@ -142,6 +142,7 @@ def tconvert(monkeypatch, tmp_path) -> _Recorder:
     """Stubs out tConvert itself and the du-based chunk sizing, recording every call."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(process, '_tconvert_chunk_arg', lambda a_pass: 'chunk_size=4GB')
+    monkeypatch.setattr(process, '_estimated_idi_bytes', lambda a_pass: 10e9)   # 3 files of 4 GB
     recorder = _Recorder()
     monkeypatch.setattr(utils, 'shell_command', recorder)
     return recorder
@@ -194,28 +195,51 @@ class TestTconvertConcurrency:
 class TestTconvertProgressAndErrors:
     """Past the threshold a progress bar replaces the silence; failures are named at exit."""
 
-    def test_no_bar_for_a_handful_of_passes(self, tmp_path, tconvert, monkeypatch):
+    def test_no_bar_for_a_single_pass(self, tmp_path, tconvert, monkeypatch):
         shown = _record_progress(monkeypatch)
-        process.tconvert(make_exp(tmp_path, passes=utils.PASS_PROGRESS_MIN_PASSES))
-        assert shown == [True], "the bar must be disabled at or below the threshold"
+        process.tconvert(make_exp(tmp_path, passes=1))
+        assert shown == [True], "a single pass streams its output live, without bars"
 
-    def test_bar_shown_once_past_the_threshold(self, tmp_path, tconvert, monkeypatch):
+    def test_bars_from_two_passes(self, tmp_path, tconvert, monkeypatch):
+        shown = _record_progress(monkeypatch)
+        process.tconvert(make_exp(tmp_path, passes=2))
+        assert shown == [False], "several passes run quietly, so their bars must be shown"
+
+    def test_bars_shown_past_the_threshold(self, tmp_path, tconvert, monkeypatch):
         shown = _record_progress(monkeypatch)
         process.tconvert(make_exp(tmp_path, passes=utils.PASS_PROGRESS_MIN_PASSES + 1))
-        assert shown == [False], "the bar must be enabled above the threshold"
+        assert shown == [False]
 
-    def test_bar_counts_every_pass(self, tmp_path, tconvert, monkeypatch):
-        advanced = []
-        real_progress = progress.Progress
+    def test_one_bar_per_pass_counting_its_idi_files(self, tmp_path, tconvert, monkeypatch):
+        bars = _capture_progress(monkeypatch)
+        monkeypatch.setattr(process, '_TCONVERT_POLL_S', 0.01)
+        written = {'es124_1_1.lis': 2, 'es124_2_1.lis': 3, 'es124_3_1.lis': 5}
 
-        class _Counting(real_progress):
-            def advance(self, task_id, advance=1):
-                advanced.append(advance)
-                super().advance(task_id, advance)
+        def writing_tconvert(command, parameters=None, **kwargs):
+            stem = parameters[1].removesuffix('.lis')
+            for i in range(1, written[parameters[1]] + 1):
+                Path(f'{stem}.IDI{i}').touch()
+                time.sleep(0.03)
+            return ''
+        monkeypatch.setattr(utils, 'shell_command', writing_tconvert)
 
-        monkeypatch.setattr(progress, 'Progress', _Counting)
-        process.tconvert(make_exp(tmp_path, passes=8))
-        assert sum(advanced) == 8
+        assert process.tconvert(make_exp(tmp_path, passes=3)) is True
+        (bar,) = bars
+        tasks = {t.description.removeprefix('[green]'): t for t in bar.tasks}
+        assert set(tasks) == {'es124_1_1.IDI', 'es124_2_1.IDI', 'es124_3_1.IDI'}
+        # Estimated 3 files each; at the end every bar shows the real count, complete
+        # (the 5-file pass grew its total past the estimate).
+        for idi, n_files in (('es124_1_1.IDI', 2), ('es124_2_1.IDI', 3), ('es124_3_1.IDI', 5)):
+            assert (tasks[idi].completed, tasks[idi].total) == (n_files, n_files)
+            assert 'done' in tasks[idi].fields['state']
+
+    def test_failed_pass_is_marked_on_its_bar(self, tmp_path, tconvert, monkeypatch):
+        bars = _capture_progress(monkeypatch)
+        tconvert.fail_on('es124_2_1.lis')
+        assert process.tconvert(make_exp(tmp_path, passes=2)) is False
+        states = {t.description: t.fields['state'] for t in bars[0].tasks}
+        assert 'failed' in states['[green]es124_2_1.IDI']
+        assert 'done' in states['[green]es124_1_1.IDI']
 
     def test_one_failure_does_not_abandon_the_other_passes(self, tmp_path, tconvert,
                                                            monkeypatch):
@@ -252,3 +276,31 @@ def _record_progress(monkeypatch) -> list[bool]:
 
     monkeypatch.setattr(progress, 'Progress', spy)
     return disabled
+
+
+def _capture_progress(monkeypatch) -> list[progress.Progress]:
+    """Keeps every rich Progress built, to look at its tasks afterwards."""
+    bars: list[progress.Progress] = []
+    real_progress = progress.Progress
+
+    def spy(*columns, **kwargs):
+        bars.append(real_progress(*columns, **kwargs))
+        return bars[-1]
+
+    monkeypatch.setattr(progress, 'Progress', spy)
+    return bars
+
+
+class TestIdiFileEstimate:
+    def test_expected_files_from_size_and_chunk(self, monkeypatch):
+        monkeypatch.setattr(process, '_estimated_idi_bytes', lambda a_pass: 4.4e12)
+        a_pass = experiment.CorrelatorPass(Path('e.lis'), Path('e.ms'), 'e_1_1.IDI', True)
+        assert process._expected_idi_files(a_pass, 'chunk_size=8GB') == 550
+        assert process._expected_idi_files(a_pass, 'nonsense') == 1
+
+    def test_only_numbered_idi_files_count(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        for name in ('e_1_1.IDI1', 'e_1_1.IDI2', 'e_1_1.IDI10', 'e_1_1.IDI1.tmp', 'e_1_1.IDI.log'):
+            Path(name).touch()
+        a_pass = experiment.CorrelatorPass(Path('e.lis'), Path('e.ms'), 'e_1_1.IDI', True)
+        assert process._idi_files_written(a_pass) == 3
