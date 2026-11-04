@@ -21,6 +21,10 @@ Changed:
   - `idi2ms.py` runs `importfitsidi` from `casatasks` directly instead of a `casa` session.
 
 Added:
+  - tConvert shows one progress bar per correlator pass when several convert at once (their output goes
+    only to the log files then): FITS-IDI files written so far against the number expected from the
+    estimated IDI size and the chunk size, with the time remaining, and whether the pass is queued, done
+    or failed. A single pass keeps its live tConvert output.
   - `.uvflg` creation now falls back to the a-priori `{exp}.flag` file (downloaded with the antenna files)
     for every observed antenna whose `.uvflgfs` is missing or has no flagging line (previously only missing
     files were covered): its `antenna='{ANT}'` lines are written to `{exp}{ant}.uvflgfs`. Real `.log`-derived

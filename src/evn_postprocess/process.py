@@ -17,6 +17,7 @@ import sys
 import threading
 from typing import Callable, Optional
 from pathlib import Path
+from contextlib import contextmanager
 from itertools import product
 from datetime import datetime, timedelta
 import shutil
@@ -26,7 +27,8 @@ from loguru import logger
 from astropy import units as u
 from astropy.io import fits
 from rich import print as rprint
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from rich import progress
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from . import experiment, utils, mstools, tools
 from . import lisfiles, lag_spectrum
 from . import reporting
@@ -1324,6 +1326,65 @@ def _tconvert_chunk_arg(a_pass: experiment.CorrelatorPass) -> str:
     return f"chunk_size={chunk_gb}GB"
 
 
+# How often tconvert() counts the FITS-IDI files on disk to move the per-pass bars.
+_TCONVERT_POLL_S = 5.0
+_IDI_FILE_RE = re.compile(r'\.IDI\d+$')
+
+
+def _idi_files_written(a_pass: experiment.CorrelatorPass) -> int:
+    """Number of FITS-IDI files (``{fitsidifile}<n>``) of the pass currently on disk."""
+    return sum(1 for f in glob.glob(f"{a_pass.fitsidifile}*") if _IDI_FILE_RE.search(f))
+
+
+def _expected_idi_files(a_pass: experiment.CorrelatorPass, chunk_arg: str) -> int:
+    """Estimated number of FITS-IDI files tConvert writes for the pass with *chunk_arg*.
+
+    From the same size estimate as :func:`_tconvert_chunk_arg`, which errs on the large side,
+    so the real count normally ends somewhat below this. At least 1.
+    """
+    match = re.fullmatch(r'chunk_size=(\d+)GB', chunk_arg)
+    if match is None:
+        return 1
+    return max(1, math.ceil(_estimated_idi_bytes(a_pass) / (int(match[1]) * 1e9)))
+
+
+@contextmanager
+def _idi_progress(passes: list[experiment.CorrelatorPass], chunk_args: list[str]):
+    """One progress bar per pass, counting its FITS-IDI files against the estimated total.
+
+    Disabled (every call a no-op) for a single pass, whose tConvert output streams live.
+    Yields ``update(a_pass, state)``, with *state* one of ``'queued'``, ``'running'``,
+    ``'done'`` or ``'failed'``: it recounts the files of the pass and redraws its bar. While
+    running, the newest file is still being written, so it is not counted as done; the
+    total grows if the estimate turns out short, and is set to the real count at the end.
+    """
+    columns = (progress.SpinnerColumn(),
+               progress.TextColumn("[progress.description]{task.description}"),
+               progress.BarColumn(), progress.MofNCompleteColumn(),
+               progress.TextColumn("IDI files"), progress.TimeElapsedColumn(),
+               progress.TimeRemainingColumn(), progress.TextColumn("{task.fields[state]}"))
+    with progress.Progress(*columns, disable=len(passes) < 2) as bar:
+        totals = {id(a_pass): _expected_idi_files(a_pass, chunk_arg) if len(passes) > 1 else 1
+                  for a_pass, chunk_arg in zip(passes, chunk_args)}
+        tasks = {id(a_pass): bar.add_task(f"[green]{a_pass.fitsidifile}", total=totals[id(a_pass)],
+                                          state="[dim]queued")
+                 for a_pass in passes}
+
+        def update(a_pass: experiment.CorrelatorPass, state: str) -> None:
+            task_id = tasks[id(a_pass)]
+            n_files = _idi_files_written(a_pass)
+            total = totals[id(a_pass)] = max(totals[id(a_pass)], n_files)
+            if state == 'done':
+                bar.update(task_id, total=max(n_files, 1), completed=max(n_files, 1),
+                           state="[green]done")
+            elif state == 'failed':
+                bar.update(task_id, state="[red]failed")
+                bar.stop_task(task_id)
+            elif state == 'running':
+                bar.update(task_id, total=total, completed=max(n_files - 1, 0), state="")
+        yield update
+
+
 def tconvert(exp: experiment.Experiment) -> bool:
     """Runs tConvert on all correlator passes to create FITS-IDI files from the MS.
 
@@ -1336,10 +1397,12 @@ def tconvert(exp: experiment.Experiment) -> bool:
     and several of those streams interleaved on one terminal are unreadable, so the live
     output is kept only while a single pass is converting; from two upwards each pass writes
     to its own ``logs/tconvert.log`` sibling instead (the log names the .lis file it ran).
-    Past ``utils.PASS_PROGRESS_MIN_PASSES`` passes the output comes back: a Rich progress bar
-    is pinned under it saying how many passes are done and how long the rest should take, the
-    lines scroll above the bar rather than over it, and each one is tagged with the pass it
-    came from so the interleaved streams stay attributable.
+    From two passes upwards every pass gets its own progress bar: the FITS-IDI files written
+    so far against the number expected from the estimated IDI size and the chunk size (see
+    :func:`_idi_progress`), with the time remaining. Past ``utils.PASS_PROGRESS_MIN_PASSES``
+    passes the output comes back as well: the lines scroll above the bars rather than over
+    them, each one tagged with the pass it came from so the interleaved streams stay
+    attributable.
 
     A pass that fails does not abandon the others: every failure is collected and they are
     all named together at the end, and the step then reports the failure.
@@ -1389,30 +1452,39 @@ def tconvert(exp: experiment.Experiment) -> bool:
 
     if show_bar:
         logger.info(f"Converting {len(passes)} correlator passes at once; their output stays "
-                    f"on the terminal above the progress bar, each line tagged with the pass "
+                    f"on the terminal above the progress bars, each line tagged with the pass "
                     f"it came from, and is also written to {exp.dirs.logs / 'tconvert.log'} "
                     "(one file per pass).")
     elif not echo:
         logger.info(f"Converting {len(passes)} correlator passes at once; their output goes "
                     f"to {exp.dirs.logs / 'tconvert.log'} (one file per pass) instead of the "
-                    "terminal, where the streams would be interleaved.")
+                    "terminal, where the streams would be interleaved; one progress bar per pass "
+                    "counts the FITS-IDI files written against the estimate.")
 
     # One pass failing must not hide the others: every failure is collected and they are all
     # reported together once the conversions that did work have finished.
     errors: list[str] = []
-    # The bar wraps the pool so Rich has swapped sys.stdout for its proxy before the first
-    # tConvert writes: what the passes echo then scrolls above the bar instead of over it.
-    with utils.pass_progress("[green]tConvert", len(passes)) as advance:
+    # The bars wrap the pool so Rich has swapped sys.stdout for its proxy before the first
+    # tConvert writes: what the passes echo then scrolls above the bars instead of over them.
+    # Each pass has its own bar, moved by counting its FITS-IDI files on disk every few seconds.
+    with _idi_progress(passes, chunk_args) as update:
         with ThreadPoolExecutor(utils.pass_workers(len(passes), utils.MAX_PASS_IO_WORKERS)) as pool:
             futures = {pool.submit(_tconvert_pass, a_pass, chunk): a_pass
                        for a_pass, chunk in zip(passes, chunk_args)}
-            for future in as_completed(futures):
-                a_pass = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    errors.append(f"{a_pass.lisfile.name} -> {a_pass.fitsidifile}*: {e}")
-                advance()
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=_TCONVERT_POLL_S, return_when=FIRST_COMPLETED)
+                for future in done:
+                    a_pass = futures[future]
+                    try:
+                        future.result()
+                        update(a_pass, 'done')
+                    except Exception as e:
+                        errors.append(f"{a_pass.lisfile.name} -> {a_pass.fitsidifile}*: {e}")
+                        update(a_pass, 'failed')
+                for future in pending:
+                    if future.running():
+                        update(futures[future], 'running')
 
     if errors:
         logger.error(f"tConvert failed on {len(errors)} of the {len(passes)} correlator "
