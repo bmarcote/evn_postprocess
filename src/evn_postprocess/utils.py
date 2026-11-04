@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import shlex
 import time
 import datetime as _dt
 import subprocess
@@ -387,7 +388,8 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
                   stderr_warn_re: Optional[re.Pattern] = None,
                   logfile: Optional[Union[str, Path]] = None,
                   echo: bool = True, line_prefix: str = '',
-                  ok_returncodes: tuple[int, ...] = ()) -> str:
+                  ok_returncodes: tuple[int, ...] = (),
+                  cwd: Optional[Union[str, Path]] = None) -> str:
     """Runs the provided command in the shell and streams its output live.
 
     Both stdout and stderr are captured and echoed to the terminal as the command runs:
@@ -426,6 +428,10 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
             once behind a progress bar, and this prefix is what keeps the interleaved lines
             attributable to a pass. It is only added to what the terminal sees: neither the
             returned string nor the log file carry it.
+        cwd (Optional[Union[str, Path]]): Directory to run the command in (default: the current
+            one). Relative paths in *parameters* are then resolved by the command against it,
+            while *logfile* is still opened relative to the caller's directory. The command is
+            recorded in logs/commands.sh as ``(cd <cwd> && <command>)`` so it replays as run.
 
     Returns:
         str: Concatenated stdout from the command (UTF-8).
@@ -441,6 +447,8 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
         full_shell_command = [command] if parameters is None else [command, parameters]
 
     cmd_str = ' '.join(full_shell_command)
+    if cwd is not None:
+        cmd_str = f"(cd {shlex.quote(str(cwd))} && {cmd_str})"
     # "Quietly" (echo=False) covers the banner too, not just the command's own output: the
     # callers that ask for it are running several commands at once behind a progress bar,
     # and a banner per command would scroll it away. The command is still recorded in
@@ -468,7 +476,8 @@ def shell_command(command: str, parameters: Optional[Union[str, list]] = None, s
             logger.warning(f"Could not open log file {logfile}: {e}; continuing without it.")
             log_fh = None
 
-    process = subprocess.Popen(cmd_str, shell=shell, bufsize=bufsize,
+    process = subprocess.Popen(' '.join(full_shell_command) if cwd is not None else cmd_str,
+                               shell=shell, bufsize=bufsize, cwd=cwd,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     stdout_chunks: list[str] = []

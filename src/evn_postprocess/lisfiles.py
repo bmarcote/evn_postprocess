@@ -11,19 +11,17 @@ from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from rich.console import Console
 from rich.panel import Panel
-from . import experiment, reporting, tools, utils
+from . import experiment, lag_spectrum, reporting, tools, utils
 from . import process  # cycle: process imports this module; both only use each other at call time
 
 
-# Suffix tagging the auxiliary lag-space products ({expname}-lag.lis / {expname}-lag.ms).
-# These are NOT correlator passes: the lag MS is only used to compute per-scan antenna SNR,
-# so the lag .lis must be excluded from pass discovery (otherwise checklis/j2ms2/msops would
-# treat it as an extra pass and operate on it).
-LAG_TAG = "-lag."
+# The lag-space products are not correlator passes (see lag_spectrum); a legacy one left in the
+# experiment directory is skipped by name.
+LAG_TAG = lag_spectrum.LAG_TAG
 
 
 def _pass_lisfiles(pattern: str) -> list[str]:
-    """Sorted .lis files matching *pattern*, excluding the auxiliary lag-space .lis file."""
+    """Sorted .lis files matching *pattern*, excluding any auxiliary lag-space .lis file."""
     return sorted(f for f in glob.glob(pattern) if LAG_TAG not in f)
 
 
@@ -69,44 +67,6 @@ def update_lis_file(lisfilename: str | Path, oldexp: str, newexp: str) -> None:
 
     with open(lisfilename, 'w') as lisfile:
         lisfile.write(''.join(lisfilelines))
-
-
-def create_lag_lisfile(exp: experiment.Experiment, source_pass: experiment.CorrelatorPass) -> Path:
-    """Creates a ``{expname}-lag.lis`` copy of the given pass configured to produce the
-    lag-space MS (``{expname}-lag.ms``).
-
-    ``j2ms2`` ignores the ``-o output`` option when an input ``.lis`` file is supplied via
-    ``-v`` (the output MS name is taken from the ``.lis`` header instead). To control the
-    lag-space MS name we therefore duplicate the source ``.lis`` file and rewrite the output
-    MS field in its header line(s).
-
-    Args:
-        exp (experiment.Experiment): Experiment object (provides the experiment name).
-        source_pass (experiment.CorrelatorPass): The pass whose .lis file is duplicated
-            (normally the first/main correlator pass).
-
-    Returns:
-        Path: The path to the created ``{expname}-lag.lis`` file.
-    """
-    lag_lisfile = Path(f"{exp.expname.lower()}-lag.lis")
-    lag_msname = f"{exp.expname.lower()}-lag.ms"
-    old_msname = source_pass.msfile.name
-
-    with open(source_pass.lisfile, 'r') as f:
-        lines = f.readlines()
-
-    # The header line(s) are the ones not starting with the +/- job markers. Replace the
-    # output MS name (matched as a whitespace-delimited token so other fields, e.g. the
-    # .vix or .IDI names, are left untouched).
-    token_re = re.compile(rf'(?<!\S){re.escape(old_msname)}(?!\S)')
-    for i, line in enumerate(lines):
-        if line.lstrip()[:1] not in ('+', '-') and '.ms' in line:
-            lines[i] = token_re.sub(lag_msname, line)
-
-    with open(lag_lisfile, 'w') as f:
-        f.writelines(lines)
-
-    return lag_lisfile
 
 
 def split_lis_cont_line(exp: experiment.Experiment, fulllisfile: str | Path) -> None:

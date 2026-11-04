@@ -27,7 +27,7 @@ from astropy.io import fits
 from rich import print as rprint
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from . import experiment, utils, mstools, tools
-from . import lisfiles
+from . import lisfiles, lag_spectrum
 from . import reporting
 from . import plotting
 # polconvert_main kept for future use once version compatibility is resolved.
@@ -291,46 +291,16 @@ def j2ms2(exp: experiment.Experiment) -> bool:
                                                        utils.MAX_PASS_IO_WORKERS)) as pool:
                 ms_futures = [pool.submit(_j2ms2_correlator_pass, (exp, p)) for p in exp.correlator_passes]
 
-                # Create lag-space MS from first pass in parallel (for signal detection).
-                # j2ms2 ignores '-o' when given an input .lis via '-v', so we build a dedicated
-                # '{expname}-lag.lis' that already names the lag MS, and restrict it to the
-                # calibrator sources via the 'fo:filter/source=...' directive.
-                lag_ms = Path(f"{exp.expname.lower()}-lag.ms")
-                lag_future = None
-                if exp.no_lag:
-                    logger.info("--no-lag set: skipping creation of the lag-space MS.")
-                elif not lag_ms.exists() and exp.correlator_passes[0].lisfile.exists():
-                    lag_lisfile = lisfiles.create_lag_lisfile(exp, exp.correlator_passes[0])
-                    # Register the lag pass as a dedicated, separate product (NOT a correlator
-                    # pass). It is kept out of exp.correlator_passes on purpose so it is never
-                    # counted as a real pass (multi_phase_center, pipeline input, msops, ...);
-                    # it exists solely for the per-scan antenna SNR computation (compute_lag_snr).
-                    exp.lag_pass = experiment.CorrelatorPass(
-                        lisfile=lag_lisfile, msfile=lag_ms, fitsidifile="", pipeline=False)
-                    cal_sources = exp.sources.fringefinder + exp.sources.calibrator
-                    lag_args = ["-v", str(lag_lisfile), "-d", "frequency"]
-                    if cal_sources:
-                        lag_args.append(f"fo:filter/source={','.join(cal_sources)}")
-                    if not exp.eEVNname:
-                        lag_args.append("fo:nosquash_source_table")
-                    # Quiet: the lag MS run goes only to its log file (echo=False), so its
-                    # output does not garble the foreground pass's real-time terminal stream
-                    # while both run in parallel (Issue 7).
-                    lag_future = pool.submit(utils.shell_command, "j2ms2", lag_args,
-                        shell=True, stdout=None, stderr=subprocess.STDOUT, bufsize=0,
-                        logfile=exp.dirs.logs / "j2ms2-lag.log", echo=False)
+                # The auxiliary lag-space MS (for signal detection) is built in parallel. It
+                # is not a correlator pass: see lag_spectrum, which keeps it and all its files
+                # in their own directory.
+                lag_future = pool.submit(lag_spectrum.run_j2ms2, exp)
 
                 ms_results: list[bool] = []
                 for future in as_completed(ms_futures):
                     ms_results.append(future.result())
                     advance()
-                if lag_future is not None:
-                    try:
-                        lag_future.result()
-                        logger.info(f"Created lag-space MS: {lag_ms}")
-                    except Exception as e:
-                        logger.warning(f"Lag-space MS creation failed (non-fatal): {e}")
-                        _remove_partial_outputs([lag_ms])
+                lag_future.result()
 
         return all(ms_results)
     except Exception as e:
@@ -706,7 +676,9 @@ def compute_lag_snr(exp: experiment.Experiment) -> bool:
     """
     # Use the dedicated lag pass if registered (see j2ms2); fall back to the conventional
     # name so the step still works on experiments processed before lag_pass was tracked.
-    lag_ms = exp.lag_pass.msfile if exp.lag_pass is not None else Path(f"{exp.expname.lower()}-lag.ms")
+    # Products of the layout before lag_spectrum.LAG_DIR are moved there first.
+    lag_spectrum.migrate_legacy_products(exp)
+    lag_ms = exp.lag_pass.msfile if exp.lag_pass is not None else lag_spectrum.ms_path(exp)
     if not lag_ms.exists():
         logger.warning(f"Lag MS {lag_ms} not found. Skipping lag SNR computation.")
         return True

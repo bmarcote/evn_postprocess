@@ -354,8 +354,8 @@ def _load_experiment(expname: str, args) -> experiment.Experiment:
         exp = _stored_experiment(expname)
         exp.mode = _mode.resolve(cli_mode=args.mode, stored_mode=exp.mode)
         inputs.create_folder_structure()  # in case the operator removed some of them
-        # The operator may have changed the .lis files (the auxiliary {expname}-lag.lis is
-        # not a correlator pass and is excluded from the count).
+        # The operator may have changed the .lis files (the auxiliary lag-space .lis lives in
+        # lag_spectrum.LAG_DIR, so it is not counted; a legacy one here is excluded by name).
         if len(exp.correlator_passes) != len(lisfiles._pass_lisfiles(f"{expname.lower()}*.lis")):
             logger.warning("The set of .lis files changed: reloading the correlator passes.")
             if not lisfiles.get_passes_from_lisfiles(exp):

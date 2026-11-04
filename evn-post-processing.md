@@ -54,7 +54,8 @@ Everything for one experiment lives in a single directory on `eee2`, conventiona
 ├── {exp}.vix                 the vex file from ccs ({EXP}.vix is a symlink to it)
 ├── {exp}.lis                 the lis file(s), one per correlator pass
 ├── {exp}.ms                  the Measurement Set(s)
-├── {exp}-lag.ms              auxiliary lag-space MS (diagnostics only, deletable)
+├── lag-spectrum/             auxiliary lag-space products (diagnostics only, deletable):
+│                             {exp}-lag.lis, {exp}-lag.ms, j2ms2-lag.log — never a correlator pass
 ├── {exp}_1_1.IDI*            the FITS-IDI files that go to the archive
 ├── {exp}.toml                experiment configuration + record of every decision taken
 ├── {exp}.json                internal state of postprocess (which steps ran, metadata)

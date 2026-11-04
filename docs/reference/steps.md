@@ -102,6 +102,8 @@ For e-EVN EXPn, the MS project name is fixed up afterwards (`expname.py` equival
 read back from the MS (`process.get_metadata_from_ms`), and — unless `--no-lag` is
 given — a lag-space MS is built to compute a per-scan antenna SNR
 (`process.compute_lag_snr`), feeding the automatic MS-ops decisions in `msops`.
+All its files (`.lis`, MS, j2ms2 log) live in `lag-spectrum/` and are handled only by
+`lag_spectrum`: they are never a correlator pass (see `lag_spectrum.run_j2ms2`).
 
 ### 5. `standardplots` → `create_standardplots`
 

@@ -27,6 +27,14 @@ Added:
     files are kept, and a run with a `.flag` file but no `.log` files no longer aborts.
 
 Fixed:
+  - The auxiliary lag-space `.lis` was a copy of the first pass with only the MS name changed, so it
+    still named that pass's FITS-IDI output (`{exp}_1_1.IDI`): anything run on it (tConvert, a loop
+    over `*.lis`) wrote the lag data into the first pass's IDI files (seen in GM084A). All lag-space
+    products (`{exp}-lag.lis`, `{exp}-lag.ms`, `j2ms2-lag.log`) now live in `lag-spectrum/` and are
+    handled only by the new `lag_spectrum` module; the lag `.lis` names its own outputs
+    (`{exp}-lag.ms`, `{exp}-lag.IDI`) and j2ms2 runs from inside that directory. Products of the old
+    layout in the experiment directory are moved there (and the `.lis` rebuilt) on the next run.
+    `utils.shell_command` takes a `cwd`.
   - `find_idi_with_time` counted the AIPS day from each FITS-IDI file's own first date, so a time after
     midnight was never found in a file that starts after midnight (e.g. `polconvert.py` raising "The
     introduced time range has not been found", and the automatic PolConvert search skipping every scan
