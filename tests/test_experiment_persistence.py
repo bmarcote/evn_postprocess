@@ -185,3 +185,34 @@ class TestIsNme:
             assert (exp.credentials is not None) is expects_credentials, name
             for auth in tmp_path.glob("*.auth"):
                 auth.unlink()   # so the next case does not recover these credentials
+
+
+class TestPhaseCentersMigration:
+    """A pre-v4 checkpoint may lack the scans' phase centres: they are re-read from the vex on load."""
+
+    def _store_pre_v4(self, tmp_path: Path) -> None:
+        """Stores TEST01 with two scans and no phase centres, as a v3 file."""
+        scans = experiment.Scans([experiment.Scan('No0001', dt.datetime(2024, 6, 12, 10), 60, 'CAL', ('Ef',)),
+                                  experiment.Scan('No0002', dt.datetime(2024, 6, 12, 11), 60, 'FIELD', ('Ef',))])
+        _make_exp(tmp_path, scans=scans).store()
+        data = json.loads((tmp_path / "test01.json").read_text())
+        data["_schema_version"] = 3
+        for scan in data["scans"]:
+            scan.pop("phase_centers")
+        (tmp_path / "test01.json").write_text(json.dumps(data))
+
+    def test_phase_centers_reread_from_vex(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._store_pre_v4(tmp_path)
+        (tmp_path / "TEST01.vix").write_text("VEX_rev = 1.5;\n$SCHED;\n"
+                                             "scan No0001;\n  start=2024y164d10h00m00s; source=CAL;\nendscan;\n"
+                                             "scan No0002;\n  start=2024y164d11h00m00s; source=FIELD; source=T1;\n"
+                                             "endscan;\n")
+        loaded = experiment.Experiment.load("TEST01")
+        assert [scan.phase_centers for scan in loaded.scans] == [(), ('FIELD', 'T1')]
+        assert loaded.multi_phase_center is True
+
+    def test_without_vex_it_is_not_multi_phase_center(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._store_pre_v4(tmp_path)
+        assert experiment.Experiment.load("TEST01").multi_phase_center is False

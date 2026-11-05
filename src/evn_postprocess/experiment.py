@@ -601,6 +601,9 @@ def _migrate_experiment_dict(data: dict) -> dict:
       - v2: introduces ``_schema_version`` and an optional ``policy`` block.
       - v3: introduces the ``mode`` field (Phase 2). Absent in older files, in which
         case it stays None and the caller re-detects the mode.
+      - v4: the scans are guaranteed to carry their vex ``phase_centers``. Older files may
+        lack them (written before the field existed), so Experiment.from_dict re-reads them
+        from the vex; they are the only source of truth for ``multi_phase_center``.
     """
     version = int(data.get('_schema_version', 1))
     if version > Experiment.SCHEMA_VERSION:
@@ -617,7 +620,22 @@ def _migrate_experiment_dict(data: dict) -> dict:
         # v2 -> v3: add the mode slot (None means "re-detect", see evn_postprocess.mode).
         data.setdefault('mode', None)
         data['_schema_version'] = 3
+    if version < 4:
+        # v3 -> v4: nothing to change in the dict; the phase centres need the vex (Experiment.from_dict).
+        data['_schema_version'] = 4
     return data
+
+
+def _vex_phase_centers(vixfile: Path) -> dict[str, tuple[str, ...]]:
+    """Reads the phase centres of the multi-phase-centre scans from a vex file.
+
+    Returns:
+        {scanno: (all sources of the scan, primary first)} for every scan listing more than
+        one source in its vex $SCHED entry; empty when there is none.
+    """
+    sched = vex.Vex(vixfile)['SCHED']
+    return {scanno: tuple(sources) for scanno, scan in sched.items()
+            if len(sources := [s for key, s in scan.items() if key == 'source']) > 1}
 
 
 class Experiment:
@@ -699,12 +717,12 @@ class Experiment:
     def multi_phase_center(self) -> bool:
         """Returns if the experiment contains a multi-phase center correlation.
 
-        Detected either from the vex scan section (scans listing several sources) or,
-        as before, from the pass layout (multiple non-spectral-line passes).
+        The single source of truth: some vex scan lists several phase centres (see
+        `phase_center_sources`). The pass layout is NOT used: a standard run can have several
+        continuum passes too, and must not get the multi-phase-centre treatment (calibrators
+        only in the first pass, primary-beam correction, skipped scans tolerated in the .lis).
         """
-        if any(len(scan.phase_centers) > 1 for scan in self.scans):
-            return True
-        return (len(self.correlator_passes) > 1) and (not self.spectral_line)
+        return bool(self.phase_center_sources)
 
     @property
     def phase_center_sources(self) -> dict[str, list[str]]:
@@ -927,7 +945,7 @@ class Experiment:
     # JSON schema version. Bump every time to_dict / from_dict change shape in
     # an incompatible way. Always store it under the "_schema_version" key. The
     # loader migrates older files in-place.
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     def to_dict(self) -> dict:
         """Converts the Experiment to a plain dictionary for JSON serialization."""
@@ -954,8 +972,15 @@ class Experiment:
                 'mode': self.mode.value if self.mode is not None else None}
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'Experiment':
-        """Creates an Experiment from a plain dictionary, migrating older schemas if needed."""
+    def from_dict(cls, data: dict, vix_dir: Path = Path('.')) -> 'Experiment':
+        """Creates an Experiment from a plain dictionary, migrating older schemas if needed.
+
+        Args:
+            data: The stored experiment (Experiment.to_dict).
+            vix_dir: Directory holding '{EXPNAME}.vix'. Only read for a pre-v4 dict, whose scans
+                may lack their phase centres (see _migrate_experiment_dict).
+        """
+        refill_phase_centers = int(data.get('_schema_version', 1)) < 4
         data = _migrate_experiment_dict(data)
         exp = cls(expname=data['expname'], obsdate=dt.date.fromisoformat(data['obsdate']), supsci=data['supsci'],
                   dirs=Dirs.from_dict(data['dirs']), eEVNname=data.get('eEVNname'), steps=data.get('steps'),
@@ -980,6 +1005,18 @@ class Experiment:
         exp.mode = Mode(data['mode']) if data.get('mode') is not None else None
         if data.get('policy') is not None:
             exp.policy = Policy.from_dict(data['policy'])
+
+        if refill_phase_centers and len(exp.scans) > 0:
+            vixfile = Path(vix_dir) / exp.vixfile
+            if vixfile.exists():
+                phase_centers = _vex_phase_centers(vixfile)
+                for scan in exp.scans:
+                    scan.phase_centers = phase_centers.get(scan.scanno, ())
+                logger.info(f"{exp.expname}: pre-v4 checkpoint, phase centres re-read from {vixfile}: "
+                            f"{len(phase_centers)} multi-phase-centre scan(s).")
+            else:
+                logger.warning(f"{exp.expname}: pre-v4 checkpoint and no {vixfile} to re-read the phase "
+                               "centres from; the experiment will NOT be treated as multi-phase-centre.")
 
         return exp
 
@@ -1021,7 +1058,7 @@ class Experiment:
             if not isinstance(exp_dict, dict):
                 raise ValueError("Invalid experiment file format: expected dictionary")
 
-            return Experiment.from_dict(exp_dict)
+            return Experiment.from_dict(exp_dict, vix_dir=file_path.parent)
         except FileNotFoundError as e:
             raise FileNotFoundError(f"Could not load experiment: {e}") from e
         except json.JSONDecodeError as e:

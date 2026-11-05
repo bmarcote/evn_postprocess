@@ -26,13 +26,19 @@ def _pass_lisfiles(pattern: str) -> list[str]:
 
 
 def _disable_calibrator_scans(a_pass: experiment.CorrelatorPass, source_names: list[str]) -> None:
-    """Disable active scan lines containing any of the supplied source names."""
+    """Disables the active scan lines of the supplied sources in the pass .lis file.
+
+    A multi-phase-centre .lis names the source of each job only as the suffix of its .cor file
+    ('+ 40863/EM164B_No0001.cor_J1037+5711   - No0001 ...'), so the match is on that exact suffix:
+    a plain substring test would also hit a target whose name contains a calibrator name.
+    """
     with open(a_pass.lisfile, 'r') as lisfile:
         lines = lisfile.readlines()
 
+    suffixes = tuple(f".cor_{name}" for name in source_names)
     changed = False
     for i, line in enumerate(lines):
-        if line.startswith('+ ') and any(source_name in line for source_name in source_names):
+        if line.startswith('+ ') and len(line.split()) > 1 and line.split()[1].endswith(suffixes):
             lines[i] = '- ' + line[2:]
             changed = True
 
@@ -206,11 +212,14 @@ def get_passes_from_lisfiles(exp: experiment.Experiment) -> bool:
             a_pass.scans = old.scans
             a_pass.flagged_weights = old.flagged_weights
 
+    # Multi-phase-centre runs keep the calibrator scans only in the reference pass(es): the
+    # pipeline ones (pass 1, plus its line pass in spectral-line runs). Every other run keeps them
+    # in all passes.
     if getattr(exp, 'eEVNname', None) is None and exp.multi_phase_center:
         calibrator_names = exp.sources.calibrator + exp.sources.fringefinder
         if calibrator_names:
             for a_pass in new_passes:
-                if a_pass.fitsidifile.endswith('_1_1.IDI'):
+                if a_pass.pipeline:
                     continue
                 _disable_calibrator_scans(a_pass, calibrator_names)
         else:
@@ -437,7 +446,7 @@ def run_checklis(exp: experiment.Experiment) -> LisfilesReport:
     anything else. Skipped scans get their own message ("this may well be right, but double
     check them"), as opposed to the "issues found" one: they are legitimate in a
     multi-phase-center run, where each pass only keeps its own scans, and there they are
-    tolerated (all_ok stays True). With a single pass they still stop the step, so the
+    tolerated (all_ok stays True). In any other run they still stop the step, so the
     operator can look at them, but the message says how to continue if they are fine. This
     also verifies that the passes have unique .lis, MS and FITS-IDI names, as repeated names
     would make later steps overwrite each other's products.
@@ -448,7 +457,6 @@ def run_checklis(exp: experiment.Experiment) -> LisfilesReport:
     Returns:
         LisfilesReport: The verdict, its one-line headline, and the per-issue details.
     """
-    is_multi_phase_center = len(exp.correlator_passes) > 2 if exp.spectral_line else len(exp.correlator_passes) > 1
     with ThreadPoolExecutor() as executor:
         results = list(executor.map(_check_single_lisfile, exp.correlator_passes))
 
@@ -473,7 +481,7 @@ def run_checklis(exp: experiment.Experiment) -> LisfilesReport:
                                   f"{', '.join(repeated)}")
 
     reported = [issue for issue in ('duplicated', 'skipping', 'other') if len(files_with[issue]) > 0]
-    blocking = [issue for issue in reported if (issue != 'skipping') or (not is_multi_phase_center)]
+    blocking = [issue for issue in reported if (issue != 'skipping') or (not exp.multi_phase_center)]
     all_ok = (len(blocking) == 0) and (len(repeated_names) == 0)
     # Skipped scans on their own are a different message from a broken .lis file: they may
     # well be right (they always are in a multi-phase-center run), so the operator is asked
@@ -497,8 +505,8 @@ def run_checklis(exp: experiment.Experiment) -> LisfilesReport:
 
     counts = [f"{_LIS_ISSUE_LABEL[issue]} in {len(files_with[issue])} .lis file(s)" for issue in reported]
     counts += [text.split(':')[0] for text in repeated_names]
-    expected = (" (which is expected in an experiment with several correlator passes, as each "
-                "one only keeps its own scans)" if is_multi_phase_center else "")
+    expected = (" (which is expected in a multi-phase-centre experiment, as each "
+                "pass only keeps its own scans)" if exp.multi_phase_center else "")
     if len(reported) == 0 and (len(repeated_names) == 0):
         headline = "All the .lis file(s) passed checklis, with unique .lis, MS and FITS-IDI names."
     elif only_skipping:
