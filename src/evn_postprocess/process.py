@@ -71,9 +71,11 @@ _TCONVERT_BIN = "/home/verkout/src/jive-casa/build-reftime_assert_fail/apps/tCon
 # run that died before writing a complete result is retried, up to this many extra times.
 _POLCONVERT_RETRIES: int = 3
 
-# A converted solution is accepted when, in every IF, the parallel-to-cross fringe-peak
-# amplitude ratio (RR+LL)/(RL+LR) on the reference baseline exceeds this value. A failed/linear
-# solution leaves the four products comparable (ratio ~1); a real conversion lifts it well above.
+# A converted solution is accepted when, in every IF, the parallel-to-cross ratio (RR+LL)/(RL+LR)
+# of the normalized fringe-peak amplitudes (FRINGE.PEAKS, not their SNRs) on every linear-to-
+# reference baseline reaches this value. A failed/linear solution leaves the four products
+# comparable (ratio ~1); a real conversion lifts it well above. It must stay equal to
+# scripts/polconvert.py GOOD_PEAK_RATIO, which colours the per-IF table it prints (green = accepted).
 _POLCONVERT_MIN_RATIO: float = 2
 
 # --- PolConvert solution search --------------------------------------------------------
@@ -1829,17 +1831,27 @@ def _polconvert_exclude_ants(exp: experiment.Experiment, lin_ants: list[str], re
 
 
 def _fringe_peak_ratios(logdir: str, n_ifs: int) -> list[float]:
-    """Per-IF ``(RR+LL)/(RL+LR)`` of a finished ``--compute``, or ``[]`` if it did not finish.
+    """Per-IF ``(RR+LL)/(RL+LR)`` of the normalized fringe peaks of a finished ``--compute``,
+    or ``[]`` if it did not finish.
 
-    Each ``FRINGE.PEAKS_IF*_SCAN_*.dat`` (one per converted IF) lists the normalized
-    fringe-peak amplitude of RR, LL, RL and LR on the reference baseline. A real conversion
+    Each ``FRINGE.PEAKS_IF<n>_SCAN_<k>_<lin>-<ref>.dat`` lists, for one IF and one baseline
+    between a linear antenna and the reference antenna, the normalized fringe-peak amplitude
+    of RR, LL, RL and LR (the first value on each line, relative to the strongest product).
+    The SNR that follows each value is not used: it does not scale with the amplitude, so it
+    says little about how much power is left in the cross hands. A real conversion
     concentrates power in the parallel hands; a failed/linear solution leaves the four
-    products comparable (ratio ~1).
+    products comparable (ratio ~1). The values are read with the same parser that prints
+    them (x100) in the summary table of ``polconvert.py``, so what is judged here is what the
+    table shows, and its colours follow the same threshold (``GOOD_PEAK_RATIO`` there,
+    ``_POLCONVERT_MIN_RATIO`` here).
+
+    With several linear antennas there is one file per IF and baseline; an IF is then only as
+    good as its worst baseline, as every linear antenna has to be converted.
 
     This is what says whether an attempt ran, because PolConvert's exit code does not: it
     almost always dies in its own teardown after writing everything. A run counts as finished
     only when it left the complete set that it writes at the very end -- the gains file plus
-    one readable peaks file per IF -- so a crash halfway through cannot be mistaken for a
+    readable peaks files for every IF -- so a crash halfway through cannot be mistaken for a
     solution that merely converted badly.
 
     Args:
@@ -1847,23 +1859,23 @@ def _fringe_peak_ratios(logdir: str, n_ifs: int) -> list[float]:
         n_ifs: Number of IFs the attempt was asked to convert.
 
     Returns:
-        One ratio per IF, in file order, or an empty list when the run left no full result.
+        One ratio per IF, in IF order, or an empty list when the run left no full result.
     """
-    peaks_dir = Path(logdir) / 'FRINGE.PEAKS'
-    if not (Path(logdir) / 'polconvert.gains').exists() or not peaks_dir.exists():
+    from .scripts.polconvert import fringe_peak_ratio, read_fringe_peaks_dir
+
+    if not (Path(logdir) / 'polconvert.gains').exists():
         return []
 
-    ratios: list[float] = []
-    for dat_file in sorted(peaks_dir.glob('FRINGE.PEAKS_IF*_SCAN_*.dat')):
-        content = dat_file.read_text()  # read once, searched per polarization
-        a = {pol: float(m.group(1)) for pol in ('RR', 'LL', 'RL', 'LR')
-             if (m := re.search(rf'{pol}:\s*([\d.eE+-]+)\s*;', content))}
-        if len(a) != 4:
-            continue
-        cross = a['RL'] + a['LR']
-        ratios.append((a['RR'] + a['LL']) / cross if cross > 0 else float('inf'))
+    per_if: dict[int, list[float]] = {}
+    for per_baseline in read_fringe_peaks_dir(logdir).values():
+        for n_if, peaks in per_baseline.items():
+            if (ratio := fringe_peak_ratio(peaks)) is None:
+                return []   # a torn file: the run did not finish writing
+            per_if.setdefault(n_if, []).append(ratio)
 
-    return ratios if len(ratios) == n_ifs else []
+    if len(per_if) != n_ifs:
+        return []
+    return [min(per_if[n_if]) for n_if in sorted(per_if)]
 
 
 # PolConvert plots through matplotlib, whose default backend on this machine is 'qtagg'.
@@ -1897,7 +1909,7 @@ def _run_polconvert_cli(template_file: Path, mode: str, stream: bool = False) ->
     follows a completed run, so it marks good solutions as failures. What the run left on disk
     is the verdict (:func:`_fringe_peak_ratios`, :func:`_polconvert_apply`).
 
-    Either way the child's output is visible as it runs — its progress, and the fringe-SNR
+    Either way the child's output is visible as it runs — its progress, and the fringe-peak
     table it prints when it finishes — rather than surfacing (or not) at the end: by default
     it inherits this process's stdout/stderr, and under *stream* it is captured and re-printed
     line by line. polconvert.py keeps its own detailed ``PolConvert-{mode}.log`` in the log
@@ -1963,9 +1975,9 @@ def _polconvert_compute(template_file: Path, logdir: str, n_ifs: int) -> list[fl
             return ratios
         logger.warning(f"PolConvert wrote no complete solution for the {n_ifs} IFs (it exited "
                        f"{rc}) [attempt {attempt}/{_POLCONVERT_RETRIES + 1}].")
-        # It never reached the summary it prints on its own; render whatever fringe SNRs it
+        # It never reached the summary it prints on its own; render whatever fringe peaks it
         # did manage to write, so a crash still says something.
-        _log_fringe_snr_table(logdir)
+        _log_fringe_peaks_table(logdir)
     logger.warning("PolConvert died before writing a solution every time with these "
                    "parameters; trying the next combination.")
     return []
@@ -2058,8 +2070,8 @@ def _polconvert_apply(template_file: Path, idi_files: list[str]) -> bool:
     return False
 
 
-def _log_fringe_snr_table(logdir: str) -> None:
-    """Prints the per-IF fringe-SNR table for the attempt that just ran.
+def _log_fringe_peaks_table(logdir: str) -> None:
+    """Prints the per-IF table of normalized fringe peaks for the attempt that just ran.
 
     ``polconvert.py`` prints this table itself when it finishes, so this is only for the runs
     that died before getting there: it renders the same table, in-process, from whatever
@@ -2070,10 +2082,10 @@ def _log_fringe_snr_table(logdir: str) -> None:
     Never raises: a summary that cannot be built must not be what ends an attempt.
     """
     try:
-        from .scripts.polconvert import print_fringe_snr_table
-        print_fringe_snr_table(logdir)
+        from .scripts.polconvert import print_fringe_peaks_table
+        print_fringe_peaks_table(logdir)
     except Exception as e:  # ImportError, or anything the summary itself trips over
-        logger.debug(f"No fringe-SNR summary for this attempt ({e}); the raw values, if any, "
+        logger.debug(f"No fringe-peak summary for this attempt ({e}); the raw values, if any, "
                      f"are in {Path(logdir) / 'FRINGE.PEAKS'}.")
 
 
@@ -2095,10 +2107,11 @@ def polconvert(exp: experiment.Experiment) -> bool:
 
     Each combination runs ``polconvert.py --compute`` and is judged by what it wrote, never by
     its exit code (see :func:`_run_polconvert_cli`): a complete solution is accepted when the
-    FRINGE.PEAKS ``(RR+LL)/(RL+LR)`` ratio reaches ``_POLCONVERT_MIN_RATIO`` in *every* IF. The
-    first accepted solution is applied to every FITS-IDI file with ``--apply``; otherwise the
-    search moves on to the next parameter set, then the next time range, then the next
-    reference antenna, then the next scan.
+    ``(RR+LL)/(RL+LR)`` ratio of the normalized FRINGE.PEAKS amplitudes (the values of the table
+    ``polconvert.py`` prints, see :func:`_fringe_peak_ratios`) reaches ``_POLCONVERT_MIN_RATIO``
+    in *every* IF. The first accepted solution is applied to every FITS-IDI file with
+    ``--apply``; otherwise the search moves on to the next parameter set, then the next time
+    range, then the next reference antenna, then the next scan.
 
     Args:
         exp: Experiment object.
@@ -2190,8 +2203,9 @@ def polconvert(exp: experiment.Experiment) -> bool:
                         continue
 
                     worst = min(ratios)
-                    logger.info(f"PolConvert (RR+LL)/(RL+LR) per IF: min={worst:.1f}, "
-                                f"median={float(np.median(ratios)):.1f} "
+                    per_if = ', '.join(f"{r:.1f}" for r in ratios)
+                    logger.info(f"PolConvert norm. fringe-peak (RR+LL)/(RL+LR) per IF: [{per_if}]; "
+                                f"min={worst:.1f}, median={float(np.median(ratios)):.1f} "
                                 f"(need >= {_POLCONVERT_MIN_RATIO} in every IF).")
                     if worst < _POLCONVERT_MIN_RATIO:
                         logger.info(f"Scan {scan.scanno} {_aips_timerange_str(time_range)}: no good "

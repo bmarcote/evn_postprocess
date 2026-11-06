@@ -243,18 +243,24 @@ class TestSolveTimeRanges:
 
 # --- solution quality check -------------------------------------------------------------
 
-def _write_peaks(logdir: Path, per_if, gains=True):
-    """Writes what a finished --compute leaves behind: the gains file plus one peaks file/IF."""
+def _write_peaks(logdir: Path, per_if, gains=True, baseline="EF-MC", snrs=(400.0, 500.0, 100.0, 100.0)):
+    """Writes what a finished --compute leaves behind: the gains file plus one peaks file/IF.
+
+    The SNRs are the same in every IF, whatever the amplitudes: they must never be what is judged.
+    """
     peaks = logdir / "FRINGE.PEAKS"
     peaks.mkdir(parents=True, exist_ok=True)
     if gains:
         (logdir / "polconvert.gains").write_bytes(b"pickled gains")
+    ant1, ant2 = baseline.split("-")
+    s_rr, s_ll, s_rl, s_lr = snrs
     for i, (rr, ll, rl, lr) in enumerate(per_if, start=1):
-        (peaks / f"FRINGE.PEAKS_IF{i}_SCAN_0_EF-MC.dat").write_text(
-            f"BASELINE EF TO MC\n  FOR IF #{i}.\n"
-            f"     RR: {rr:.3e} ; SNR: 400.0\n     LL: {ll:.3e} ; SNR: 500.0\n"
-            f"     RL: {rl:.3e} ; SNR: 100.0\n     LR: {lr:.3e} ; SNR: 100.0\n"
-            f"     AMPLITUDE: 5.0e-01  RL/LR Norm.: 1.0e+00\n")
+        (peaks / f"FRINGE.PEAKS_IF{i}_SCAN_0_{baseline}.dat").write_text(
+            f"BASELINE {ant1} TO {ant2}\n  FOR IF #{i}. NORM. FRINGE PEAKS (MAX OF 1.349e+02 ):  \n"
+            f"     RR: {rr:.2e} ; SNR: {s_rr:.1f}\n     LL: {ll:.2e} ; SNR: {s_ll:.1f} \n"
+            f"     RL: {rl:.2e} ; SNR: {s_rl:.1f}   \n     LR: {lr:.2e} ; SNR: {s_lr:.1f}\n"
+            f"     AMPLITUDE: 5.0e-01  RL/LR Norm.: 1.0e+00\n  \n\n"
+            f"For RL: optimum X/Y phase is 72.3 deg.\nFor LR: optimum X/Y phase is 66.6 deg.\n")
 
 
 class TestFringePeakRatios:
@@ -282,6 +288,63 @@ class TestFringePeakRatios:
     def test_peaks_without_the_gains_file_are_unfinished(self, tmp_path):
         _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 8, gains=False)
         assert process._fringe_peak_ratios(str(tmp_path), 8) == []
+
+    def test_the_norm_peaks_are_judged_not_the_snr(self, tmp_path):
+        # ER057B IF1: amplitudes 1.00/0.919/0.0527/0.100 -> ratio 12.6, a clean conversion, while
+        # the SNRs (368.5/370.3/123.3/209.3) would only give 2.2.
+        _write_peaks(tmp_path, [(1.0, 0.919, 0.0527, 0.100)] * 8, snrs=(368.5, 370.3, 123.3, 209.3))
+        assert [round(r, 1) for r in process._fringe_peak_ratios(str(tmp_path), 8)] == [12.6] * 8
+        # And the reverse: comparable amplitudes fail, however dominant the parallel-hand SNRs.
+        _write_peaks(tmp_path, [(1.0, 0.9, 0.8, 0.9)] * 8, snrs=(900.0, 900.0, 10.0, 10.0))
+        assert max(process._fringe_peak_ratios(str(tmp_path), 8)) < process._POLCONVERT_MIN_RATIO
+
+    def test_a_torn_peaks_file_is_unfinished(self, tmp_path):
+        _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 8)
+        torn = tmp_path / "FRINGE.PEAKS" / "FRINGE.PEAKS_IF3_SCAN_0_EF-MC.dat"
+        torn.write_text(torn.read_text().split("     RL:")[0])     # stopped before RL/LR
+        assert process._fringe_peak_ratios(str(tmp_path), 8) == []
+
+    def test_ifs_are_returned_in_numeric_order(self, tmp_path):
+        # 12 IFs: a plain name sort would give IF1, IF10, IF11, IF12, IF2, ...
+        _write_peaks(tmp_path, [(1.0, 1.0, 0.01 * i, 0.01 * i) for i in range(1, 13)])
+        ratios = process._fringe_peak_ratios(str(tmp_path), 12)
+        assert ratios == sorted(ratios, reverse=True) and len(ratios) == 12
+
+    def test_several_linear_antennas_each_ifs_worst_baseline_counts(self, tmp_path):
+        # Two linear antennas give two baselines (one file each) per IF: that is still a
+        # finished run, and an IF is only as good as its worst baseline.
+        _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 8, baseline="EF-MC")
+        _write_peaks(tmp_path, [(0.9, 1.0, 0.05, 0.05)] * 7 + [(0.5, 0.5, 0.5, 0.5)], baseline="T6-MC")
+        ratios = process._fringe_peak_ratios(str(tmp_path), 8)
+        assert len(ratios) == 8
+        assert min(ratios[:7]) > process._POLCONVERT_MIN_RATIO > ratios[7]
+
+
+class TestFringePeaksTable:
+    """polconvert.py prints the normalized fringe peaks (x100, integers), coloured by the same
+    threshold that accepts a solution."""
+
+    def test_threshold_matches_the_acceptance_one(self):
+        from evn_postprocess.scripts import polconvert as pc_script
+        assert pc_script.GOOD_PEAK_RATIO == process._POLCONVERT_MIN_RATIO
+
+    def test_values_are_the_norm_peaks_times_100(self, tmp_path, capsys):
+        from evn_postprocess.scripts import polconvert as pc_script
+        _write_peaks(tmp_path, [(1.0, 0.919, 0.0527, 0.100)] * 2, snrs=(368.5, 370.3, 123.3, 209.3))
+        pc_script.print_fringe_peaks_table(str(tmp_path))
+        out = capsys.readouterr().out
+        rows = {line.split()[0]: line.split()[1:] for line in out.splitlines()
+                if line.strip()[:2] in ('RR', 'LL', 'RL', 'LR')}
+        assert rows == {'RR': ['100'] * 2, 'LL': ['92'] * 2, 'RL': ['5'] * 2, 'LR': ['10'] * 2}
+        assert '368' not in out and '370' not in out                  # no SNR in the table
+
+    def test_colour_follows_the_ratio(self):
+        from evn_postprocess.scripts import polconvert as pc_script
+        assert pc_script._fringe_peak_color({'RR': 1.0, 'LL': 0.9, 'RL': 0.05, 'LR': 0.1}) == 'green'
+        assert pc_script._fringe_peak_color({'RR': 1.0, 'LL': 1.0, 'RL': 0.5, 'LR': 0.5}) == 'green'
+        assert pc_script._fringe_peak_color({'RR': 1.0, 'LL': 0.9, 'RL': 0.6, 'LR': 0.6}) == 'dark_orange'
+        assert pc_script._fringe_peak_color({'RR': 0.5, 'LL': 0.5, 'RL': 1.0, 'LR': 0.9}) == 'red'
+        assert pc_script._fringe_peak_color({'RR': 1.0, 'LL': 0.9}) == 'red'     # incomplete file
 
 
 # --- the runner: results on disk decide, not the exit code -------------------------------
@@ -323,7 +386,7 @@ class TestComputeIgnoresTheExitCode:
         calls = []
         monkeypatch.setattr(process.subprocess, "run",
                             lambda *a, **k: calls.append(1) or _FakeProc(-11))
-        monkeypatch.setattr(process, "_log_fringe_snr_table", lambda logdir: None)
+        monkeypatch.setattr(process, "_log_fringe_peaks_table", lambda logdir: None)
         assert process._polconvert_compute(Path("in.toml"), str(tmp_path), 8) == []
         assert len(calls) == process._POLCONVERT_RETRIES + 1
 
@@ -587,7 +650,7 @@ class TestRunnerIsolation:
         assert 'stdout' not in seen and 'stderr' not in seen   # inherited from this process
 
 
-class TestFringeSnrSummary:
+class TestFringePeaksSummary:
     """The table is rendered in-process from the FRINGE.PEAKS files, and can never raise."""
 
     def _fake_polconvert_module(self, monkeypatch, func):
@@ -595,25 +658,25 @@ class TestFringeSnrSummary:
         import sys
         import types
         mod = types.ModuleType('evn_postprocess.scripts.polconvert')
-        mod.print_fringe_snr_table = func
+        mod.print_fringe_peaks_table = func
         monkeypatch.setitem(sys.modules, 'evn_postprocess.scripts.polconvert', mod)
 
     def test_calls_the_printer_with_the_log_directory(self, monkeypatch):
         called: list[str] = []
         self._fake_polconvert_module(monkeypatch, lambda logdir: called.append(logdir))
-        process._log_fringe_snr_table('polconvert_logs')
+        process._log_fringe_peaks_table('polconvert_logs')
         assert called == ['polconvert_logs']
 
     def test_a_missing_module_is_not_an_error(self, monkeypatch):
         import sys
         monkeypatch.setitem(sys.modules, 'evn_postprocess.scripts.polconvert', None)   # forces ImportError
-        process._log_fringe_snr_table('polconvert_logs')                   # must not raise
+        process._log_fringe_peaks_table('polconvert_logs')                   # must not raise
 
     def test_a_printer_that_blows_up_is_not_an_error(self, monkeypatch):
         def boom(logdir):
             raise RuntimeError('no FRINGE.PEAKS here')
         self._fake_polconvert_module(monkeypatch, boom)
-        process._log_fringe_snr_table('polconvert_logs')                   # must not raise
+        process._log_fringe_peaks_table('polconvert_logs')                   # must not raise
 
 
 class TestComputeAttemptIsAnnounced:
