@@ -342,11 +342,12 @@ def make_pass(name: str) -> Mock:
     return a_pass
 
 
-def make_exp(passes: list) -> Mock:
+def make_exp(passes: list, multi_phase_center: bool = False) -> Mock:
     """Mock experiment holding the given correlator passes (continuum, not spectral line)."""
     exp = Mock(spec=experiment.Experiment)
     exp.expname = "testexp"
     exp.spectral_line = False
+    exp.multi_phase_center = multi_phase_center
     exp.correlator_passes = passes
     return exp
 
@@ -393,8 +394,8 @@ class TestRunChecklis:
         assert printed.index("**** Skipped scan no 34") < printed.index("skipped scans")
 
     def test_skipped_scans_tolerated_in_multi_phase_center(self):
-        """Several passes: skipped scans are expected, so they only warn (all_ok stays True)."""
-        exp = make_exp([make_pass("testexp1"), make_pass("testexp2"), make_pass("testexp3")])
+        """Multi-phase-centre run: skipped scans are expected, so they only warn (all_ok stays True)."""
+        exp = make_exp([make_pass("testexp1"), make_pass("testexp2"), make_pass("testexp3")], multi_phase_center=True)
         skipped = "First scan = 1\n**** Skipped scan no 34\nLast scan = 100"
         outputs = {"testexp1.lis": skipped, "testexp3.lis": skipped}
         with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs(outputs)):
@@ -406,6 +407,16 @@ class TestRunChecklis:
         assert "Only skipped scans were reported" in report.headline
         assert "This may well be right" in report.headline
         assert "please verify the .lis file(s) to see if they are OK" in report.headline
+
+    def test_skipped_scans_block_standard_multi_pass(self):
+        """Several continuum passes but no multi-phase centres: skipped scans stop the step."""
+        exp = make_exp([make_pass("testexp1"), make_pass("testexp2")])
+        outputs = {"testexp2.lis": "First scan = 1\n**** Skipped scan no 34\nLast scan = 100"}
+        with patch('evn_postprocess.utils.shell_command', side_effect=checklis_outputs(outputs)):
+            report = lisfiles.run_checklis(exp)
+
+        assert report.all_ok is False
+        assert "which is expected" not in report.headline
 
     def test_only_skipped_scans_is_never_reported_as_issues_found(self):
         """A single .lis file reporting only skipped scans (gs046): the message is the
