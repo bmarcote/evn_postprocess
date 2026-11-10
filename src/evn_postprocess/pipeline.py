@@ -400,7 +400,6 @@ def create_input_file(exp) -> bool:
             shutil.copy(uvflgfile, exp.dirs.pipe_in / uvflgfile.name)
 
     pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
-    userno = _aips_userno(exp.supsci)
     original_cwd = os.getcwd()
     os.chdir(exp.dirs.pipe_in)
     try:
@@ -417,12 +416,23 @@ def create_input_file(exp) -> bool:
         # importlib.resources).
         template_path = resources.files("evn_postprocess.templates").joinpath("pipeline.inp.txt.template")
         template_text = template_path.read_text()
-        for i, apass in enumerate(pipepasses, 1):
-            inp_filename = Path(f"{exp.expname.lower()}_{i}.inp.txt" if len(pipepasses) > 1
-                                else f"{exp.expname.lower()}.inp.txt")
+        inp_filenames = [Path(f"{exp.expname.lower()}_{i}.inp.txt" if len(pipepasses) > 1
+                              else f"{exp.expname.lower()}.inp.txt") for i in range(1, len(pipepasses) + 1)]
+        # Every pass gets its own AIPS user number. run_pipeline runs the passes concurrently,
+        # and two EVN.py runs under one AIPS user write the same catalog file at the same time,
+        # which corrupts it (GM084B: FITLD then dies reading past the end of CAD000000.<user>).
+        # Numbers already written in existing input files are taken, so new ones never clash.
+        existing = [n for f in inp_filenames if f.exists() and (n := _read_userno(f)) is not None]
+        if len(existing) != len(set(existing)):
+            logger.warning(f"Existing pipeline input files in {exp.dirs.pipe_in} share an AIPS user "
+                           f"number ({', '.join(existing)}). Their passes run at the same time and "
+                           "would corrupt that user's AIPS catalog: give each one its own userno.")
+        taken = set(existing)
+        for i, (apass, inp_filename) in enumerate(zip(pipepasses, inp_filenames), 1):
             if inp_filename.exists():
                 continue
 
+            userno = _new_aips_userno(exp.supsci, taken)
             with open(inp_filename, 'w') as f:
                 f.write(_fill_pipeline_template(exp, apass, i, len(pipepasses), userno, template_text))
             logger.debug(f"Created pipeline input file: {inp_filename}")
@@ -446,7 +456,42 @@ def _aips_userno(supsci: str) -> str:
     except (OSError, tools.ToolMissingError) as exc:
         logger.warning(f"Could not run aips_userno.py ({exc}); using AIPS user number 100.")
         return '100'
-    return userno or '100'
+    if not userno.isdigit():
+        logger.warning(f"aips_userno.py gave no user number for {supsci!r} (output: {userno!r}); "
+                       "using AIPS user number 100.")
+        return '100'
+    return userno
+
+
+def _new_aips_userno(supsci: str, taken: set[str]) -> str:
+    """A fresh AIPS user number for one pipeline pass, different from every one in ``taken``.
+
+    Each call asks aips_userno.py again, which hands out the support scientist's next number
+    (and advances the stored counter), so consecutive passes get consecutive numbers. The
+    fallback 100 does not advance, so a number that is already taken is bumped by one until
+    it is free.
+
+    Args:
+        supsci: Support scientist's user name.
+        taken: User numbers already used by other passes; the returned number is added to it.
+
+    Returns:
+        The user number as a string.
+    """
+    userno = _aips_userno(supsci)
+    while userno in taken:
+        userno = str(int(userno) + 1)
+    taken.add(userno)
+    return userno
+
+
+_USERNO_LINE = re.compile(r'^\s*userno\s*=\s*(\d+)', re.MULTILINE)
+
+
+def _read_userno(inp_file: Path) -> str | None:
+    """The AIPS user number set in an existing pipeline input file, or None if it sets none."""
+    match = _USERNO_LINE.search(inp_file.read_text(errors='replace'))
+    return match.group(1) if match else None
 
 
 def _fill_pipeline_template(exp, apass, i: int, n_passes: int, userno: str, template_text: str) -> str:
