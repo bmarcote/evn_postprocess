@@ -521,7 +521,7 @@ def _fill_pipeline_template(exp, apass, i: int, n_passes: int, userno: str, temp
         '{userno}': userno,
         # The full prioritised list: EVN.py uses refant[0] and passes the rest to FRING as
         # SEARCH antennas, so scans without the first one still get fringe solutions.
-        '{refant}': ', '.join(exp.refant),
+        '{refant}': ', '.join(exp.refant[:2] if len(exp.refant) > 2 else exp.refant),
         '{plotref}': exp.refant[0],
         '{bpass}': ', '.join(_select_bandpass_sources(apass.sources)),
         '{dophaseref}': '' if apass.sources.calibrator else '#',
@@ -552,19 +552,19 @@ def run_pipeline(exp) -> bool:
     original_cwd = os.getcwd()
     try:
         logger.debug('# Running the pipeline...')
-        
+
         if not exp.dirs.pipe_in.exists():
             logger.error(f"Pipeline input directory does not exist: {exp.dirs.pipe_in}")
             return False
-            
+
         os.environ['PIPEFITS'] = str(original_cwd)
         os.chdir(exp.dirs.pipe_in)
         pipepasses = [apass for apass in exp.correlator_passes if apass.pipeline]
-        
+
         if not pipepasses:
             logger.error("No pipeline passes found")
             return False
-            
+
         logger.info(f"Setting the PIPEFITS environment variable to {os.environ.get('PIPEFITS')}")
         if len(pipepasses) == 1:
             utils.shell_command("EVN.py", [f"{exp.expname.lower()}.inp.txt"], stdout=None)
